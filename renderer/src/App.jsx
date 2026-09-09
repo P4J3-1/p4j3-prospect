@@ -10,6 +10,7 @@ import Overview from './components/Overview';
 import MapScraperView from './components/MapScraperView';
 import LeadsManager from './components/LeadsManager';
 import LeadScoring from './components/LeadScoring';
+import KanbanBoard from './components/KanbanBoard';
 import WhatsAppPanel from './components/WhatsAppPanel';
 import NewExtractionModal from './components/NewExtractionModal';
 import OnboardingTour from './components/OnboardingTour';
@@ -21,7 +22,10 @@ function organizeStoredLeads() {
   const raw = readLocalArray('sigma_leads');
   const organized = normalizeLeadCollection(raw);
   try {
-    if (organized.some((lead, index) => lead?.category !== raw[index]?.category)) {
+    if (organized.some((lead, index) => (
+      lead?.category !== raw[index]?.category
+      || lead?.address !== raw[index]?.address
+    ))) {
       localStorage.setItem('sigma_leads', JSON.stringify(organized));
     }
   } catch {}
@@ -82,6 +86,7 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
     { id: 'overview', label: 'Ir para Visão Geral', desc: 'Centro de comando', icon: '▦', action: () => { onNavigate('overview'); onClose(false); } },
     { id: 'base', label: 'Ir para Base de Leads', desc: 'Filtrar, organizar e exportar', icon: '▤', action: () => { onNavigate('base'); onClose(false); } },
     { id: 'scoring', label: 'Ir para Lead Scoring', desc: 'Quem ligar primeiro', icon: '✦', action: () => { onNavigate('scoring'); onClose(false); } },
+    { id: 'kanban', label: 'Ir para Kanban', desc: 'Funil comercial de todos os leads', icon: '▤', action: () => { onNavigate('kanban'); onClose(false); } },
     { id: 'whatsapp', label: 'Ir para WhatsApp', desc: 'Chats e campanhas', icon: '◐', action: () => { onNavigate('whatsapp'); onClose(false); } },
     { id: 'dashboard', label: 'Ir para Dashboard', desc: 'Métricas e categorias', icon: '▭', action: () => { onNavigate('dashboard'); onClose(false); } },
     { id: 'new', label: 'Nova Extração…', desc: 'Criar busca no Google Maps', icon: '＋', action: () => { onClose(false); onNewExtraction(); } },
@@ -113,7 +118,7 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
 
 function AppInner() {
   const [activeTab, setActiveTab] = useState(() => {
-    try { const h = location.hash.slice(1); if(['overview','scraper','base','scoring','whatsapp','dashboard','settings'].includes(h)) return h; } catch{}
+    try { const h = location.hash.slice(1); if(['overview','scraper','base','scoring','kanban','whatsapp','dashboard','settings'].includes(h)) return h; } catch{}
     return 'overview';
   });
   const [isNewExtractionOpen, setIsNewExtractionOpen] = useState(false);
@@ -123,6 +128,7 @@ function AppInner() {
   const [waStatus, setWaStatus] = useState('disconnected');
   const [leadsCount, setLeadsCount] = useState(() => dedupeLeads(organizeStoredLeads()).length);
   const [scoringCount, setScoringCount] = useState(0);
+  const [activeExtraction, setActiveExtraction] = useState(null);
 
   const { addNotification } = useNotifications();
   const mapScraperRef = useRef(null);
@@ -131,9 +137,9 @@ function AppInner() {
   useEffect(()=>{ try{ history.replaceState(null,'','#'+activeTab); }catch{} }, [activeTab]);
   useEffect(()=>{
     const onKey=(e)=>{
-      if((e.metaKey||e.ctrlKey) && /^[1-5]$/.test(e.key)){
+      if((e.metaKey||e.ctrlKey) && /^[1-6]$/.test(e.key)){
         e.preventDefault();
-        const map=['overview','scraper','base','scoring','whatsapp'];
+        const map=['overview','scraper','base','scoring','kanban','whatsapp'];
         const i=Number(e.key)-1; if(map[i]) setActiveTab(map[i]);
       }
       if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); setIsCmdOpen(v=>!v); }
@@ -146,8 +152,9 @@ function AppInner() {
     document.body.classList.toggle('side-locked', isSidebarLocked);
     document.body.classList.toggle('nav-open', isMobileNavOpen);
     document.body.classList.toggle('route-whatsapp', activeTab === 'whatsapp');
+    document.body.classList.toggle('route-kanban', activeTab === 'kanban');
     return () => {
-      document.body.classList.remove('side-locked', 'nav-open', 'route-whatsapp');
+      document.body.classList.remove('side-locked', 'nav-open', 'route-whatsapp', 'route-kanban');
     };
   }, [isSidebarLocked, isMobileNavOpen, activeTab]);
 
@@ -160,10 +167,18 @@ function AppInner() {
   const handleMaximize = () => window.electronAPI?.winMaximize();
   const handleClose = () => window.electronAPI?.winClose();
 
-  const handleStartExtraction = ({ niche, neigh, city, limit }) => {
+  const handleStartExtraction = async ({ niche, neigh, city, limit }) => {
+    if (activeExtraction) {
+      addNotification({
+        type: 'info',
+        category: 'scraper',
+        title: 'Extração em andamento',
+        message: 'Aguarde a busca atual terminar ou cancele-a antes de iniciar outra.',
+      });
+      return;
+    }
     setActiveTab('scraper');
-    // Start extraction through electron IPC directly
-    const qstr = `${niche} ${neigh} ${city}`;
+    const qstr = [niche, neigh, city].filter(Boolean).join(' ').trim();
     const searchId = `scrape_${Date.now()}`;
     addNotification({
       type: 'info',
@@ -172,51 +187,63 @@ function AppInner() {
       message: `Buscando ${niche} em ${neigh}, ${city}...`
     });
 
-    if (window.electronAPI && typeof window.electronAPI.startScrape === 'function') {
-      window.electronAPI.startScrape(qstr, limit, searchId)
-        .then((res) => {
-          if (res && res.success && res.data) {
-            addNotification({
-              type: 'success',
-              category: 'scraper',
-              title: 'Extração Concluída',
-              message: `${res.data.length} leads adicionados!`
-            });
-            // Update local storage
-            try {
-              const current = JSON.parse(localStorage.getItem('sigma_leads') || '[]');
-              const combined = normalizeLeadCollection([
-                ...res.data.map(d => ({ ...d, searchId, id: d.id || Math.random().toString(36).slice(2) })),
-                ...current,
-              ]);
-              const currentSearches = readLocalArray('sigma_searches');
-              const nextSearches = [
-                ...currentSearches.filter((search) => String(search?.id) !== searchId),
-                {
-                  id: searchId,
-                  query: qstr,
-                  label: `${niche} · ${neigh}${city ? ` · ${city}` : ''}`,
-                  source: 'maps',
-                  timestamp: Date.now(),
-                },
-              ];
-              localStorage.setItem('sigma_leads', JSON.stringify(combined));
-              localStorage.setItem('sigma_searches', JSON.stringify(nextSearches));
-              setLeadsCount(combined.length);
-              window.dispatchEvent(new CustomEvent('sigma:leads-updated', {
-                detail: { leads: combined, searches: nextSearches },
-              }));
-            } catch {}
-          }
-        })
-        .catch((err) => {
-          addNotification({
-            type: 'error',
-            category: 'scraper',
-            title: 'Erro na Extração',
-            message: err.message
-          });
-        });
+    if (!window.electronAPI || typeof window.electronAPI.startScrape !== 'function') {
+      addNotification({ type: 'error', category: 'scraper', title: 'Extração indisponível', message: 'A ponte do desktop não está disponível. Reinicie o aplicativo.' });
+      return;
+    }
+
+    setActiveExtraction({ id: searchId, query: qstr, startedAt: Date.now() });
+    try {
+      const res = await window.electronAPI.startScrape(qstr, limit, searchId);
+      if (!res?.success) {
+        if (res?.cancelled) {
+          addNotification({ type: 'info', category: 'scraper', title: 'Extração cancelada', message: 'Nenhum resultado parcial foi adicionado à base.' });
+          return;
+        }
+        throw new Error(res?.error || 'O Google Maps não retornou resultados para esta busca.');
+      }
+      const resultLeads = Array.isArray(res.data) ? res.data : [];
+      if (!resultLeads.length) throw new Error('A busca foi concluída, mas não retornou leads válidos.');
+
+      const current = readLocalArray('sigma_leads');
+      const combined = normalizeLeadCollection([
+        ...resultLeads.map((lead) => ({ ...lead, searchId, id: lead.id || Math.random().toString(36).slice(2) })),
+        ...current,
+      ]);
+      const currentSearches = readLocalArray('sigma_searches');
+      const nextSearches = [
+        ...currentSearches.filter((search) => String(search?.id) !== searchId),
+        {
+          id: searchId,
+          query: qstr,
+          label: `${niche} · ${neigh}${city ? ` · ${city}` : ''}`,
+          source: 'maps',
+          timestamp: Date.now(),
+        },
+      ];
+      localStorage.setItem('sigma_leads', JSON.stringify(combined));
+      localStorage.setItem('sigma_searches', JSON.stringify(nextSearches));
+      setLeadsCount(dedupeLeads(combined).length);
+      window.dispatchEvent(new CustomEvent('sigma:leads-updated', {
+        detail: { leads: combined, searches: nextSearches },
+      }));
+      addNotification({
+        type: res.partial ? 'info' : 'success',
+        category: 'scraper',
+        title: res.partial ? 'Extração concluída parcialmente' : 'Extração concluída',
+        message: res.partial && res.warnings?.length
+          ? `${resultLeads.length} leads adicionados. ${res.warnings[0]}`
+          : `${resultLeads.length} leads adicionados!`,
+      });
+    } catch (err) {
+      addNotification({
+        type: 'error',
+        category: 'scraper',
+        title: 'Erro na extração',
+        message: err?.message || 'Não foi possível concluir a busca. Tente novamente.',
+      });
+    } finally {
+      setActiveExtraction(null);
     }
   };
 
@@ -231,6 +258,7 @@ function AppInner() {
               onUpdateLeadsCount={setLeadsCount}
               addLog={(msg) => console.log(msg)}
               onOpenNewExtraction={() => setIsNewExtractionOpen(true)}
+              activeExtraction={activeExtraction}
             />
           </ErrorBoundaryLite>
         );
@@ -238,6 +266,12 @@ function AppInner() {
         return (
           <ErrorBoundaryLite label="Lead Scoring">
             <LeadScoring onUpdateScoringCount={setScoringCount} addLog={(msg) => console.log(msg)} />
+          </ErrorBoundaryLite>
+        );
+      case 'kanban':
+        return (
+          <ErrorBoundaryLite label="Kanban">
+            <KanbanBoard onNavigate={navigate} addLog={(msg) => console.log(msg)} />
           </ErrorBoundaryLite>
         );
       case 'base':
@@ -296,6 +330,7 @@ function AppInner() {
             onUpdateLeadsCount={setLeadsCount}
             addLog={(msg) => console.log(msg)}
             onOpenNewExtraction={() => setIsNewExtractionOpen(true)}
+            activeExtraction={activeExtraction}
           />
         );
     }
@@ -369,11 +404,19 @@ function AppInner() {
           </button>
 
           <button
+            className={`nav-item ${activeTab === 'kanban' ? 'active' : ''}`}
+            onClick={() => navigate('kanban')}
+          >
+            <span className="ico" aria-hidden="true">▤</span>
+            <span className="nav-label-text">Kanban</span><span className="nav-kbd">5</span>
+          </button>
+
+          <button
             className={`nav-item ${activeTab === 'whatsapp' ? 'active' : ''}`}
             onClick={() => navigate('whatsapp')}
           >
             <span className="ico" aria-hidden="true">◐</span>
-            <span className="nav-label-text">WhatsApp</span>
+            <span className="nav-label-text">WhatsApp</span><span className="nav-kbd">6</span>
           </button>
 
           <button
@@ -446,7 +489,7 @@ function AppInner() {
             message: `${niche} em ${neigh}, ${city}`
           });
         }}
-        isProcessing={false}
+        isProcessing={Boolean(activeExtraction)}
       />
     </div>
   );

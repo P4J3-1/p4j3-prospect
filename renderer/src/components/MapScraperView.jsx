@@ -27,6 +27,8 @@ import 'leaflet/dist/leaflet.css';
 import {
   dedupeLeads,
   getExtractionSearches,
+  hasLeadingLeadAddressNoise,
+  normalizeLeadAddress,
   normalizeLeadCollection,
   readLocalArray,
 } from '../leadData';
@@ -169,6 +171,7 @@ export default function MapScraperView({
   onUpdateLeadsCount,
   addLog,
   onOpenNewExtraction,
+  activeExtraction,
 }) {
   const { addNotification } = useNotifications();
 
@@ -178,6 +181,7 @@ export default function MapScraperView({
   // Estado de processamento
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressPct, setProgressPct] = useState(0);
+  const [mapTileError, setMapTileError] = useState('');
 
   // Basemap
   const [baseKey, setBaseKey] = useState(() => {
@@ -193,6 +197,7 @@ export default function MapScraperView({
   const [locAddrQuery, setLocAddrQuery] = useState('');
   const [locSuggestions, setLocSuggestions] = useState([]);
   const [isSearchingLoc, setIsSearchingLoc] = useState(false);
+  const [locationError, setLocationError] = useState('');
 
   // Popovers & Drawers
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
@@ -224,6 +229,74 @@ export default function MapScraperView({
   const leadCardRefs = useRef({});
   const markersMapRef = useRef(new Map());
   const locDebounceRef = useRef(null);
+  const tileErrorsRef = useRef(0);
+  const repairedAddressKeysRef = useRef(new Set());
+  const addressRepairInFlightRef = useRef(false);
+
+  const repairDirtyStoredAddresses = useCallback(async (rawLeads) => {
+    if (typeof window.electronAPI?.repairMapAddresses !== 'function' || addressRepairInFlightRef.current) return;
+    const candidates = (Array.isArray(rawLeads) ? rawLeads : [])
+      .filter((lead) => lead && (lead.needsMapAddressRepair || hasLeadingLeadAddressNoise(lead.address)) && !getExactLeadLocation(lead))
+      .map((lead) => {
+        const key = String(lead.id || `${lead.name || ''}||${normalizeLeadAddress(lead.address)}`);
+        return { key, address: lead.address, city: getLeadCity(lead), state: getLeadState(lead) };
+      })
+      .filter((lead) => lead.address && !repairedAddressKeysRef.current.has(lead.key));
+
+    if (!candidates.length) return;
+    candidates.forEach((lead) => repairedAddressKeysRef.current.add(lead.key));
+    addressRepairInFlightRef.current = true;
+    try {
+      const result = await window.electronAPI.repairMapAddresses(candidates);
+      if (!result?.success || !Array.isArray(result.repaired)) {
+        addressRepairInFlightRef.current = false;
+        return;
+      }
+      const byKey = new Map(result.repaired.map((lead) => [String(lead.key), lead]));
+      const repairedWithCoordinates = result.repaired.filter((lead) => isValidCoordinatePair(Number(lead.latitude), Number(lead.longitude))).length;
+      setLeads((current) => current.map((lead) => {
+        const key = String(lead.id || `${lead.name || ''}||${normalizeLeadAddress(lead.address)}`);
+        const repaired = byKey.get(key);
+        return repaired ? {
+          ...lead,
+          address: repaired.address || normalizeLeadAddress(lead.address),
+          ...(isValidCoordinatePair(Number(repaired.latitude), Number(repaired.longitude)) ? {
+            latitude: repaired.latitude,
+            longitude: repaired.longitude,
+            coordSource: repaired.coordSource || 'nominatim',
+            geocodeConfidence: repaired.geocodeConfidence || 'approximate',
+            needsMapAddressRepair: false,
+          } : {}),
+        } : lead;
+      }));
+      if (repairedWithCoordinates) {
+        addNotification({
+          type: 'success',
+          category: 'system',
+          title: 'Endereços corrigidos',
+          message: `${repairedWithCoordinates} endereço(s) antigo(s) foram localizados no mapa.`,
+        });
+      }
+      if (Array.isArray(result.failures) && result.failures.length) {
+        addNotification({
+          type: 'warning',
+          category: 'system',
+          title: 'Alguns endereços serão tentados depois',
+          message: `${result.failures.length} endereço(s) não puderam ser geocodificados agora.`,
+        });
+      }
+      addressRepairInFlightRef.current = false;
+    } catch {
+      addressRepairInFlightRef.current = false;
+      // A limpeza local ainda acontece; a próxima abertura pode tentar geocodificar de novo.
+    }
+  }, [addNotification]);
+
+  useEffect(() => {
+    if (!activeExtraction?.id) return;
+    setIsProcessing(true);
+    setProgressPct(0);
+  }, [activeExtraction?.id]);
 
   // Sincronizar contagem global
   useEffect(() => {
@@ -233,37 +306,41 @@ export default function MapScraperView({
 
   useEffect(() => {
     const refreshStoredData = () => {
-      setLeads(normalizeLeadCollection(readLocalArray('sigma_leads')));
+      const rawLeads = readLocalArray('sigma_leads');
+      setLeads(normalizeLeadCollection(rawLeads));
+      repairDirtyStoredAddresses(rawLeads);
       setSearches(getExtractionSearches(readLocalArray('sigma_searches')));
     };
+    refreshStoredData();
     window.addEventListener('sigma:leads-updated', refreshStoredData);
     window.addEventListener('storage', refreshStoredData);
     return () => {
       window.removeEventListener('sigma:leads-updated', refreshStoredData);
       window.removeEventListener('storage', refreshStoredData);
     };
-  }, []);
+  }, [repairDirtyStoredAddresses]);
 
   // IPC de progresso do Playwright
   useEffect(() => {
     if (window.electronAPI && typeof window.electronAPI.onProgress === 'function') {
-      const cleanup = window.electronAPI.onProgress((msg) => {
-        setIsProcessing(true);
-        const m = msg.match(/\[(\d+)\/(\d+)\]/);
-        if (m) {
-          const pct = Math.round((parseInt(m[1]) / parseInt(m[2])) * 100);
-          setProgressPct(pct);
-          if (pct >= 100) {
-            setTimeout(() => {
-              setIsProcessing(false);
-              setProgressPct(0);
-            }, 1200);
-          }
+      const cleanup = window.electronAPI.onProgress((entry) => {
+        const payload = typeof entry === 'string'
+          ? { message: entry, status: /error|cancel/i.test(entry) ? 'failed' : 'running' }
+          : (entry || {});
+        if (activeExtraction?.id && payload.queryId && payload.queryId !== activeExtraction.id) return;
+        const terminal = ['completed', 'failed', 'cancelled'].includes(payload.status);
+        if (!terminal) setIsProcessing(true);
+        if (Number.isFinite(Number(payload.current)) && Number(payload.total) > 0) {
+          setProgressPct(Math.max(0, Math.min(100, Math.round((Number(payload.current) / Number(payload.total)) * 100))));
+        }
+        if (terminal) {
+          setIsProcessing(false);
+          setProgressPct(payload.status === 'completed' ? 100 : 0);
         }
       });
       return cleanup;
     }
-  }, []);
+  }, [activeExtraction?.id]);
 
   // Lista de leads visíveis filtrada
   const visibleLeads = useMemo(() => {
@@ -344,9 +421,25 @@ export default function MapScraperView({
     return [...new Set(leads.map(getLeadBairro).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   }, [leads]);
 
+  const attachTileDiagnostics = useCallback((tile) => {
+    tileErrorsRef.current = 0;
+    setMapTileError('');
+    tile.on('load', () => {
+      tileErrorsRef.current = 0;
+      setMapTileError('');
+    });
+    tile.on('tileerror', () => {
+      tileErrorsRef.current += 1;
+      if (tileErrorsRef.current >= 2) {
+        setMapTileError('Não foi possível carregar o mapa base. Verifique sua conexão ou tente outro tipo de mapa.');
+      }
+    });
+  }, []);
+
   // Inicializar Leaflet Map
   useEffect(() => {
     if (!mapContainerRef.current) return;
+    let initialInvalidateTimer = null;
 
     if (!mapInstanceRef.current) {
       const map = L.map(mapContainerRef.current, {
@@ -365,19 +458,36 @@ export default function MapScraperView({
         subdomains: cfg.subdomains || 'abc',
       }).addTo(map);
 
+      attachTileDiagnostics(tile);
+
       tileLayerRef.current = tile;
       mapInstanceRef.current = map;
       markersLayerRef.current = L.layerGroup().addTo(map);
 
-      setTimeout(() => {
-        map.invalidateSize();
+      initialInvalidateTimer = window.setTimeout(() => {
+        // A rota pode ter sido trocada antes do primeiro repaint do Leaflet.
+        // Nunca invalida uma instância que já foi removida no cleanup.
+        if (mapInstanceRef.current !== map) return;
+        try { map.invalidateSize(); } catch {}
       }, 150);
     }
 
-    const handleResize = () => mapInstanceRef.current?.invalidateSize();
+    const handleResize = () => {
+      try { mapInstanceRef.current?.invalidateSize(); } catch {}
+    };
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+    return () => {
+      if (initialInvalidateTimer) window.clearTimeout(initialInvalidateTimer);
+      window.removeEventListener('resize', handleResize);
+      try { markersLayerRef.current?.clearLayers(); } catch {}
+      try { mapInstanceRef.current?.remove(); } catch {}
+      mapInstanceRef.current = null;
+      tileLayerRef.current = null;
+      markersLayerRef.current = null;
+      userMarkerRef.current = null;
+      markersMapRef.current.clear();
+    };
+  }, [attachTileDiagnostics]);
 
   // Atualizar camada de basemap quando baseKey mudar
   useEffect(() => {
@@ -394,9 +504,10 @@ export default function MapScraperView({
       subdomains: cfg.subdomains || 'abc',
     }).addTo(map);
 
+    attachTileDiagnostics(nextTile);
     tileLayerRef.current = nextTile;
     try { localStorage.setItem('sigma_base', baseKey); } catch {}
-  }, [baseKey]);
+  }, [attachTileDiagnostics, baseKey]);
 
   // Atualizar marcador de referência do usuário
   useEffect(() => {
@@ -441,7 +552,7 @@ export default function MapScraperView({
     markersMapRef.current.clear();
 
     const bounds = [];
-    const leadsWithCoords = visibleLeads.slice(0, 100);
+    const leadsWithCoords = visibleLeads;
 
     leadsWithCoords.forEach((lead, idx) => {
       const loc = getExactLeadLocation(lead);
@@ -670,17 +781,22 @@ export default function MapScraperView({
   // Busca de endereço com Nominatim
   const handleAddrSearchChange = (text) => {
     setLocAddrQuery(text);
+    setLocationError('');
     clearTimeout(locDebounceRef.current);
-    if (text.trim().length < 4) {
+    const query = normalizeLeadAddress(text);
+    if (query.length < 4) {
       setLocSuggestions([]);
       return;
     }
     locDebounceRef.current = setTimeout(() => {
       setIsSearchingLoc(true);
-      fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=br&q=${encodeURIComponent(text.trim())}`, {
+      fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=br&q=${encodeURIComponent(query)}`, {
         headers: { Accept: 'application/json' }
       })
-        .then((res) => res.json())
+        .then((res) => {
+          if (!res.ok) throw new Error(`Serviço de endereço indisponível (${res.status}).`);
+          return res.json();
+        })
         .then((data) => {
           setIsSearchingLoc(false);
           if (Array.isArray(data)) {
@@ -693,9 +809,12 @@ export default function MapScraperView({
               }))
             );
           }
+          if (!Array.isArray(data) || data.length === 0) setLocationError('Nenhum endereço foi encontrado. Tente incluir cidade e estado.');
         })
-        .catch(() => {
+        .catch((error) => {
           setIsSearchingLoc(false);
+          setLocSuggestions([]);
+          setLocationError(error?.message || 'Não foi possível buscar endereços agora.');
         });
     }, 350);
   };
@@ -733,16 +852,27 @@ export default function MapScraperView({
     });
   };
 
-  const handleCancelExtraction = () => {
-    window.electronAPI?.cancelScrape?.();
-    setIsProcessing(false);
-    setProgressPct(0);
-    addNotification({
-      type: 'info',
-      category: 'scraper',
-      title: 'Extração cancelada',
-      message: 'Nenhum lead parcial foi perdido.'
-    });
+  const handleCancelExtraction = async () => {
+    if (!activeExtraction?.id || !window.electronAPI?.cancelScrape) return;
+    try {
+      const result = await window.electronAPI.cancelScrape(activeExtraction.id);
+      if (!result?.success || !result.cancelled) throw new Error(result?.error || 'Nenhuma extração ativa foi encontrada.');
+      setIsProcessing(false);
+      setProgressPct(0);
+      addNotification({
+        type: 'info',
+        category: 'scraper',
+        title: 'Cancelamento solicitado',
+        message: 'A busca atual será encerrada sem adicionar resultados parciais.',
+      });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        category: 'scraper',
+        title: 'Não foi possível cancelar',
+        message: error?.message || 'Tente novamente em alguns segundos.',
+      });
+    }
   };
 
   const handleClearListFilters = () => {
@@ -861,6 +991,24 @@ export default function MapScraperView({
           </button>
         </div>
 
+        {mapTileError && (
+          <div className="map-tile-error" role="alert">
+            <AlertCircle size={15} />
+            <span>{mapTileError}</span>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                setMapTileError('');
+                tileErrorsRef.current = 0;
+                tileLayerRef.current?.redraw?.();
+              }}
+            >
+              Tentar novamente
+            </button>
+          </div>
+        )}
+
         {/* Popover de Basemap */}
         {isBasePopOpen && (
           <div className="map-pop" id="basePop">
@@ -922,6 +1070,8 @@ export default function MapScraperView({
                   </div>
                 )}
               </div>
+              {isSearchingLoc && <span className="map-location-searching" role="status">Buscando endereço…</span>}
+              {locationError && <span className="field-err" role="alert">{locationError}</span>}
             </div>
 
             <button type="button" className="loc-auto" id="locAuto" onClick={handleUseMyLocation}>
@@ -1028,7 +1178,7 @@ export default function MapScraperView({
             <div className="progress-fill" id="progFill" style={{ width: `${progressPct}%` }} />
           </div>
           <span className="progress-txt" id="progTxt">{progressPct}%</span>
-          <button type="button" className="btn btn-sm" id="cancelBtn" onClick={handleCancelExtraction}>
+          <button type="button" className="btn btn-sm" id="cancelBtn" disabled={!activeExtraction?.id} onClick={handleCancelExtraction}>
             Cancelar
           </button>
         </div>

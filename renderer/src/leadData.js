@@ -7,6 +7,21 @@ export function readLocalArray(key) {
   }
 }
 
+// Espelha o normalizador do processo principal para recuperar registros já
+// persistidos no navegador antes da correção do scraper.
+export function normalizeLeadAddress(value) {
+  return String(value ?? '')
+    .normalize('NFC')
+    .replace(/^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]+/u, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+export function hasLeadingLeadAddressNoise(value) {
+  return /^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]+/u
+    .test(String(value ?? '').normalize('NFC'));
+}
+
 function repairMojibake(value) {
   const text = String(value ?? '');
   if (!/[\u00c2\u00c3]/.test(text)) return text;
@@ -55,7 +70,11 @@ export function normalizeLeadCategory(value) {
 export function normalizeLeadRecord(lead) {
   if (!lead || typeof lead !== 'object') return lead;
   const category = normalizeLeadCategory(lead.category);
-  return category === lead.category ? lead : { ...lead, category };
+  const address = normalizeLeadAddress(lead.address);
+  const needsMapAddressRepair = Boolean(lead.needsMapAddressRepair || address !== lead.address);
+  return category === lead.category && address === lead.address && needsMapAddressRepair === Boolean(lead.needsMapAddressRepair)
+    ? lead
+    : { ...lead, category, address, needsMapAddressRepair };
 }
 
 export function normalizeLeadCollection(leads = []) {
@@ -100,7 +119,7 @@ export function getExtractionSearches(searches = []) {
 }
 
 export function getLeadIdentity(lead) {
-  return `${lead?.name || ""}||${lead?.address || ""}`.toLowerCase().trim();
+  return `${lead?.name || ""}||${normalizeLeadAddress(lead?.address)}`.toLowerCase().trim();
 }
 
 export function dedupeLeads(leads = []) {

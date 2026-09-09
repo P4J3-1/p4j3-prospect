@@ -7,9 +7,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { KanbanStore } = require('../kanban/kanban-store');
 
 const outputDir = path.join(__dirname, '..', 'docs', 'qa', 'open-design-lote1');
-app.setPath('userData', path.join(os.tmpdir(), `sigma-gmaps-qa-${process.pid}`));
+const qaUserDataPath = path.join(os.tmpdir(), `sigma-gmaps-qa-${process.pid}`);
+app.setPath('userData', qaUserDataPath);
 const errors = [];
 const now = Date.now();
 const fixtureLeads = [
@@ -54,7 +56,19 @@ const fixtureMessages = [
   { key: { id: 'msg-2', fromMe: false }, messageTimestamp: Math.floor(now / 1000) - 60, message: { conversation: 'Pode me explicar melhor?' } },
 ];
 const fixtureConnectionState = { connected: true };
-const fixtureFailureState = { connect: false, startChat: false, createCampaign: false };
+const fixtureFailureState = { connect: false, startChat: false, createCampaign: false, mapRepair: false };
+let fixtureMapRepairRequests = 0;
+const fixtureKanbanStore = new KanbanStore(qaUserDataPath);
+fixtureKanbanStore.syncLeads(fixtureLeads, 'maps');
+fixtureKanbanStore.syncLeads(
+  fixtureLeads.slice(0, 2).map((lead) => ({
+    id: `score-${lead.id}`,
+    company: lead,
+    score: { value: lead.id === 'lead-1' ? 82 : 45, priority: lead.id === 'lead-1' ? 'alta' : 'media' },
+  })),
+  'scoring',
+);
+fixtureKanbanStore.syncCampaigns(fixtureCampaigns);
 
 const mocks = {
   'update-status': { state: 'idle' },
@@ -123,6 +137,67 @@ ipcMain.handle('campaign-update', (_event, { id, updates }) => {
   return { success: true, campaign };
 });
 
+ipcMain.handle('kanban-get-board', () => ({ success: true, board: fixtureKanbanStore.getBoard() }));
+ipcMain.handle('kanban-sync-maps', (_event, { leads } = {}) => ({
+  success: true,
+  board: fixtureKanbanStore.syncLeads(leads, 'maps'),
+}));
+ipcMain.handle('kanban-save-config', (_event, { board, expectedRevision } = {}) => {
+  try {
+    return { success: true, board: fixtureKanbanStore.saveConfig(board, expectedRevision) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+ipcMain.handle('kanban-move-card', (_event, payload = {}) => {
+  try {
+    return { success: true, board: fixtureKanbanStore.moveCard(payload) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+ipcMain.handle('kanban-apply-rules', (_event, { force } = {}) => {
+  try {
+    const result = fixtureKanbanStore.applyRules({ force: Boolean(force) });
+    return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+ipcMain.handle('kanban-resume-automation', (_event, { entityKey } = {}) => {
+  try {
+    return { success: true, board: fixtureKanbanStore.resumeAutomation(entityKey) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+ipcMain.handle('repair-map-addresses', (_event, { leads } = {}) => {
+  const candidates = Array.isArray(leads) ? leads : [];
+  fixtureMapRepairRequests += candidates.length;
+  if (fixtureFailureState.mapRepair) {
+    return {
+      success: true,
+      partial: true,
+      repaired: candidates.map((lead) => ({
+        key: lead.key,
+        address: String(lead.address || '').replace(/^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]+/u, ''),
+      })),
+      failures: candidates.map((lead) => ({ key: lead.key, error: 'Falha controlada de geocoding.' })),
+    };
+  }
+  return {
+    success: true,
+    repaired: candidates.map((lead) => ({
+      key: lead.key,
+      address: String(lead.address || '').replace(/^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]+/u, ''),
+      latitude: -22.985,
+      longitude: -43.205,
+      coordSource: 'nominatim',
+      geocodeConfidence: 'exact',
+    })),
+  };
+});
+
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 app.whenReady().then(async () => {
@@ -161,16 +236,16 @@ app.whenReady().then(async () => {
   await pause(900);
   await win.webContents.insertCSS('*{animation:none!important;transition:none!important;scroll-behavior:auto!important}');
 
-  for (const route of ['overview', 'scraper', 'base', 'scoring', 'whatsapp', 'dashboard', 'settings']) {
+  for (const route of ['overview', 'scraper', 'base', 'scoring', 'kanban', 'whatsapp', 'dashboard', 'settings']) {
     await win.webContents.executeJavaScript(`location.hash = '#${route}'; window.dispatchEvent(new HashChangeEvent('hashchange'));`);
-    const targetLabel = ({ overview: 'visão geral', scraper: 'scraper maps', base: 'base de leads', scoring: 'lead scoring', whatsapp: 'whatsapp', dashboard: 'dashboard', settings: 'configurações' })[route];
+    const targetLabel = ({ overview: 'visão geral', scraper: 'scraper maps', base: 'base de leads', scoring: 'lead scoring', kanban: 'kanban', whatsapp: 'whatsapp', dashboard: 'dashboard', settings: 'configurações' })[route];
     const navResult = await win.webContents.executeJavaScript(`(() => {
       const item = [...document.querySelectorAll('.app-sidebar .nav-item')]
         .find((node) => (node.textContent || '').toLowerCase().includes(${JSON.stringify(targetLabel)}));
       if (item) item.click();
       return { found: !!item, title: item?.textContent?.trim() || '' };
     })()`);
-    await pause(route === 'scraper' || route === 'whatsapp' ? 1200 : 600);
+    await pause(route === 'scraper' || route === 'kanban' || route === 'whatsapp' ? 1200 : 600);
     if (route === 'whatsapp') {
       await win.webContents.executeJavaScript(`document.querySelector('.chat-thread')?.click()`);
       await pause(300);
@@ -251,6 +326,47 @@ app.whenReady().then(async () => {
   await pause(180);
   await captureModal('configurar-ia-modal', `document.querySelector('#scCfgBtn')?.click();`, '#aiCfgOv');
   await captureModal('detalhe-scoring-modal', `document.querySelector('#scResults tbody td b')?.click();`, '.overlay.on');
+
+  await navigateTo('kanban', 900);
+  const globalKanban = await win.webContents.executeJavaScript(`(() => ({
+    board: Boolean(document.querySelector('[data-od-id="global-kanban"]')),
+    columns: document.querySelectorAll('.kanban-column').length,
+    cards: document.querySelectorAll('.kanban-card').length,
+    settings: Boolean([...document.querySelectorAll('button')].find((node) => (node.textContent || '').includes('Configurar Kanban'))),
+  }))()`);
+  if (!globalKanban.board || globalKanban.columns < 3 || globalKanban.cards < 3 || !globalKanban.settings) {
+    errors.push(`Kanban geral não renderizou corretamente: ${JSON.stringify(globalKanban)}`);
+  }
+  fs.writeFileSync(path.join(outputDir, 'kanban-geral-1440x900.png'), (await win.capturePage()).toPNG());
+  const globalMove = await win.webContents.executeJavaScript(`(() => {
+    const select = document.querySelector('.kanban-card-move select');
+    const card = select?.closest('.kanban-card');
+    const name = card?.querySelector('.kanban-card-title strong')?.textContent || '';
+    const next = [...(select?.options || [])].find((option) => option.value !== select.value)?.value;
+    if (!select || !next) return null;
+    select.value = next;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return { name, next };
+  })()`);
+  await pause(320);
+  const globalMovePersisted = globalMove && await win.webContents.executeJavaScript(`(() => {
+    const cards = [...document.querySelectorAll('.kanban-card')];
+    const card = cards.find((node) => node.querySelector('.kanban-card-title strong')?.textContent === ${JSON.stringify(globalMove.name)});
+    return card?.querySelector('.kanban-card-move select')?.value === ${JSON.stringify(globalMove.next)};
+  })()`);
+  if (!globalMove || !globalMovePersisted) errors.push('Kanban geral: movimento manual não persistiu visualmente');
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('button')].find((node) => (node.textContent || '').includes('Configurar Kanban')))?.click()`);
+  await pause(180);
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.kanban-settings-modal button')].find((node) => (node.textContent || '').trim() === 'Regra'))?.click()`);
+  await pause(100);
+  const ruleEditorVisible = await win.webContents.executeJavaScript(`document.querySelectorAll('.kanban-settings-modal .kanban-rule-editor').length === 1`);
+  if (!ruleEditorVisible) errors.push('Kanban geral: regra de negócio não foi adicionada');
+  fs.writeFileSync(path.join(outputDir, 'kanban-configuracao-1440x900.png'), (await win.capturePage()).toPNG());
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.kanban-settings-modal button')].find((node) => (node.textContent || '').includes('Salvar Kanban')))?.click()`);
+  await pause(260);
+  const ruleSaved = await win.webContents.executeJavaScript(`document.querySelectorAll('.kanban-rule-editor').length === 0 && /Configuração do Kanban salva/i.test(document.body.innerText)`);
+  if (!ruleSaved) errors.push('Kanban geral: regra/configuração não foi salva');
+  await captureModal('configurar-kanban-modal', `([...document.querySelectorAll('button')].find((node) => (node.textContent || '').includes('Configurar Kanban')))?.click();`, '.kanban-modal-overlay');
 
   await navigateTo('whatsapp', 800);
   await captureModal('nova-conversa-modal', `document.querySelector('[data-od-id="wa-new-chat"]')?.click();`, '#chatOv');
@@ -379,6 +495,138 @@ app.whenReady().then(async () => {
   await win.webContents.executeJavaScript(`document.querySelector('.camp-wizard-close')?.click()`);
   await win.webContents.executeJavaScript(`document.querySelector('.sigma-campaign-head-actions .wa-icon-button')?.click()`);
 
+  // Regressão do mapa: todos os leads com coordenada devem ter marcador, sem
+  // corte invisível em 100 itens; registros antigos também são normalizados.
+  await navigateTo('scraper maps', 900);
+  await win.webContents.executeJavaScript(`(() => {
+    const base = ${JSON.stringify(fixtureLeads)};
+    const stress = Array.from({ length: 125 }, (_, index) => ({
+      id: 'map-stress-' + index,
+      name: 'Lead de mapa ' + index,
+      category: 'Teste',
+      address: index === 0 ? '\\uE0C8Rua São João, 10, Rio de Janeiro, RJ' : 'Rua de teste, ' + (index + 1) + ', Rio de Janeiro, RJ',
+      city: 'Rio de Janeiro',
+      state: 'RJ',
+      latitude: -22.98 + (index % 20) * 0.0001,
+      longitude: -43.20 + (index % 20) * 0.0001,
+      coordSource: 'poi',
+    }));
+    localStorage.setItem('sigma_leads', JSON.stringify([...base, ...stress, ...Array.from({ length: 29 }, (_, index) => ({
+      id: 'map-dirty-no-coords-' + index,
+      name: 'Endereco antigo sem coordenada ' + index,
+      category: 'Teste',
+      address: '\\uE0C8Rua Sao Joao, ' + (12 + index) + ', Rio de Janeiro, RJ',
+      city: 'Rio de Janeiro',
+      state: 'RJ',
+    })), {
+      id: 'map-dirty-no-coords',
+      name: 'Endereço antigo sem coordenada',
+      category: 'Teste',
+      address: '\\uE0C8Rua São João, 11, Rio de Janeiro, RJ',
+      city: 'Rio de Janeiro',
+      state: 'RJ',
+    }]));
+    window.dispatchEvent(new Event('sigma:leads-updated'));
+  })()`);
+  await pause(1300);
+  const mapStress = await win.webContents.executeJavaScript(`(() => {
+    const saved = JSON.parse(localStorage.getItem('sigma_leads') || '[]');
+    return {
+      markers: document.querySelectorAll('#realMap .lp').length,
+      dirtyAddress: saved.find((lead) => lead.id === 'map-dirty-no-coords')?.address || '',
+      dirtyAddressRepaired: saved.find((lead) => lead.id === 'map-dirty-no-coords')?.needsMapAddressRepair === false,
+      repairedDirtyAddresses: saved.filter((lead) => String(lead.id || '').startsWith('map-dirty-no-coords')).filter((lead) => lead.needsMapAddressRepair === false && Number.isFinite(Number(lead.latitude)) && Number.isFinite(Number(lead.longitude))).length,
+      repairRequests: ${fixtureMapRepairRequests},
+      map: (() => { const node = document.querySelector('#realMap'); const box = node?.getBoundingClientRect(); return box ? { width: Math.round(box.width), height: Math.round(box.height) } : null; })(),
+    };
+  })()`);
+  if (mapStress.markers < 158) errors.push(`Mapa: corte de marcadores detectado (${mapStress.markers}/158)`);
+  if (/^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]/u.test(mapStress.dirtyAddress)) errors.push('Mapa: endereço antigo com prefixo especial não foi corrigido');
+  if (!mapStress.dirtyAddressRepaired || mapStress.repairedDirtyAddresses < 30 || mapStress.repairRequests < 30) errors.push('Mapa: lote completo de endereços antigos sem coordenadas não foi reparado');
+  fs.writeFileSync(path.join(outputDir, 'mapa-158-marcadores-1440x900.png'), (await win.capturePage()).toPNG());
+  await win.webContents.executeJavaScript(`localStorage.setItem('sigma_leads', ${JSON.stringify(JSON.stringify(fixtureLeads))}); window.dispatchEvent(new Event('sigma:leads-updated'));`);
+  await pause(450);
+
+  fixtureFailureState.mapRepair = true;
+  await win.webContents.executeJavaScript(`localStorage.setItem('sigma_leads', JSON.stringify([{ id: 'map-repair-failure', name: 'Teste de falha', address: '\\uE0C8Rua Teste, 1, Rio de Janeiro, RJ', city: 'Rio de Janeiro', state: 'RJ' }])); window.dispatchEvent(new Event('sigma:leads-updated'));`);
+  await pause(350);
+  const mapRepairFailure = await win.webContents.executeJavaScript(`document.querySelector('.toast-warning .toast-message')?.textContent || ''`);
+  if (!/não puderam ser geocodificados/i.test(mapRepairFailure)) errors.push('Mapa: falha de geocoding não ficou visível para recuperação');
+  fixtureFailureState.mapRepair = false;
+  await win.webContents.executeJavaScript(`localStorage.setItem('sigma_leads', ${JSON.stringify(JSON.stringify(fixtureLeads))}); window.dispatchEvent(new Event('sigma:leads-updated'));`);
+  await pause(220);
+
+  // O Leaflet não pode executar callbacks atrasados após o unmount da rota.
+  const errorsBeforeRapidMapNavigation = errors.length;
+  await navigateTo('scraper maps', 20);
+  await navigateTo('kanban', 20);
+  await pause(240);
+  if (errors.slice(errorsBeforeRapidMapNavigation).some((error) => /leaflet_pos|invalidateSize/i.test(error))) {
+    errors.push('Mapa: callback do Leaflet falhou ao trocar de rota rapidamente');
+  }
+
+  const desktopViewports = [];
+  const inspectDesktop = async ({ width, height, label, route, file }) => {
+    win.setSize(width, height);
+    await pause(260);
+    await navigateTo(label, route === 'whatsapp' ? 850 : 700);
+    if (route === 'whatsapp') {
+      await win.webContents.executeJavaScript(`document.querySelector('.chat-thread')?.click()`);
+      await pause(220);
+    }
+    const diagnostic = await win.webContents.executeJavaScript(`(() => {
+      const rect = (selector) => {
+        const node = document.querySelector(selector);
+        if (!node) return null;
+        const box = node.getBoundingClientRect();
+        return { width: Math.round(box.width), height: Math.round(box.height) };
+      };
+      const visible = (node) => {
+        if (!node) return false;
+        const style = getComputedStyle(node);
+        const box = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0;
+      };
+      return {
+        viewport: String(window.innerWidth) + 'x' + String(window.innerHeight),
+        scrollWidth: document.documentElement.scrollWidth,
+        noGlobalHorizontalOverflow: document.documentElement.scrollWidth <= window.innerWidth + 1,
+        windowControls: [...document.querySelectorAll('.window-control-buttons .win-btn')].filter(visible).length,
+        windowControlDetails: [...document.querySelectorAll('.window-control-buttons .win-btn')].map((node) => {
+          const box = node.getBoundingClientRect();
+          const icon = node.querySelector('svg');
+          const iconBox = icon?.getBoundingClientRect();
+          return {
+            x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height),
+            color: getComputedStyle(node).color, opacity: getComputedStyle(node).opacity,
+            iconWidth: Math.round(iconBox?.width || 0), iconHeight: Math.round(iconBox?.height || 0),
+          };
+        }),
+        kanbanColumns: document.querySelectorAll('.kanban-column').length,
+        map: rect('#realMap'),
+        mapMarkers: document.querySelectorAll('#realMap .lp').length,
+        chatShell: rect('.chat-shell'),
+        chatList: rect('.chat-list'),
+        chatRoom: rect('.chat-room'),
+      };
+    })()`);
+    desktopViewports.push({ requested: `${width}x${height}`, route, ...diagnostic });
+    if (!diagnostic.noGlobalHorizontalOverflow || diagnostic.windowControls !== 3) {
+      errors.push(`Desktop ${width}x${height}/${route}: overflow ou controles de janela ausentes (${JSON.stringify(diagnostic)})`);
+    }
+    if (route === 'kanban' && diagnostic.kanbanColumns < 3) errors.push(`Desktop ${width}x${height}/kanban: colunas insuficientes`);
+    if (route === 'scraper' && (!diagnostic.map || diagnostic.map.width < 450 || diagnostic.map.height < 280 || diagnostic.mapMarkers < 3)) {
+      errors.push(`Desktop ${width}x${height}/mapa: área ou marcadores inválidos (${JSON.stringify(diagnostic)})`);
+    }
+    if (route === 'whatsapp' && (!diagnostic.chatShell || !diagnostic.chatList || !diagnostic.chatRoom || diagnostic.chatList.width < 220 || diagnostic.chatRoom.width < 320)) {
+      errors.push(`Desktop ${width}x${height}/WhatsApp: painel de conversa inválido (${JSON.stringify(diagnostic)})`);
+    }
+    fs.writeFileSync(path.join(outputDir, file), (await win.capturePage()).toPNG());
+  };
+  await inspectDesktop({ width: 1024, height: 768, label: 'kanban', route: 'kanban', file: 'desktop-1024x768-kanban.png' });
+  await inspectDesktop({ width: 1440, height: 900, label: 'scraper maps', route: 'scraper', file: 'desktop-1440x900-mapa.png' });
+  await inspectDesktop({ width: 1920, height: 1080, label: 'whatsapp', route: 'whatsapp', file: 'desktop-1920x1080-whatsapp.png' });
+
   const finalCapture = await win.capturePage();
   const viewport = finalCapture.getSize();
   const report = {
@@ -386,9 +634,11 @@ app.whenReady().then(async () => {
     version: require('../package.json').version,
     desktopOnly: true,
     viewport: `${viewport.width}x${viewport.height}`,
-    routes: 7,
-    modals: 16,
-    controlledErrorScenarios: 3,
+    routes: 8,
+    modals: 17,
+    controlledErrorScenarios: 4,
+    functionalScenarios: 4,
+    desktopViewports,
     errors,
     passed: errors.length === 0,
   };

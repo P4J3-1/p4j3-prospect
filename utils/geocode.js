@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { normalizeAddress } = require("./address-normalizer");
 
 let cachePathOverride = null;
 let memCache = null;
@@ -48,7 +49,7 @@ function saveCache() {
 }
 
 function normalizeKey(address, hint) {
-  const combined = `${address || ""} ${hint || ""}`.toLowerCase().trim().replace(/\s+/g, " ");
+  const combined = `${normalizeAddress(address)} ${String(hint || "").trim()}`.toLowerCase().trim().replace(/\s+/g, " ");
   return combined.replace(/brasil$/i, "").trim().slice(0, 240);
 }
 
@@ -71,10 +72,11 @@ async function throttle() {
 }
 
 async function geocodeAddress(address, hint) {
-  const query = `${address || ""} ${hint || ""}`.trim();
+  const cleanAddress = normalizeAddress(address);
+  const query = `${cleanAddress} ${String(hint || "").trim()}`.trim();
   if (!query || query.length < 4) return null;
 
-  const key = normalizeKey(address, hint);
+  const key = normalizeKey(cleanAddress, hint);
   const cache = loadCache();
   const cached = cache[key];
   if (cached && cached.lat != null) {
@@ -138,7 +140,7 @@ async function geocodeAddress(address, hint) {
 }
 
 function geocodeFromCache(address, hint) {
-  const key = normalizeKey(address, hint);
+  const key = normalizeKey(normalizeAddress(address), hint);
   const cache = loadCache();
   return cache[key] || null;
 }

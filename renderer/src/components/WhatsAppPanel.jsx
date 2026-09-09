@@ -80,6 +80,14 @@ function recipientKey(r) {
   return phone ? `p:${phone}` : `j:${r.jid || ''}`;
 }
 
+function normalizeAddressForDisplay(value) {
+  return String(value ?? '')
+    .normalize('NFC')
+    .replace(/^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]+/u, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
 /** Nome padrão: Campanha DD/MM/AAAA HH:mm */
 function buildDefaultCampaignName(date = new Date()) {
   const d = date instanceof Date ? date : new Date();
@@ -1817,7 +1825,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     website: l.website || '',
     instagram: l.instagram || '',
     email: l.email || '',
-    address: l.address || '',
+    address: normalizeAddressForDisplay(l.address),
     rating: l.rating || '',
     totalReviews: l.totalReviews || '',
     score: l.score || '',
@@ -1840,7 +1848,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       website: l.company?.website || '',
       instagram: l.company?.instagram || '',
       email: l.company?.email || '',
-      address: l.company?.address || '',
+      address: normalizeAddressForDisplay(l.company?.address),
       score: l.score?.value ?? '',
       prioridade: l.score?.priority || l.prioridade || '',
       source: 'scoring',

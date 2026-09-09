@@ -5,6 +5,11 @@ const os = require("os");
 const { execFile } = require("child_process");
 const QRCode = require("qrcode");
 
+// O smoke empacotado usa um perfil descartável; nunca misture seus dados com o perfil real.
+if (process.env.SIGMA_QA === "1" && process.env.SIGMA_QA_USER_DATA) {
+  app.setPath("userData", path.resolve(process.env.SIGMA_QA_USER_DATA));
+}
+
 // Suppress GPU and Cache errors in console
 app.commandLine.appendSwitch("disable-gpu");
 app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
@@ -38,6 +43,9 @@ const {
 } = require("./campaigns/template-engine");
 const { LeadScoringService } = require("./lead-scoring");
 const { saveProspectingCSV } = require("./lead-scoring/export-service");
+const { KanbanStore } = require("./kanban/kanban-store");
+const { normalizeAddress } = require("./utils/address-normalizer");
+const { geocodeAddress, isValidCoord } = require("./utils/geocode");
 
 const autoUpdaterMod = require("./utils/auto-updater");
 const { ensureInstallId } = require("./utils/install-id");
@@ -48,6 +56,7 @@ const whatsappProviders = new Map();
 let activeWhatsAppId = null;
 let campaignManager = null;
 let leadScoringService = null;
+let kanbanStore = null;
 const resultStore = new Map();
 const allowedMediaPaths = new Set();
 const activeScrapes = new Map();
@@ -410,7 +419,7 @@ function sanitizeCampaignRecipient(raw) {
     site: limitString(raw.website || raw.site, 240, ""),
     instagram: limitString(raw.instagram, 120, ""),
     email: limitString(raw.email, 160, ""),
-    address: limitString(raw.address, 240, ""),
+    address: limitString(normalizeAddress(raw.address), 240, ""),
     rating: raw.rating || "",
     totalReviews: raw.totalReviews || "",
     score: raw.score || "",
@@ -937,7 +946,9 @@ app.whenReady().then(() => {
   leadScoringService = new LeadScoringService(app.getPath("userData"), (payload) => {
     safeSend("lead-scoring-progress", payload);
   });
+  kanbanStore = new KanbanStore(app.getPath("userData"));
   campaignManager.setProgressCallback((campaignId, event, data) => {
+    try { kanbanStore?.syncCampaigns(campaignManager.getAll()); } catch (error) { console.warn("[KANBAN] campaign sync:", error.message); }
     safeSend("campaign-progress", {
       campaignId,
       event,
@@ -1116,6 +1127,81 @@ function sendProgress(msg) {
   safeSend("progress", msg);
 }
 
+function requireKanbanStore() {
+  if (!kanbanStore) throw new Error("Kanban ainda está inicializando.");
+  return kanbanStore;
+}
+
+function syncKanbanServiceSources() {
+  const store = requireKanbanStore();
+  if (leadScoringService) {
+    const scoringLeads = leadScoringService.getAll({}).leads || [];
+    if (scoringLeads.length) store.syncLeads(scoringLeads, "scoring");
+  }
+  if (campaignManager) {
+    const campaigns = campaignManager.getAll() || [];
+    if (campaigns.length) store.syncCampaigns(campaigns);
+  }
+  return store.getBoard();
+}
+
+// ─── KANBAN GERAL ───────────────────────────
+// O renderer só envia fontes de leads. Configuração, regras, histórico e
+// persistência ficam no processo principal para não depender do localStorage.
+ipcMain.handle("kanban-get-board", async () => {
+  try {
+    return { success: true, board: syncKanbanServiceSources() };
+  } catch (error) {
+    return { success: false, error: error.message, board: null };
+  }
+});
+
+ipcMain.handle("kanban-sync-maps", async (_, { leads } = {}) => {
+  try {
+    const store = requireKanbanStore();
+    const board = store.syncLeads(Array.isArray(leads) ? leads : [], "maps");
+    return { success: true, board };
+  } catch (error) {
+    return { success: false, error: error.message, board: null };
+  }
+});
+
+ipcMain.handle("kanban-save-config", async (_, { board, expectedRevision } = {}) => {
+  try {
+    const result = requireKanbanStore().saveConfig(board || {}, expectedRevision);
+    return { success: true, board: result };
+  } catch (error) {
+    return { success: false, error: error.message, code: error.code || null, board: null };
+  }
+});
+
+ipcMain.handle("kanban-move-card", async (_, payload = {}) => {
+  try {
+    const result = requireKanbanStore().moveCard(payload || {});
+    return { success: true, board: result };
+  } catch (error) {
+    return { success: false, error: error.message, code: error.code || null, board: null };
+  }
+});
+
+ipcMain.handle("kanban-apply-rules", async (_, { force } = {}) => {
+  try {
+    const result = requireKanbanStore().applyRules({ force: Boolean(force) });
+    return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: error.message, moved: 0, board: null };
+  }
+});
+
+ipcMain.handle("kanban-resume-automation", async (_, { entityKey } = {}) => {
+  try {
+    const result = requireKanbanStore().resumeAutomation(entityKey);
+    return { success: true, board: result };
+  } catch (error) {
+    return { success: false, error: error.message, board: null };
+  }
+});
+
 // ─── UPDATE IPC ────────────────────────────
 ipcMain.handle("update-check", async () => autoUpdaterMod.checkForUpdates());
 ipcMain.handle("update-download", async () => autoUpdaterMod.downloadUpdate());
@@ -1155,17 +1241,35 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId }) => {
   const key = limitString(queryId, 80, "") || `scrape_${Date.now()}`;
   const cancelToken = { cancelled: false };
   activeScrapes.set(key, cancelToken);
+  const emitProgress = (payload) => sendProgress({ queryId: key, ...payload });
   try {
     if (!cleanQuery) throw new Error("Query is required");
     try { appMetrics.track("scrape_started", { maxResults: cleanMaxResults, queryLen: cleanQuery.length }); } catch {}
-    sendProgress(`Starting scrape for: ${cleanQuery}`);
+    emitProgress({ status: "started", current: 0, total: cleanMaxResults, message: `Iniciando extração: ${cleanQuery}` });
     const result = await scrapeGoogleMaps(
       cleanQuery,
       cleanMaxResults,
-      sendProgress,
+      (message) => {
+        const text = String(message || "");
+        const match = text.match(/\[(\d+)\/(\d+)\]/);
+        emitProgress({
+          status: "running",
+          current: match ? Number(match[1]) : null,
+          total: match ? Number(match[2]) : cleanMaxResults,
+          message: text,
+        });
+      },
       cancelToken,
     );
-    let data = result.data || [];
+    if (!result || result.success === false) {
+      const error = new Error(result?.error || "Não foi possível concluir a busca no Google Maps.");
+      error.warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+      throw error;
+    }
+    let data = Array.isArray(result.data)
+      ? result.data.map((item) => ({ ...item, address: normalizeAddress(item?.address) }))
+      : [];
+    if (!data.length) throw new Error("Nenhum negócio foi encontrado para esta busca. Tente ajustar nicho ou localização.");
 
     // Deduplicate by name+address
     const seen = new Set();
@@ -1176,7 +1280,7 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId }) => {
       return true;
     });
 
-    sendProgress(`After dedup: ${data.length} unique results.`);
+    emitProgress({ status: "running", current: data.length, total: data.length, message: `${data.length} resultados únicos após deduplicação.` });
 
     const timestamp = Date.now();
     const safeQuery = cleanQuery.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_]/g, "") || "query";
@@ -1204,7 +1308,7 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId }) => {
       timestamp,
     });
 
-    sendProgress(`Scrape complete (${data.length} results).`);
+    emitProgress({ status: "completed", current: data.length, total: data.length, message: `Extração concluída: ${data.length} resultado(s).` });
     try { appMetrics.track("scrape_completed", { count: data.length, queryLen: cleanQuery.length }); } catch {}
 
     return {
@@ -1213,14 +1317,59 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId }) => {
       count: data.length,
       data,
       statistics: result.statistics,
+      partial: Boolean(result.partial),
+      warnings: Array.isArray(result.warnings) ? result.warnings : [],
     };
   } catch (err) {
-    sendProgress(`Error: ${err.message}`);
+    const cancelled = err?.code === "SCRAPE_CANCELLED" || cancelToken.cancelled;
+    emitProgress({ status: cancelled ? "cancelled" : "failed", current: null, total: cleanMaxResults, message: cancelled ? "Extração cancelada." : `Erro na extração: ${err.message}`, error: err.message });
     try { appMetrics.track("scrape_failed", { error: String(err.message).slice(0, 120) }); } catch {}
-    return { success: false, error: err.message };
+    return { success: false, error: err.message, cancelled, warnings: Array.isArray(err.warnings) ? err.warnings : [] };
   } finally {
     activeScrapes.delete(key);
   }
+});
+
+// Corrige uma base local criada antes da sanitização do ícone do Maps. O lote
+// é limitado e o geocoder já possui cache/rate-limit para não disparar tráfego.
+// A lista completa é processada em sequência; cache e rate-limit evitam rajadas.
+ipcMain.handle("repair-map-addresses", async (_, { leads } = {}) => {
+  const candidates = Array.isArray(leads) ? leads : [];
+  const repaired = [];
+  const failures = [];
+  const seen = new Set();
+
+  for (const raw of candidates) {
+    const key = limitString(raw?.key, 300, "");
+    const address = normalizeAddress(raw?.address);
+    if (!key || !address || seen.has(key)) continue;
+    seen.add(key);
+
+    const item = { key, address };
+    try {
+      const hint = [limitString(raw?.city, 120, ""), limitString(raw?.state, 8, "")]
+        .filter(Boolean)
+        .join(", ");
+      const geo = await geocodeAddress(address, hint);
+      if (geo && isValidCoord(Number(geo.lat), Number(geo.lng))) {
+        item.latitude = geo.lat;
+        item.longitude = geo.lng;
+        item.coordSource = "nominatim";
+        item.geocodeConfidence = geo.confidence || "approximate";
+      } else {
+        const message = "Endereço não localizado ou serviço de mapas indisponível.";
+        item.error = message;
+        failures.push({ key, error: message });
+      }
+    } catch (error) {
+      const message = limitString(error?.message, 220, "Falha ao geocodificar endereço.");
+      item.error = message;
+      failures.push({ key, error: message });
+    }
+    repaired.push(item);
+  }
+
+  return { success: true, partial: failures.length > 0, repaired, failures };
 });
 
 ipcMain.handle("cancel-scrape", async (_, { queryId } = {}) => {

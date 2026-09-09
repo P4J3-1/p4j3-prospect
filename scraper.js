@@ -2,6 +2,7 @@ const { chromium } = require('playwright');
 const CONFIG = require('./config');
 const { extractBusinessData } = require('./utils/businessData');
 const { geocodeAddress, isValidCoord } = require('./utils/geocode');
+const { normalizeAddress } = require('./utils/address-normalizer');
 
 function checkCancelled(cancelToken) {
   if (cancelToken?.cancelled) {
@@ -100,9 +101,11 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
         checkCancelled(cancelToken);
 
         let place = await extractBusinessData(page);
+        place.address = normalizeAddress(place.address);
         if (!place.latitude || place.coordSource === 'none') {
           await page.waitForTimeout(700);
           const retry = await extractBusinessData(page);
+          retry.address = normalizeAddress(retry.address);
           if (retry.latitude && retry.coordSource !== 'none') place = retry;
         }
 
@@ -127,7 +130,9 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
                 place.latitude = '';
                 place.longitude = '';
               }
-            } catch {}
+            } catch (err) {
+              if (err.code === 'SCRAPE_CANCELLED') throw err;
+            }
           }
           place.instagram = '';
           if (place.website && place.website.includes('instagram.com')) {
@@ -161,6 +166,7 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
           onProgress(`  [${i + 1}/${total}] ${place.name} ${place.rating}★${web}${ig}${em}`);
         }
       } catch (err) {
+        if (err.code === 'SCRAPE_CANCELLED') throw err;
         onProgress(`  [${i + 1}/${total}] skip`);
       }
     }

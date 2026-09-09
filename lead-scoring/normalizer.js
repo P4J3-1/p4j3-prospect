@@ -1,9 +1,10 @@
 const { createLeadId } = require("./prospecting-store");
 const { classifyUrl, VERSION: CLASSIFIER_VERSION } = require("./url-classifier");
+const { normalizeAddress } = require("../utils/address-normalizer");
 
 function normalizeLead(raw, options = {}) {
   const lead = raw || {};
-  const address = clean(lead.address);
+  const address = normalizeAddress(lead.address);
   const parsed = parseLocation(address, options.query || "");
   const phone = clean(lead.phone);
   const website = clean(lead.website);

@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("start-scrape", { query, maxResults, queryId }),
   cancelScrape: (queryId) =>
     ipcRenderer.invoke("cancel-scrape", { queryId }),
+  repairMapAddresses: (leads) =>
+    ipcRenderer.invoke("repair-map-addresses", { leads }),
   exportLeads: (leads, format) =>
     ipcRenderer.invoke("export-leads", { leads, format }),
   deleteTempFiles: () => ipcRenderer.invoke("delete-temp-files"),
@@ -85,6 +87,16 @@ contextBridge.exposeInMainWorld("campaignAPI", {
     ipcRenderer.on("campaign-progress", listener);
     return () => ipcRenderer.removeListener("campaign-progress", listener);
   },
+});
+
+contextBridge.exposeInMainWorld("kanbanAPI", {
+  getBoard: () => ipcRenderer.invoke("kanban-get-board"),
+  syncMapsLeads: (leads) => ipcRenderer.invoke("kanban-sync-maps", { leads }),
+  saveConfig: (board, expectedRevision) =>
+    ipcRenderer.invoke("kanban-save-config", { board, expectedRevision }),
+  moveCard: (payload) => ipcRenderer.invoke("kanban-move-card", payload || {}),
+  applyRules: (force = false) => ipcRenderer.invoke("kanban-apply-rules", { force }),
+  resumeAutomation: (entityKey) => ipcRenderer.invoke("kanban-resume-automation", { entityKey }),
 });
 
 contextBridge.exposeInMainWorld("leadScoringAPI", {

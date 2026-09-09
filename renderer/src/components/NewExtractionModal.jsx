@@ -175,6 +175,7 @@ export default function NewExtractionModal({
   };
 
   const handleNext = () => {
+    if (isProcessing) return;
     if (step === 1) {
       if (!nicho.trim()) {
         setNichoError(true);
@@ -415,8 +416,8 @@ export default function NewExtractionModal({
               Voltar
             </button>
           )}
-          <button type="button" className="btn btn-primary" onClick={handleNext}>
-            {step === 3 ? 'Iniciar extração' : 'Continuar'}
+          <button type="button" className="btn btn-primary" disabled={isProcessing} onClick={handleNext}>
+            {isProcessing ? 'Extração em andamento…' : (step === 3 ? 'Iniciar extração' : 'Continuar')}
           </button>
         </div>
       </div>

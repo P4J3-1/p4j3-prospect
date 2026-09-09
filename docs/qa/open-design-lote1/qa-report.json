@@ -1,11 +1,164 @@
 {
-  "generatedAt": "2026-09-09T07:51:42.531Z",
-  "version": "1.1.5",
+  "generatedAt": "2026-09-09T15:10:07.323Z",
+  "version": "1.1.6",
   "desktopOnly": true,
-  "viewport": "1366x728",
-  "routes": 7,
-  "modals": 16,
-  "controlledErrorScenarios": 3,
+  "viewport": "2880x1620",
+  "routes": 8,
+  "modals": 17,
+  "controlledErrorScenarios": 4,
+  "functionalScenarios": 4,
+  "desktopViewports": [
+    {
+      "requested": "1024x768",
+      "route": "kanban",
+      "viewport": "1024x768",
+      "scrollWidth": 1024,
+      "noGlobalHorizontalOverflow": true,
+      "windowControls": 3,
+      "windowControlDetails": [
+        {
+          "x": 917,
+          "y": 14,
+          "width": 28,
+          "height": 28,
+          "color": "rgb(110, 110, 110)",
+          "opacity": "1",
+          "iconWidth": 13,
+          "iconHeight": 13
+        },
+        {
+          "x": 945,
+          "y": 14,
+          "width": 28,
+          "height": 28,
+          "color": "rgb(110, 110, 110)",
+          "opacity": "1",
+          "iconWidth": 11,
+          "iconHeight": 11
+        },
+        {
+          "x": 973,
+          "y": 14,
+          "width": 28,
+          "height": 28,
+          "color": "rgb(110, 110, 110)",
+          "opacity": "1",
+          "iconWidth": 13,
+          "iconHeight": 13
+        }
+      ],
+      "kanbanColumns": 6,
+      "map": null,
+      "mapMarkers": 0,
+      "chatShell": null,
+      "chatList": null,
+      "chatRoom": null
+    },
+    {
+      "requested": "1440x900",
+      "route": "scraper",
+      "viewport": "1440x900",
+      "scrollWidth": 1440,
+      "noGlobalHorizontalOverflow": true,
+      "windowControls": 3,
+      "windowControlDetails": [
+        {
+          "x": 1333,
+          "y": 14,
+          "width": 28,
+          "height": 28,
+          "color": "rgb(110, 110, 110)",
+          "opacity": "1",
+          "iconWidth": 13,
+          "iconHeight": 13
+        },
+        {
+          "x": 1361,
+          "y": 14,
+          "width": 28,
+          "height": 28,
+          "color": "rgb(110, 110, 110)",
+          "opacity": "1",
+          "iconWidth": 11,
+          "iconHeight": 11
+        },
+        {
+          "x": 1389,
+          "y": 14,
+          "width": 28,
+          "height": 28,
+          "color": "rgb(110, 110, 110)",
+          "opacity": "1",
+          "iconWidth": 13,
+          "iconHeight": 13
+        }
+      ],
+      "kanbanColumns": 0,
+      "map": {
+        "width": 831,
+        "height": 795
+      },
+      "mapMarkers": 3,
+      "chatShell": null,
+      "chatList": null,
+      "chatRoom": null
+    },
+    {
+      "requested": "1920x1080",
+      "route": "whatsapp",
+      "viewport": "1920x1080",
+      "scrollWidth": 1920,
+      "noGlobalHorizontalOverflow": true,
+      "windowControls": 3,
+      "windowControlDetails": [
+        {
+          "x": 1813,
+          "y": 14,
+          "width": 28,
+          "height": 28,
+          "color": "rgb(110, 110, 110)",
+          "opacity": "1",
+          "iconWidth": 13,
+          "iconHeight": 13
+        },
+        {
+          "x": 1841,
+          "y": 14,
+          "width": 28,
+          "height": 28,
+          "color": "rgb(110, 110, 110)",
+          "opacity": "1",
+          "iconWidth": 11,
+          "iconHeight": 11
+        },
+        {
+          "x": 1869,
+          "y": 14,
+          "width": 28,
+          "height": 28,
+          "color": "rgb(110, 110, 110)",
+          "opacity": "1",
+          "iconWidth": 13,
+          "iconHeight": 13
+        }
+      ],
+      "kanbanColumns": 0,
+      "map": null,
+      "mapMarkers": 0,
+      "chatShell": {
+        "width": 1837,
+        "height": 1019
+      },
+      "chatList": {
+        "width": 588,
+        "height": 1019
+      },
+      "chatRoom": {
+        "width": 1249,
+        "height": 1019
+      }
+    }
+  ],
   "errors": [],
   "passed": true
 }

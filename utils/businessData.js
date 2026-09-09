@@ -1,5 +1,12 @@
 async function extractBusinessData(page) {
   return await page.evaluate(() => {
+    // O Maps pode incluir o ícone de localização (fonte Material, área privada
+    // Unicode) no textContent do botão. trim() não remove esse glifo.
+    const normalizeAddress = (value) => String(value ?? '')
+      .normalize('NFC')
+      .replace(/^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]+/u, '')
+      .replace(/\s+/gu, ' ')
+      .trim();
     const data = {
       name: document.querySelector('h1.DUwDvf')?.textContent.trim() || '',
       rating: 0,
@@ -31,7 +38,7 @@ async function extractBusinessData(page) {
       document.querySelector('span[jsinstance]'),
     ].filter(Boolean);
     const addrEl = addrCandidates.find((el) => el && el.textContent && el.textContent.trim().length > 3) || null;
-    if (addrEl) data.address = addrEl.textContent.trim();
+    if (addrEl) data.address = normalizeAddress(addrEl.textContent);
 
     // --- PHONE ---
     const phoneEl = document.querySelector('button[data-item-id*="phone:tel:"] div.fontBodyMedium') ||

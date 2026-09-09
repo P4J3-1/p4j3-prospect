@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-09T07:53:36.436Z",
+  "generatedAt": "2026-09-09T15:10:42.423Z",
   "desktopOnly": true,
   "reference": "sigma-gmaps-lote1-prototype.html",
   "expectedPairs": 23,
@@ -13,163 +13,163 @@
     {
       "type": "route",
       "name": "overview",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 96.33
+      "pixelSimilarityDiagnostic": 95.99
     },
     {
       "type": "route",
       "name": "scraper",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 93.73
+      "pixelSimilarityDiagnostic": 93.53
     },
     {
       "type": "route",
       "name": "base",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 94.13
+      "pixelSimilarityDiagnostic": 92.92
     },
     {
       "type": "route",
       "name": "scoring",
-      "dimensions": "1366x728",
-      "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 99.12
-    },
-    {
-      "type": "route",
-      "name": "whatsapp",
-      "dimensions": "1366x728",
-      "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 95.17
-    },
-    {
-      "type": "route",
-      "name": "dashboard",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
       "pixelSimilarityDiagnostic": 99.04
     },
     {
       "type": "route",
-      "name": "settings",
-      "dimensions": "1366x728",
+      "name": "whatsapp",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 99.07
+      "pixelSimilarityDiagnostic": 94.6
+    },
+    {
+      "type": "route",
+      "name": "dashboard",
+      "dimensions": "1920x1020",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 98.9
+    },
+    {
+      "type": "route",
+      "name": "settings",
+      "dimensions": "1920x1020",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 99.09
     },
     {
       "type": "modal",
       "name": "busca-global-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 97.43
+      "pixelSimilarityDiagnostic": 97.05
     },
     {
       "type": "modal",
       "name": "nova-extracao-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 91.72
+      "pixelSimilarityDiagnostic": 91.53
     },
     {
       "type": "modal",
       "name": "exportar-leads-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 96.44
+      "pixelSimilarityDiagnostic": 95.94
     },
     {
       "type": "modal",
       "name": "criar-grupo-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 92.24
+      "pixelSimilarityDiagnostic": 93.69
     },
     {
       "type": "modal",
       "name": "adicionar-grupo-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 90.58
+      "pixelSimilarityDiagnostic": 91.92
     },
     {
       "type": "modal",
       "name": "detalhe-lead-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 93
+      "pixelSimilarityDiagnostic": 94.68
     },
     {
       "type": "modal",
       "name": "configurar-ia-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 97.5
+      "pixelSimilarityDiagnostic": 97.35
     },
     {
       "type": "modal",
       "name": "detalhe-scoring-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 85.65
+      "pixelSimilarityDiagnostic": 86.14
     },
     {
       "type": "modal",
       "name": "nova-conversa-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 94.07
+      "pixelSimilarityDiagnostic": 92.67
     },
     {
       "type": "modal",
       "name": "nova-campanha-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 94.91
+      "pixelSimilarityDiagnostic": 93.85
     },
     {
       "type": "modal",
       "name": "campanhas-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 88.14
+      "pixelSimilarityDiagnostic": 87.43
     },
     {
       "type": "modal",
       "name": "conexoes-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 95.35
+      "pixelSimilarityDiagnostic": 93.94
     },
     {
       "type": "modal",
       "name": "perfil-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 96.66
+      "pixelSimilarityDiagnostic": 95.53
     },
     {
       "type": "modal",
       "name": "qr-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 92.71
+      "pixelSimilarityDiagnostic": 90.98
     },
     {
       "type": "modal",
       "name": "encaminhar-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 94.09
+      "pixelSimilarityDiagnostic": 93.32
     },
     {
       "type": "modal",
       "name": "status-modal",
-      "dimensions": "1366x728",
+      "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 94.74
+      "pixelSimilarityDiagnostic": 94.21
     }
   ]
 }
