@@ -96,6 +96,44 @@ function buildDefaultCampaignName(date = new Date()) {
   return `Campanha ${dd}/${mm}/${yyyy} ${hh}:${min}`;
 }
 
+const CAMPAIGN_KANBAN_STAGES = [
+  { id: 'new', label: 'Novos', hint: 'Ainda sem conversa' },
+  { id: 'conversation', label: 'Em conversa', hint: 'Responderam ou estão em negociação' },
+  { id: 'finished', label: 'Finalizados', hint: 'Ciclo encerrado' },
+];
+
+function resolveKanbanStage(lead) {
+  if (['new', 'conversation', 'finished'].includes(lead?.kanbanStage)) return lead.kanbanStage;
+  if (lead?.status === 'replied') return 'conversation';
+  if (lead?.status === 'failed') return 'finished';
+  return 'new';
+}
+
+function campaignStatusPresentation(campaign) {
+  const status = campaign?.status || 'ready';
+  if (status === 'paused' && campaign?.pauseReason === 'daily_limit') {
+    return { statusClass: 'paused', label: 'Limite diário' };
+  }
+  if (status === 'running' && campaign?.waitReason === 'outside_hours') {
+    return { statusClass: 'running', label: 'Fora do horário' };
+  }
+  if (status === 'running' && campaign?.waitReason === 'no_provider') {
+    return { statusClass: 'running', label: 'Aguardando WhatsApp' };
+  }
+  return {
+    statusClass: ['running', 'scheduled', 'paused', 'completed'].includes(status) ? status : 'ready',
+    label: {
+      ready: 'Rascunho',
+      running: 'Em andamento',
+      scheduled: 'Agendada',
+      paused: 'Pausada',
+      completed: 'Concluída',
+      cancelled: 'Cancelada',
+      failed: 'Com falhas',
+    }[status] || 'Rascunho',
+  };
+}
+
 /**
  * Campo de nome isolado — state local evita digitar “morrer”
  * quando o WhatsAppPanel re-renderiza (presença, chats, etc.).
@@ -158,6 +196,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
   // Campaigns state
   const [campaigns, setCampaigns] = useState([]);
+  const [kanbanCampaign, setKanbanCampaign] = useState(null);
+  const [draggingKanbanCard, setDraggingKanbanCard] = useState(null);
   const [isCreatingCampaign, setIsCreatingCampaign] = useState(false);
   const [editingCampaignId, setEditingCampaignId] = useState(null);
   const [newCampaignName, setNewCampaignName] = useState('');
@@ -338,6 +378,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       const res = await window.campaignAPI.getAll();
       if (res && res.campaigns) {
         setCampaigns(res.campaigns);
+        setKanbanCampaign((current) => current
+          ? (res.campaigns.find((campaign) => campaign.id === current.id) || null)
+          : null);
       }
     } catch (e) {
       console.error(e);
@@ -1885,6 +1928,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   );
 
   const openCreateCampaign = () => {
+    // O botão também existe no cabeçalho de Conversas; o wizard vive no hub
+    // de Campanhas, então a aba precisa acompanhar a abertura.
+    setWaTab('campaigns');
     setEditingCampaignId(null);
     // Prefill com nome genérico (editável). Se apagar, cria com data/hora na hora do create.
     setNewCampaignName(buildDefaultCampaignName());
@@ -2089,10 +2135,6 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       : [campaignConnectionId || activeConnectionId].filter(Boolean)
     ).filter((id) => connectedSessions.some((c) => c.id === id));
 
-    if (!connIds.length) {
-      alert('Selecione ao menos um número WhatsApp conectado.');
-      return;
-    }
     if (campaignRecipients.length === 0) {
       alert('Adicione ao menos um destinatário (lead, contato, grupo ou número manual).');
       return;
@@ -2137,8 +2179,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         setNewCampaignName('');
         setCampaignRecipients([]);
         loadCampaigns();
-        addLog(
-          connIds.length > 1
+        addLog(res.savedAsDraft
+          ? `[CAMPAIGN] Campanha "${baseName}" salva como rascunho. Conecte um WhatsApp antes de iniciar os disparos.`
+          : connIds.length > 1
             ? `[CAMPAIGN] "${baseName}" criada com ${campaignRecipients.length} leads em ${connIds.length} números (relatório unificado).`
             : `[CAMPAIGN] Campanha "${baseName}" criada com ${campaignRecipients.length} destinatário(s).`,
         );
@@ -2205,6 +2248,147 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     });
   };
 
+  const openCampaignKanban = (campaign) => {
+    setDraggingKanbanCard(null);
+    setKanbanCampaign(campaign);
+  };
+
+  const moveKanbanCard = async (campaign, lead, nextStage) => {
+    if (!campaign || !lead || !CAMPAIGN_KANBAN_STAGES.some((stage) => stage.id === nextStage)) return;
+    if (resolveKanbanStage(lead) === nextStage) return;
+    const leadKey = String(lead.leadId || lead.phone || lead.jid || '');
+    if (!leadKey || !window.campaignAPI?.update) return;
+
+    const nextOrder = (campaign.leads || [])
+      .filter((item) => resolveKanbanStage(item) === nextStage)
+      .reduce((max, item) => Math.max(max, Number(item.kanbanOrder) || 0), -1) + 1;
+
+    try {
+      const res = await window.campaignAPI.update(campaign.id, {
+        leads: (campaign.leads || []).map((item) => {
+          const itemKey = String(item.leadId || item.phone || item.jid || '');
+          return itemKey === leadKey
+            ? { ...item, kanbanStage: nextStage, kanbanOrder: nextOrder }
+            : item;
+        }),
+      });
+      if (!res?.success || !res.campaign) {
+        throw new Error(res?.error || 'Não foi possível mover o card.');
+      }
+      setKanbanCampaign(res.campaign);
+      setCampaigns((current) => current.map((item) => item.id === res.campaign.id ? res.campaign : item));
+      addLog(`[KANBAN] ${lead.name || lead.phone || 'Lead'} movido para ${CAMPAIGN_KANBAN_STAGES.find((stage) => stage.id === nextStage)?.label}.`);
+    } catch (err) {
+      alert(`Erro ao mover card: ${err?.message || err}`);
+    } finally {
+      setDraggingKanbanCard(null);
+    }
+  };
+
+  const renderCampaignKanban = () => {
+    const campaign = kanbanCampaign;
+    if (!campaign) return null;
+    const presentation = campaignStatusPresentation(campaign);
+    const leads = [...(campaign.leads || [])]
+      .sort((a, b) => (Number(a.kanbanOrder) || 0) - (Number(b.kanbanOrder) || 0));
+
+    return (
+      <section className="campaign-kanban-layer" aria-label={`Kanban da campanha ${campaign.name}`}>
+        <header className="campaign-kanban-header">
+          <button type="button" className="btn btn-secondary btn-compact" onClick={() => setKanbanCampaign(null)}>
+            <ChevronLeft size={14} /> Campanhas
+          </button>
+          <div className="campaign-kanban-title">
+            <span className="camp-hub-kicker">Kanban</span>
+            <h2>{campaign.name}</h2>
+            <p>{leads.length} destinatários · arraste os cards ou use o seletor para mudar de etapa.</p>
+          </div>
+          <div className="campaign-kanban-head-actions">
+            <span className={`camp-status-badge ${presentation.statusClass}`}>{presentation.label}</span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-compact"
+              onClick={() => {
+                setKanbanCampaign(null);
+                handleMonitorCampaign(campaign.id);
+              }}
+            >
+              <Activity size={13} /> Relatório
+            </button>
+          </div>
+        </header>
+        <div className="campaign-kanban-columns">
+          {CAMPAIGN_KANBAN_STAGES.map((stage) => {
+            const cards = leads.filter((lead) => resolveKanbanStage(lead) === stage.id);
+            return (
+              <section
+                key={stage.id}
+                className={`campaign-kanban-column stage-${stage.id}`}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (draggingKanbanCard?.campaignId === campaign.id) {
+                    moveKanbanCard(campaign, draggingKanbanCard.lead, stage.id);
+                  }
+                }}
+              >
+                <div className="campaign-kanban-column-head">
+                  <div>
+                    <h3>{stage.label}</h3>
+                    <span>{stage.hint}</span>
+                  </div>
+                  <b>{cards.length}</b>
+                </div>
+                <div className="campaign-kanban-cards">
+                  {cards.length === 0 ? (
+                    <div className="campaign-kanban-empty">Arraste um card para cá</div>
+                  ) : cards.map((lead) => {
+                    const cardKey = String(lead.leadId || lead.phone || lead.jid);
+                    const delivery = {
+                      pending: 'Não enviado',
+                      sent: 'Enviado',
+                      delivered: 'Entregue',
+                      read: 'Lido',
+                      replied: 'Respondeu',
+                      failed: 'Falhou',
+                    }[lead.status] || 'Não enviado';
+                    return (
+                      <article
+                        key={cardKey}
+                        className="campaign-kanban-card"
+                        draggable
+                        onDragStart={() => setDraggingKanbanCard({ campaignId: campaign.id, lead })}
+                        onDragEnd={() => setDraggingKanbanCard(null)}
+                      >
+                        <strong>{lead.name || lead.company || lead.phone || 'Lead sem nome'}</strong>
+                        <span className="campaign-kanban-card-phone">{lead.phoneRaw || lead.phone || lead.jid || '—'}</span>
+                        <div className="campaign-kanban-card-meta">
+                          <span>{delivery}</span>
+                          {lead.category && <span>{lead.category}</span>}
+                        </div>
+                        <label className="campaign-kanban-move">
+                          <span className="sr-only">Mover {lead.name || 'card'} para</span>
+                          <select
+                            value={stage.id}
+                            onChange={(event) => moveKanbanCard(campaign, lead, event.target.value)}
+                          >
+                            {CAMPAIGN_KANBAN_STAGES.map((option) => (
+                              <option key={option.id} value={option.id}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      </section>
+    );
+  };
+
   const wizardSteps = [
     { id: 'basics', label: 'Números', desc: 'Nome e conexões' },
     { id: 'recipients', label: 'Destinatários', desc: 'Quem vai receber' },
@@ -2216,8 +2400,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const canWizardNext = () => {
     if (editingCampaignId) return true;
     if (campaignWizardStep === 0) {
-      // Nome opcional (vazio → nome automático na criação)
-      return campaignConnectionIds.length > 0;
+      // O WhatsApp é opcional nesta etapa: sem conexão, a campanha fica em rascunho.
+      return true;
     }
     if (campaignWizardStep === 1) return campaignRecipients.length > 0;
     if (campaignWizardStep === 2) return !!templateText.trim();
@@ -2230,8 +2414,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
   const goWizardNext = () => {
     if (!canWizardNext()) {
-      if (campaignWizardStep === 0) alert('Selecione ao menos um número WhatsApp conectado.');
-      else if (campaignWizardStep === 1) alert('Adicione ao menos um destinatário.');
+      if (campaignWizardStep === 1) alert('Adicione ao menos um destinatário.');
       else if (campaignWizardStep === 2) alert('Escreva a mensagem da campanha.');
       else if (campaignWizardStep === 3) alert('Confira o intervalo e o agendamento.');
       return;
@@ -3544,14 +3727,14 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             : c.status === 'running' && c.waitReason === 'no_provider'
                               ? 'Aguardando WhatsApp'
                               : {
-                                  ready: 'Pronta',
+                                  ready: 'Rascunho',
                                   running: 'Em andamento',
                                   scheduled: 'Agendada',
                                   paused: 'Pausada',
                                   completed: 'Concluída',
                                   cancelled: 'Cancelada',
                                   failed: 'Com falhas',
-                                }[c.status] || (c.status || 'Pronta');
+                                }[c.status] || (c.status || 'Rascunho');
                       return (
                         <div key={c.id} className={`camp-card status-${statusClass}`}>
                           <div className="camp-card-top">
@@ -3602,6 +3785,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                           </div>
 
                           <div className="camp-card-actions">
+                            <button type="button" className="btn btn-secondary" onClick={() => openCampaignKanban(c)}>
+                              <ListTodo size={12} /> Kanban
+                            </button>
                             <button type="button" className="btn btn-secondary" onClick={() => handleMonitorCampaign(c.id)}>
                               <Activity size={12} /> Relatório
                             </button>
@@ -3628,6 +3814,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                 )}
               </>
             )}
+
+            {renderCampaignKanban()}
 
             {/* Campaign Creator / Editor Modal — portal + no-drag (Electron) */}
             {isCreatingCampaign && createPortal(
@@ -3723,13 +3911,20 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         </div>
 
                         <div className="camp-field">
-                          <span>Números que vão disparar</span>
+                          <span>Números que vão disparar <em>(opcional agora)</em></span>
                           <p className="camp-hint">
-                            Selecione um ou mais WhatsApps conectados. Com vários números, os leads são divididos entre eles (round-robin).
+                            Selecione um ou mais WhatsApps conectados. Com vários números, os leads são divididos entre eles (round-robin). Sem conexão, a campanha é salva como rascunho.
                           </p>
                           {connectedSessions.length === 0 ? (
                             <div className="camp-alert">
-                              Nenhum número conectado. Vá em <strong>Conexão</strong> e escaneie o QR primeiro.
+                              Nenhum número conectado. Você pode criar o rascunho agora e conectar em <strong>Conexão</strong> antes de iniciar os disparos.
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-compact"
+                                onClick={() => { closeCampaignModal(); setWaTab('connect'); }}
+                              >
+                                Abrir conexão
+                              </button>
                             </div>
                           ) : (
                             <div className="camp-conn-grid">
@@ -3873,7 +4068,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                               {campaignConnectionIds.map((id) => {
                                 const c = connections.find((x) => x.id === id);
                                 return c?.phoneNumber || id;
-                              }).join(' · ') || '—'}
+                              }).join(' · ') || 'Rascunho — conecte antes de iniciar'}
                             </li>
                             <li><strong>Destinatários:</strong> {campaignRecipients.length}</li>
                             {campaignConnectionIds.length > 1 && (
@@ -3905,6 +4100,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             <p className="camp-hint">
                               Uma única campanha com <strong>{campaignConnectionIds.length} números</strong> —
                               leads divididos e relatório unificado (por número no monitor).
+                            </p>
+                          )}
+                          {campaignConnectionIds.length === 0 && (
+                            <p className="camp-hint">
+                              Esta campanha será salva como <strong>rascunho</strong>. O Kanban e a lista continuam disponíveis; os disparos só liberam quando um WhatsApp for conectado.
                             </p>
                           )}
                         </div>
@@ -3950,7 +4150,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             >
                               {creatingCampaignBusy
                                 ? 'Criando…'
-                                : campaignConnectionIds.length > 1
+                                : campaignConnectionIds.length === 0
+                                  ? 'Salvar rascunho'
+                                  : campaignConnectionIds.length > 1
                                   ? `Criar campanha com ${campaignConnectionIds.length} números`
                                   : 'Criar campanha'}
                             </button>

@@ -48,24 +48,39 @@ export default function UpdateBanner() {
   const handleCheck = async () => {
     setStatus({ type: 'checking' });
     try {
-      await window.electronAPI?.checkUpdate?.();
-    } catch {}
+      const res = await window.electronAPI?.checkUpdate?.();
+      if (!res?.success) {
+        setStatus({ type: 'error', message: res?.error || 'Não foi possível verificar a atualização.' });
+      }
+    } catch (err) {
+      setStatus({ type: 'error', message: err?.message || 'Não foi possível verificar a atualização.' });
+    }
   };
 
   const handleDownload = async () => {
     setDownloading(true);
     setProgress(0);
     try {
-      await window.electronAPI?.downloadUpdate?.();
-    } catch {
+      const res = await window.electronAPI?.downloadUpdate?.();
+      if (!res?.success) {
+        setStatus({ type: 'error', message: res?.error || 'Não foi possível baixar a atualização.' });
+        setDownloading(false);
+      }
+    } catch (err) {
+      setStatus({ type: 'error', message: err?.message || 'Não foi possível baixar a atualização.' });
       setDownloading(false);
     }
   };
 
   const handleInstall = async () => {
     try {
-      await window.electronAPI?.installUpdate?.();
-    } catch {}
+      const res = await window.electronAPI?.installUpdate?.();
+      if (!res?.success) {
+        setStatus({ type: 'error', message: res?.error || 'Não foi possível instalar a atualização.' });
+      }
+    } catch (err) {
+      setStatus({ type: 'error', message: err?.message || 'Não foi possível instalar a atualização.' });
+    }
   };
 
   if (dismissed) return null;
@@ -115,7 +130,9 @@ export default function UpdateBanner() {
     return (
       <div className="update-banner error">
         <AlertCircle size={14} />
-        <span>Falha ao verificar atualização</span>
+        <span title={status.message || ''}>
+          {status.message || 'Falha ao verificar atualização'}
+        </span>
         <button className="btn btn-ghost btn-sm" onClick={handleCheck}>Tentar de novo</button>
         <button className="btn btn-ghost btn-sm" onClick={() => setDismissed(true)}>×</button>
       </div>

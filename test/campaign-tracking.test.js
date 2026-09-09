@@ -114,4 +114,41 @@ describe('campaign tracking', () => {
     assert.equal(b, null);
     assert.equal(manager.get(camp.id).leads[0].openCount, 1);
   });
+
+  it('keeps an offline campaign as a draft and persists Kanban stages', () => {
+    const camp = manager.create({
+      name: 'Rascunho offline',
+      provider: 'baileys',
+      connectionId: null,
+      connectionIds: [],
+      template: { text: 'Oi {{name}}' },
+      leadIds: [
+        { leadId: 'l1', name: 'Ana', phone: '5511999990001' },
+        { leadId: 'l2', name: 'Bob', phone: '5511999990002', status: 'replied' },
+      ],
+    });
+
+    assert.equal(camp.connectionId, null);
+    assert.deepEqual(camp.connectionIds, []);
+    assert.equal(camp.status, 'ready');
+    assert.equal(camp.leads[0].kanbanStage, 'new');
+    assert.equal(camp.leads[1].kanbanStage, 'conversation');
+
+    manager.update(camp.id, {
+      leads: camp.leads.map((lead) => lead.leadId === 'l1'
+        ? { ...lead, kanbanStage: 'finished', kanbanOrder: 4 }
+        : lead),
+    });
+    const reloaded = new CampaignManager(tmpDir).get(camp.id);
+    assert.equal(reloaded.leads[0].kanbanStage, 'finished');
+    assert.equal(reloaded.leads[0].kanbanOrder, 4);
+
+    // A edição da lista não envia campos do Kanban: não pode desfazer a etapa.
+    manager.update(camp.id, {
+      leads: manager.get(camp.id).leads.map(({ kanbanStage, kanbanOrder, ...lead }) => lead),
+    });
+    const afterListEdit = manager.get(camp.id);
+    assert.equal(afterListEdit.leads[0].kanbanStage, 'finished');
+    assert.equal(afterListEdit.leads[0].kanbanOrder, 4);
+  });
 });

@@ -6,11 +6,26 @@ const {
   defaultLeadTrackingFields,
 } = require('./campaign-analytics');
 
+const KANBAN_STAGES = new Set(['new', 'conversation', 'finished']);
+
+function resolveKanbanStage(lead) {
+  if (KANBAN_STAGES.has(lead?.kanbanStage)) return lead.kanbanStage;
+  if (lead?.status === 'replied') return 'conversation';
+  if (lead?.status === 'failed') return 'finished';
+  return 'new';
+}
+
+function resolveKanbanOrder(lead, fallback) {
+  const order = Number(lead?.kanbanOrder);
+  return Number.isFinite(order) ? order : fallback;
+}
+
 class CampaignStore {
   constructor(userDataPath) {
     this.filePath = path.join(userDataPath, 'campaigns.json');
     this.campaigns = this._load();
     this._saveTimer = null;
+    if (this._migrateKanban()) this._writeAtomic();
   }
 
   _load() {
@@ -25,6 +40,23 @@ class CampaignStore {
       }
     }
     return {};
+  }
+
+  _migrateKanban() {
+    let changed = false;
+    for (const campaign of Object.values(this.campaigns)) {
+      if (!Array.isArray(campaign?.leads)) continue;
+      campaign.leads.forEach((lead, index) => {
+        const stage = resolveKanbanStage(lead);
+        const order = resolveKanbanOrder(lead, index);
+        if (lead.kanbanStage !== stage || lead.kanbanOrder !== order) {
+          lead.kanbanStage = stage;
+          lead.kanbanOrder = order;
+          changed = true;
+        }
+      });
+    }
+    return changed;
   }
 
   _writeAtomic() {
@@ -106,6 +138,8 @@ class CampaignStore {
           mensagem_whatsapp_ia: lid.mensagem_whatsapp_ia || '',
           ticket_estimado: lid.ticket_estimado || '',
           chance_resposta: lid.chance_resposta || '',
+          kanbanStage: resolveKanbanStage(lid),
+          kanbanOrder: resolveKanbanOrder(lid, idx),
           ...defaultLeadTrackingFields(),
         };
       }),
@@ -132,7 +166,28 @@ class CampaignStore {
     const next = { ...partial };
     if (Array.isArray(next.leads)) {
       const previous = new Map((campaign.leads || []).map((lead) => [String(lead.leadId || lead.phone || lead.jid), lead]));
-      next.leads = next.leads.map((lead) => ({ ...(previous.get(String(lead.leadId || lead.phone || lead.jid)) || {}), ...lead }));
+      next.leads = next.leads.map((lead, index) => {
+        const previousLead = previous.get(String(lead.leadId || lead.phone || lead.jid)) || {};
+        // A edição da lista não controla o Kanban. Quando ela chega sem esses
+        // campos (ou com null após a sanitização IPC), mantém a etapa já movida.
+        const incomingStage = KANBAN_STAGES.has(lead?.kanbanStage)
+          ? lead.kanbanStage
+          : previousLead.kanbanStage;
+        const incomingOrder = Number.isFinite(Number(lead?.kanbanOrder))
+          ? Number(lead.kanbanOrder)
+          : previousLead.kanbanOrder;
+        const merged = {
+          ...previousLead,
+          ...lead,
+          kanbanStage: incomingStage,
+          kanbanOrder: incomingOrder,
+        };
+        return {
+          ...merged,
+          kanbanStage: resolveKanbanStage(merged),
+          kanbanOrder: resolveKanbanOrder(merged, index),
+        };
+      });
     }
     Object.assign(campaign, next, { updatedAt: Date.now() });
     if (debounced) {
@@ -149,7 +204,12 @@ class CampaignStore {
     const key = String(leadId || '');
     const index = (campaign.leads || []).findIndex((lead) => String(lead.leadId || lead.phone || lead.jid) === key);
     if (index < 0) throw new Error(`Recipient ${leadId} not found`);
-    campaign.leads[index] = { ...campaign.leads[index], ...patch };
+    const merged = { ...campaign.leads[index], ...patch };
+    campaign.leads[index] = {
+      ...merged,
+      kanbanStage: resolveKanbanStage(merged),
+      kanbanOrder: resolveKanbanOrder(merged, index),
+    };
     campaign.updatedAt = Date.now();
     debounced ? this._saveDebounced() : this._save();
     return campaign;

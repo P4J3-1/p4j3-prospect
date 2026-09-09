@@ -24,10 +24,22 @@ const fixtureSearches = [
 const fixtureCampaigns = [
   {
     id: 'campaign-1', name: 'Odontologia · Zona Sul', status: 'running', createdAt: now - 7200000,
-    connectionId: 'sigma-main', stats: { total: 2, sent: 2, read: 1, replied: 1 },
+    connectionId: 'sigma-main', stats: { total: 3, sent: 3, read: 1, replied: 1 },
     leads: [
-      { id: 'lead-1', category: 'Dentista', status: 'replied', sentAt: now - 5000000, repliedAt: now - 4000000 },
-      { id: 'lead-2', category: 'Clínica odontológica', status: 'sent', sentAt: now - 3000000 },
+      {
+        leadId: 'lead-1', name: 'Odonto Lume', phone: '5521987650142', phoneRaw: '+55 21 98765-0142',
+        category: 'Dentista', status: 'replied', sentAt: now - 5000000, repliedAt: now - 4000000,
+        kanbanStage: 'conversation', kanbanOrder: 0,
+      },
+      {
+        leadId: 'lead-2', name: 'Clínica Sorriso', phone: '5521976548890', phoneRaw: '+55 21 97654-8890',
+        category: 'Clínica odontológica', status: 'sent', sentAt: now - 3000000,
+        kanbanStage: 'new', kanbanOrder: 1,
+      },
+      {
+        leadId: 'lead-3', name: 'Academia Pulso', phone: '5511955551000', phoneRaw: '+55 11 95555-1000',
+        category: 'Academia', status: 'failed', kanbanStage: 'finished', kanbanOrder: 2,
+      },
     ],
   },
 ];
@@ -39,13 +51,12 @@ const fixtureMessages = [
   { key: { id: 'msg-1', fromMe: true }, messageTimestamp: Math.floor(now / 1000) - 120, message: { conversation: 'Vi uma oportunidade simples no site de vocês. Posso mostrar?' } },
   { key: { id: 'msg-2', fromMe: false }, messageTimestamp: Math.floor(now / 1000) - 60, message: { conversation: 'Pode me explicar melhor?' } },
 ];
+const fixtureConnectionState = { connected: true };
 
 const mocks = {
   'update-status': { state: 'idle' },
   'metrics-get': {},
   'metrics-settings-get': { enabled: false },
-  'whatsapp-status': { status: 'connected', connectionId: 'sigma-main' },
-  'whatsapp-list-connections': { connections: [{ id: 'sigma-main', phoneNumber: '+55 21 90000-0001', status: 'connected', provider: 'baileys', active: true }] },
   'whatsapp-get-chats': { chats: fixtureChats },
   'whatsapp-get-archived-chats': { chats: [] },
   'whatsapp-get-contacts': { contacts: fixtureChats },
@@ -63,6 +74,27 @@ const mocks = {
 
 Object.entries(mocks).forEach(([channel, value]) => {
   ipcMain.handle(channel, () => value);
+});
+
+ipcMain.handle('whatsapp-status', () => ({
+  status: fixtureConnectionState.connected ? 'connected' : 'disconnected',
+  connectionId: 'sigma-main',
+}));
+ipcMain.handle('whatsapp-list-connections', () => ({
+  connections: [{
+    id: 'sigma-main',
+    phoneNumber: '+55 21 90000-0001',
+    status: fixtureConnectionState.connected ? 'connected' : 'disconnected',
+    provider: 'baileys',
+    active: true,
+  }],
+}));
+
+ipcMain.handle('campaign-update', (_event, { id, updates }) => {
+  const campaign = fixtureCampaigns.find((item) => item.id === id);
+  if (!campaign) return { success: false, error: 'Campanha não encontrada no fixture' };
+  if (Array.isArray(updates?.leads)) campaign.leads = updates.leads;
+  return { success: true, campaign };
 });
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -142,9 +174,60 @@ app.whenReady().then(async () => {
   await win.webContents.executeJavaScript(`([...document.querySelectorAll('.wa-open-design-actions button')].find((node) => (node.textContent || '').includes('Campanhas')))?.click()`);
   await pause(250);
   fs.writeFileSync(path.join(outputDir, 'whatsapp-campaigns-1440x900.png'), (await win.capturePage()).toPNG());
+  const kanbanOpened = await win.webContents.executeJavaScript(`(() => {
+    const button = [...document.querySelectorAll('.camp-card-actions button')]
+      .find((node) => (node.textContent || '').includes('Kanban'));
+    button?.click();
+    return !!button;
+  })()`);
+  if (!kanbanOpened) errors.push('Kanban: botão não encontrado');
+  await pause(250);
+  const kanbanDiagnostic = await win.webContents.executeJavaScript(`(() => ({
+    board: !!document.querySelector('.campaign-kanban-layer'),
+    columns: [...document.querySelectorAll('.campaign-kanban-column')].map((column) => ({
+      stage: [...column.classList].find((name) => name.startsWith('stage-')),
+      cards: column.querySelectorAll('.campaign-kanban-card').length,
+    })),
+  }))()`);
+  if (!kanbanDiagnostic.board || kanbanDiagnostic.columns.length !== 3) {
+    errors.push('Kanban: painel ou três etapas não renderizados');
+  }
+  fs.writeFileSync(path.join(outputDir, 'whatsapp-campaign-kanban-1440x900.png'), (await win.capturePage()).toPNG());
+  const moved = await win.webContents.executeJavaScript(`(() => {
+    const select = [...document.querySelectorAll('.campaign-kanban-card select')]
+      .find((node) => node.value === 'new');
+    if (!select) return false;
+    select.value = 'conversation';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+  if (!moved) errors.push('Kanban: seletor de movimento não encontrado');
+  await pause(250);
+  const movedCount = await win.webContents.executeJavaScript(`document.querySelectorAll('.campaign-kanban-column.stage-conversation .campaign-kanban-card').length`);
+  if (moved && movedCount !== 2) errors.push(`Kanban: movimento não persistiu (esperado 2, recebido ${movedCount})`);
+  await win.webContents.executeJavaScript(`document.querySelector('.campaign-kanban-header .btn-secondary')?.click()`);
+  await pause(150);
   await win.webContents.executeJavaScript(`document.querySelector('.sigma-campaign-dialog .btn-primary')?.click()`);
   await pause(350);
   fs.writeFileSync(path.join(outputDir, 'whatsapp-campaign-wizard-1440x900.png'), (await win.capturePage()).toPNG());
+  await win.webContents.executeJavaScript(`document.querySelector('.camp-wizard-close')?.click()`);
+  await win.webContents.executeJavaScript(`document.querySelector('.sigma-campaign-head-actions .wa-icon-button')?.click()`);
+  fixtureConnectionState.connected = false;
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.app-sidebar .nav-item')].find((node) => (node.textContent || '').toLowerCase().includes('base de leads')))?.click()`);
+  await pause(700);
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.app-sidebar .nav-item')].find((node) => (node.textContent || '').toLowerCase().includes('whatsapp')))?.click()`);
+  await pause(1200);
+  const offlineWizardOpened = await win.webContents.executeJavaScript(`(() => {
+    const button = [...document.querySelectorAll('.wa-open-design-actions button')]
+      .find((node) => (node.textContent || '').includes('Nova campanha'));
+    button?.click();
+    return !!button;
+  })()`);
+  if (!offlineWizardOpened) errors.push('Rascunho offline: botão Nova campanha não encontrado');
+  await pause(250);
+  const offlineDraftVisible = await win.webContents.executeJavaScript(`!!document.querySelector('.camp-alert')`);
+  if (!offlineDraftVisible) errors.push('Rascunho offline: aviso de conexão não renderizado');
+  fs.writeFileSync(path.join(outputDir, 'whatsapp-campaign-offline-draft-1440x900.png'), (await win.capturePage()).toPNG());
   await win.webContents.executeJavaScript(`document.querySelector('.camp-wizard-close')?.click()`);
   await win.webContents.executeJavaScript(`document.querySelector('.sigma-campaign-head-actions .wa-icon-button')?.click()`);
 

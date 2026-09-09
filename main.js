@@ -337,6 +337,12 @@ function sanitizeCampaignRecipient(raw) {
 
   const name = limitString(raw.name || raw.company || raw.notify || "", 120, "");
   const source = limitString(raw.source || "manual", 40, "manual");
+  const kanbanStage = ["new", "conversation", "finished"].includes(raw.kanbanStage)
+    ? raw.kanbanStage
+    : null;
+  const kanbanOrder = Number.isFinite(Number(raw.kanbanOrder))
+    ? Number(raw.kanbanOrder)
+    : null;
   const jidRaw = String(raw.jid || raw.phone || "").trim();
 
   // Grupo WhatsApp
@@ -368,6 +374,8 @@ function sanitizeCampaignRecipient(raw) {
       connectionId,
       company: limitString(raw.company || name, 120, ""),
       category: limitString(raw.category, 80, "grupo"),
+      kanbanStage,
+      kanbanOrder,
     };
   }
 
@@ -407,6 +415,8 @@ function sanitizeCampaignRecipient(raw) {
     totalReviews: raw.totalReviews || "",
     score: raw.score || "",
     prioridade: limitString(raw.prioridade, 40, ""),
+    kanbanStage,
+    kanbanOrder,
   };
 }
 
@@ -541,6 +551,12 @@ function sanitizeCampaignUpdates(updates) {
         lastOpenAt: item?.lastOpenAt || null,
         replyCount: Number(item?.replyCount) || 0,
         replyTimestamps: Array.isArray(item?.replyTimestamps) ? item.replyTimestamps : [],
+        kanbanStage: ["new", "conversation", "finished"].includes(item?.kanbanStage)
+          ? item.kanbanStage
+          : null,
+        kanbanOrder: Number.isFinite(Number(item?.kanbanOrder))
+          ? Number(item.kanbanOrder)
+          : null,
       });
     }
     if (!leads.length) throw new Error("Lista de destinatários ficou vazia");
@@ -1103,7 +1119,7 @@ function sendProgress(msg) {
 // ─── UPDATE IPC ────────────────────────────
 ipcMain.handle("update-check", async () => autoUpdaterMod.checkForUpdates());
 ipcMain.handle("update-download", async () => autoUpdaterMod.downloadUpdate());
-ipcMain.handle("update-install", async () => { autoUpdaterMod.quitAndInstall(); return { success: true }; });
+ipcMain.handle("update-install", async () => autoUpdaterMod.quitAndInstall());
 ipcMain.handle("update-status", async () => autoUpdaterMod.getStatus());
 
 // ─── METRICS / ANALYTICS IPC ─────────────
@@ -2739,11 +2755,21 @@ function sanitizeOutcome(outcome) {
 // ─── CAMPAIGN MANAGEMENT ───────────────────
 ipcMain.handle("campaign-create", async (_, data) => {
   try {
+    if (!campaignManager) throw new Error("Gerenciador de campanhas ainda não iniciou");
     const sanitized = sanitizeCampaignData(data);
-    // Se a UI não mandou connectionId, usa o ativo / primeiro conectado
+    const activeProvider = activeWhatsAppId
+      ? whatsappProviders.get(activeWhatsAppId)
+      : null;
+    const activeProviderReady = !!activeProvider && (
+      activeProvider?.getStatus?.() === "connected" || activeProvider?.isReady?.()
+    );
+
+    // Se a UI não mandou connectionId, usa o ativo / primeiro conectado.
+    // Não associe uma sessão desconectada: ela faria o rascunho parecer pronto
+    // para disparar e esconderia a instrução de conectar o WhatsApp.
     if (!sanitized.connectionId) {
       const connectedId =
-        (activeWhatsAppId && whatsappProviders.has(activeWhatsAppId) && activeWhatsAppId) ||
+        (activeProviderReady && activeWhatsAppId) ||
         [...whatsappProviders.entries()].find(
           ([, p]) => p?.getStatus?.() === "connected" || p?.isReady?.(),
         )?.[0] ||
@@ -2755,13 +2781,11 @@ ipcMain.handle("campaign-create", async (_, data) => {
         }
       }
     }
-    if (!sanitized.connectionId) {
-      throw new Error(
-        "Nenhum WhatsApp conectado para vincular à campanha. Conecte um número e tente de novo.",
-      );
-    }
-    // Se o id pedido não está no mapa, tenta o ativo
-    if (!whatsappProviders.has(sanitized.connectionId) && activeWhatsAppId) {
+    // Uma campanha pode nascer como rascunho. Isso permite organizar lista,
+    // mensagem e agenda mesmo quando o WhatsApp ainda está desconectado.
+    // O bloqueio correto acontece apenas ao iniciar os disparos.
+    // Se o id pedido não está no mapa, tenta somente o ativo que esteja pronto.
+    if (!whatsappProviders.has(sanitized.connectionId) && activeProviderReady && activeWhatsAppId) {
       console.warn(
         `[CAMPAIGN] connectionId ${sanitized.connectionId} não está no mapa; usando ${activeWhatsAppId}`,
       );
@@ -2770,11 +2794,11 @@ ipcMain.handle("campaign-create", async (_, data) => {
         sanitized.connectionIds = [activeWhatsAppId, ...(sanitized.connectionIds || [])];
       }
     }
-    if (!Array.isArray(sanitized.connectionIds) || !sanitized.connectionIds.length) {
+    if (sanitized.connectionId && (!Array.isArray(sanitized.connectionIds) || !sanitized.connectionIds.length)) {
       sanitized.connectionIds = [sanitized.connectionId];
     }
     const campaign = campaignManager.create(sanitized);
-    return { success: true, campaign };
+    return { success: true, campaign, savedAsDraft: !campaign.connectionId };
   } catch (err) {
     return { success: false, error: err.message };
   }

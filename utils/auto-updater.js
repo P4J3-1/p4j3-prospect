@@ -4,6 +4,19 @@ let autoUpdater = null;
 let sendToRenderer = null;
 let checkTimer = null;
 let isInit = false;
+let checkInFlight = null;
+
+function getUpdateAvailabilityError() {
+  if (!app.isPackaged) {
+    return "Atualizações funcionam na versão instalada, não na prévia de desenvolvimento.";
+  }
+  // `win-unpacked` é a saída de build para testes locais. Não existe instalador
+  // para substituir nesse caso, portanto tentar atualizar só gera um erro opaco.
+  if (/[\\/]win-unpacked[\\/]/i.test(process.execPath || "")) {
+    return "Você está usando a versão portátil de teste. Instale pelo arquivo Setup para receber atualizações automáticas.";
+  }
+  return null;
+}
 
 function init(sendFn) {
   if (isInit) return;
@@ -45,8 +58,9 @@ function init(sendFn) {
 
   isInit = true;
 
-  if (!app.isPackaged) {
-    console.log("[UPDATER] skip check — app não está empacotado (dev)");
+  const unavailableReason = getUpdateAvailabilityError();
+  if (unavailableReason) {
+    console.log("[UPDATER] skip check —", unavailableReason);
     return;
   }
 
@@ -63,18 +77,33 @@ function emit(status, data) {
 }
 
 async function checkForUpdates() {
-  if (!autoUpdater) return { success: false, error: "Updater não inicializado" };
-  if (!app.isPackaged) return { success: false, error: "Disponível apenas no app instalado" };
-  try {
-    const result = await autoUpdater.checkForUpdates();
-    return { success: true, updateInfo: result?.updateInfo || null };
-  } catch (e) {
-    return { success: false, error: e.message };
+  if (!autoUpdater) return { success: false, error: "Atualizador não inicializado" };
+  const unavailableReason = getUpdateAvailabilityError();
+  if (unavailableReason) {
+    return {
+      success: false,
+      error: unavailableReason,
+    };
   }
+  if (checkInFlight) return checkInFlight;
+  checkInFlight = autoUpdater.checkForUpdates()
+    .then((result) => ({ success: true, updateInfo: result?.updateInfo || null }))
+    .catch((e) => ({ success: false, error: e?.message || "Não foi possível verificar a atualização" }))
+    .finally(() => {
+      checkInFlight = null;
+    });
+  return checkInFlight;
 }
 
 async function downloadUpdate() {
-  if (!autoUpdater) return { success: false, error: "Updater não inicializado" };
+  if (!autoUpdater) return { success: false, error: "Atualizador não inicializado" };
+  const unavailableReason = getUpdateAvailabilityError();
+  if (unavailableReason) {
+    return {
+      success: false,
+      error: unavailableReason,
+    };
+  }
   try {
     await autoUpdater.downloadUpdate();
     return { success: true };
@@ -84,11 +113,15 @@ async function downloadUpdate() {
 }
 
 function quitAndInstall() {
-  if (!autoUpdater) return;
+  if (!autoUpdater) return { success: false, error: "Atualizador não inicializado" };
+  const unavailableReason = getUpdateAvailabilityError();
+  if (unavailableReason) return { success: false, error: unavailableReason };
   try {
     autoUpdater.quitAndInstall();
+    return { success: true };
   } catch (e) {
     console.error("[UPDATER] quitAndInstall:", e.message);
+    return { success: false, error: e?.message || "Não foi possível instalar a atualização" };
   }
 }
 
@@ -97,6 +130,7 @@ function getStatus() {
     isPackaged: app.isPackaged,
     version: app.getVersion(),
     hasUpdater: !!autoUpdater,
+    unavailableReason: getUpdateAvailabilityError(),
   };
 }
 

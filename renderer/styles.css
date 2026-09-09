@@ -7738,6 +7738,7 @@ body.route-whatsapp .app-screen-container { max-width: none; height: 100dvh; pad
   backdrop-filter: blur(4px);
 }
 .sigma-campaign-dialog {
+  position: relative;
   width: min(900px, calc(100vw - 40px));
   max-height: min(84vh, 780px);
   display: flex;
@@ -7775,6 +7776,84 @@ body.route-whatsapp .app-screen-container { max-width: none; height: 100dvh; pad
 .sigma-campaign-dialog .camp-card-title-row h4 { font-size: 14px; }
 .sigma-campaign-dialog .camp-empty { margin: 20px; border-radius: 12px; }
 .sigma-campaign-dialog .camp-empty-icon { background: var(--accent-soft); color: #0a7a5e; }
+.campaign-kanban-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  background: #f7f8f7;
+}
+.campaign-kanban-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255,255,255,.98);
+}
+.campaign-kanban-title { min-width: 0; }
+.campaign-kanban-title .camp-hub-kicker { margin-bottom: 2px; }
+.campaign-kanban-title h2 { margin: 0; font-size: 17px; letter-spacing: -.02em; }
+.campaign-kanban-title p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.campaign-kanban-head-actions { display: flex; align-items: center; gap: 7px; }
+.campaign-kanban-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(230px, 1fr));
+  min-height: 0;
+  flex: 1;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 14px;
+}
+.campaign-kanban-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-warm);
+}
+.campaign-kanban-column.stage-conversation { border-top: 3px solid #3b82f6; }
+.campaign-kanban-column.stage-finished { border-top: 3px solid #10a37f; }
+.campaign-kanban-column.stage-new { border-top: 3px solid var(--accent); }
+.campaign-kanban-column-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.campaign-kanban-column-head h3 { margin: 0; font-size: 13px; }
+.campaign-kanban-column-head span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.campaign-kanban-column-head b { display: grid; min-width: 22px; height: 22px; place-items: center; border-radius: 999px; background: var(--accent-soft); color: #087b5e; font-size: 11px; }
+.campaign-kanban-cards { min-height: 108px; padding: 8px; overflow-y: auto; }
+.campaign-kanban-empty { display: grid; min-height: 72px; place-items: center; border: 1px dashed var(--border); border-radius: 9px; color: var(--muted); font-size: 11px; text-align: center; }
+.campaign-kanban-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 2px 5px rgba(23,26,48,.05);
+  cursor: grab;
+}
+.campaign-kanban-card:last-child { margin-bottom: 0; }
+.campaign-kanban-card:active { cursor: grabbing; }
+.campaign-kanban-card strong { overflow: hidden; font-size: 12px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.campaign-kanban-card-phone { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.campaign-kanban-card-meta { display: flex; flex-wrap: wrap; gap: 4px; }
+.campaign-kanban-card-meta span { padding: 2px 6px; border-radius: 999px; background: var(--hover-bg); color: var(--muted); font-size: 10px; }
+.campaign-kanban-move select { width: 100%; padding: 5px 7px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--fg); font: inherit; font-size: 11px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.camp-alert .btn { margin-top: 8px; }
 .camp-wizard-steps { gap: 6px; padding: 12px 16px; background: #fff; }
 .camp-wizard-step { height: 5px; flex: 1; padding: 0; overflow: hidden; border: 0; border-radius: 999px; background: var(--track-bg); color: transparent; }
 .camp-wizard-step > * { visibility: hidden; }
@@ -7805,6 +7884,9 @@ body.route-whatsapp .app-screen-container { max-width: none; height: 100dvh; pad
   .chat-mobile-back { display: grid; flex-shrink: 0; }
   .sigma-campaign-overlay { padding: 12px; }
   .sigma-campaign-dialog { width: 100%; max-height: 92vh; }
+  .campaign-kanban-header { grid-template-columns: auto minmax(0, 1fr); padding: 12px; }
+  .campaign-kanban-head-actions { grid-column: 1 / -1; justify-content: space-between; }
+  .campaign-kanban-columns { grid-template-columns: repeat(3, minmax(230px, 78vw)); padding: 10px; }
 }
 
 
