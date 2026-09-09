@@ -25,11 +25,23 @@ function organizeStoredLeads() {
     if (organized.some((lead, index) => (
       lead?.category !== raw[index]?.category
       || lead?.address !== raw[index]?.address
+      || Boolean(lead?.needsMapAddressRepair) !== Boolean(raw[index]?.needsMapAddressRepair)
     ))) {
       localStorage.setItem('sigma_leads', JSON.stringify(organized));
     }
   } catch {}
   return organized;
+}
+
+function readStoredSigmaData() {
+  const snapshot = {};
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key && key.startsWith('sigma_')) snapshot[key] = localStorage.getItem(key);
+    }
+  } catch {}
+  return snapshot;
 }
 
 class ErrorBoundaryLite extends React.Component {
@@ -132,6 +144,36 @@ function AppInner() {
 
   const { addNotification } = useNotifications();
   const mapScraperRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const migrate = async () => {
+      if (typeof window.electronAPI?.migrateExistingData !== 'function') return;
+      try {
+        const report = await window.electronAPI.migrateExistingData(readStoredSigmaData());
+        if (cancelled || !report?.success) return;
+        const updates = report.localStorageUpdates || {};
+        Object.entries(updates).forEach(([key, value]) => {
+          try { localStorage.setItem(key, value); } catch {}
+        });
+        if (Object.keys(updates).length) {
+          window.dispatchEvent(new CustomEvent('sigma:leads-updated', { detail: { migrated: true } }));
+        }
+        if (report.changed) {
+          addNotification({
+            type: 'success',
+            category: 'system',
+            title: 'Base tratada',
+            message: 'Dados antigos foram normalizados e continuam disponíveis no mapa, scoring e Kanban.',
+          });
+        }
+      } catch (error) {
+        console.warn('[DATA-MIGRATION] renderer:', error?.message || error);
+      }
+    };
+    migrate();
+    return () => { cancelled = true; };
+  }, [addNotification]);
 
   // Persist hash + shortcuts ⌘1-5
   useEffect(()=>{ try{ history.replaceState(null,'','#'+activeTab); }catch{} }, [activeTab]);

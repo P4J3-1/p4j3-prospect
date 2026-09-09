@@ -71,6 +71,39 @@ async function throttle() {
   lastRequestAt = Date.now();
 }
 
+async function searchNominatim(query) {
+  const q = encodeURIComponent(query);
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${q}&addressdetails=1&countrycodes=br`;
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: {
+        "User-Agent": "SigmaGMaps/1.0 (sigma-gmaps-scraper)",
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  try {
+    const data = await res.json();
+    return Array.isArray(data) && data.length ? data[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+function fallbackQueries(address, hint) {
+  const queries = [];
+  const cep = extractCep(address);
+  if (cep) queries.push(`${cep}, ${hint || ""}, Brasil`.replace(/\s+/g, " ").trim());
+  const simplified = String(address || '').split(/\s+-\s+/)[0].trim();
+  if (simplified && simplified !== address) queries.push(`${simplified} ${hint || ""}`.replace(/\s+/g, " ").trim());
+  return [...new Set(queries.filter((query) => query.length >= 4))];
+}
+
 async function geocodeAddress(address, hint) {
   const cleanAddress = normalizeAddress(address);
   const query = `${cleanAddress} ${String(hint || "").trim()}`.trim();
@@ -85,58 +118,36 @@ async function geocodeAddress(address, hint) {
     }
   }
 
-  await throttle();
+  const queries = [query, ...fallbackQueries(cleanAddress, hint)];
+  for (const candidate of [...new Set(queries)]) {
+    await throttle();
+    const hit = await searchNominatim(candidate);
+    if (!hit) continue;
 
-  const q = encodeURIComponent(query);
-  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${q}&addressdetails=1&countrycodes=br`;
+    const lat = parseFloat(hit.lat);
+    const lng = parseFloat(hit.lon);
+    if (!isValidCoord(lat, lng)) continue;
 
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: {
-        "User-Agent": "SigmaGMaps/1.0 (sigma-gmaps-scraper)",
-        Accept: "application/json",
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-  } catch {
-    return null;
+    const type = hit.type || hit.class || "";
+    const importance = hit.importance || 0;
+    let confidence = "approximate";
+    if (type === "house" || type === "building" || importance > 0.7) confidence = "exact";
+    else if (importance > 0.4) confidence = "approximate";
+
+    const result = {
+      lat,
+      lng,
+      confidence,
+      source: "nominatim",
+      displayName: hit.display_name || "",
+      ts: Date.now(),
+    };
+
+    cache[key] = result;
+    saveCache();
+    return result;
   }
-
-  if (!res.ok) return null;
-
-  let data;
-  try {
-    data = await res.json();
-  } catch {
-    return null;
-  }
-
-  if (!Array.isArray(data) || !data.length) return null;
-
-  const hit = data[0];
-  const lat = parseFloat(hit.lat);
-  const lng = parseFloat(hit.lon);
-  if (!isValidCoord(lat, lng)) return null;
-
-  const type = hit.type || hit.class || "";
-  const importance = hit.importance || 0;
-  let confidence = "approximate";
-  if (type === "house" || type === "building" || importance > 0.7) confidence = "exact";
-  else if (importance > 0.4) confidence = "approximate";
-
-  const result = {
-    lat,
-    lng,
-    confidence,
-    source: "nominatim",
-    displayName: hit.display_name || "",
-    ts: Date.now(),
-  };
-
-  cache[key] = result;
-  saveCache();
-  return result;
+  return null;
 }
 
 function geocodeFromCache(address, hint) {

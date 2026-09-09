@@ -71,6 +71,7 @@ fixtureKanbanStore.syncLeads(
 fixtureKanbanStore.syncCampaigns(fixtureCampaigns);
 
 const mocks = {
+  'migrate-existing-data': { success: true, changed: false, localStorageUpdates: {} },
   'update-status': { state: 'idle' },
   'metrics-get': {},
   'metrics-settings-get': { enabled: false },

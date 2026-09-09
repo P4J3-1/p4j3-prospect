@@ -17,6 +17,12 @@ test('preserves valid accents and address punctuation', () => {
   assert.equal(normalizeAddress('#1 Avenida Brasil, 100'), '#1 Avenida Brasil, 100');
 });
 
+test('remove artefatos invisíveis também entre os trechos do endereço', () => {
+  const mark = String.fromCodePoint(0x202c);
+  const dirty = `${mark} n 12900 Ala${mark} Panama,${mark} - Av. das Americas`;
+  assert.equal(normalizeAddress(dirty), 'n 12900 Ala Panama, - Av. das Americas');
+});
+
 test('uses the same geocode cache key for dirty and clean addresses', () => {
   const clean = 'Rua São João, nº 10';
   assert.equal(

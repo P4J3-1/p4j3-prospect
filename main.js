@@ -46,6 +46,7 @@ const { saveProspectingCSV } = require("./lead-scoring/export-service");
 const { KanbanStore } = require("./kanban/kanban-store");
 const { normalizeAddress } = require("./utils/address-normalizer");
 const { geocodeAddress, isValidCoord } = require("./utils/geocode");
+const { migrateExistingData } = require("./utils/existing-data-migrator");
 
 const autoUpdaterMod = require("./utils/auto-updater");
 const { ensureInstallId } = require("./utils/install-id");
@@ -926,6 +927,15 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  try {
+    const migration = migrateExistingData(app.getPath("userData"));
+    if (migration.changed) {
+      console.log("[DATA-MIGRATION] Existing data normalized:", JSON.stringify(migration));
+    }
+  } catch (error) {
+    // A migration failure must never prevent the desktop shell from opening.
+    console.warn("[DATA-MIGRATION] skipped:", error.message);
+  }
   createWindow();
   if (mainWindow) {
     mainWindow.show();
@@ -958,7 +968,7 @@ app.whenReady().then(() => {
 
   // Auto-reconnect saved WhatsApp sessions after renderer loads
   mainWindow.webContents.on("did-finish-load", () => {
-    setTimeout(() => autoReconnectSessions(), 2000);
+    if (process.env.SIGMA_QA !== "1") setTimeout(() => autoReconnectSessions(), 2000);
   });
 });
 
@@ -1145,6 +1155,15 @@ function syncKanbanServiceSources() {
   return store.getBoard();
 }
 
+ipcMain.handle("migrate-existing-data", async (_, { localStorage } = {}) => {
+  try {
+    const report = migrateExistingData(app.getPath("userData"), { localStorage });
+    return { success: true, ...report };
+  } catch (error) {
+    return { success: false, changed: false, error: error.message, localStorageUpdates: {} };
+  }
+});
+
 // ─── KANBAN GERAL ───────────────────────────
 // O renderer só envia fontes de leads. Configuração, regras, histórico e
 // persistência ficam no processo principal para não depender do localStorage.
@@ -1330,9 +1349,9 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId }) => {
   }
 });
 
-// Corrige uma base local criada antes da sanitização do ícone do Maps. O lote
-// é limitado e o geocoder já possui cache/rate-limit para não disparar tráfego.
-// A lista completa é processada em sequência; cache e rate-limit evitam rajadas.
+// Corrige uma base local criada antes da sanitização do ícone do Maps. A lista
+// completa é processada em sequência; cache, fallback por CEP e rate-limit
+// evitam rajadas e mantêm um resultado útil mesmo em endereços incompletos.
 ipcMain.handle("repair-map-addresses", async (_, { leads } = {}) => {
   const candidates = Array.isArray(leads) ? leads : [];
   const repaired = [];

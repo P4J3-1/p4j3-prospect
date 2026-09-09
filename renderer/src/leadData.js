@@ -12,7 +12,7 @@ export function readLocalArray(key) {
 export function normalizeLeadAddress(value) {
   return String(value ?? '')
     .normalize('NFC')
-    .replace(/^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]+/u, '')
+    .replace(/[\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]/gu, ' ')
     .replace(/\s+/gu, ' ')
     .trim();
 }
@@ -20,6 +20,14 @@ export function normalizeLeadAddress(value) {
 export function hasLeadingLeadAddressNoise(value) {
   return /^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]+/u
     .test(String(value ?? '').normalize('NFC'));
+}
+
+function hasUsableLeadCoordinates(lead) {
+  const lat = Number(lead?.latitude ?? lead?.lat);
+  const lng = Number(lead?.longitude ?? lead?.lng);
+  return Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+    && !(lat === 0 && lng === 0);
 }
 
 function repairMojibake(value) {
@@ -71,7 +79,8 @@ export function normalizeLeadRecord(lead) {
   if (!lead || typeof lead !== 'object') return lead;
   const category = normalizeLeadCategory(lead.category);
   const address = normalizeLeadAddress(lead.address);
-  const needsMapAddressRepair = Boolean(lead.needsMapAddressRepair || address !== lead.address);
+  const needsMapAddressRepair = !hasUsableLeadCoordinates(lead)
+    && Boolean(lead.needsMapAddressRepair || address !== lead.address);
   return category === lead.category && address === lead.address && needsMapAddressRepair === Boolean(lead.needsMapAddressRepair)
     ? lead
     : { ...lead, category, address, needsMapAddressRepair };

@@ -1,13 +1,14 @@
 /**
- * Remove apenas artefatos de interface que aparecem antes do endereço
- * extraído do Google Maps. Não remove letras, acentos ou pontuação válidos.
+ * Remove artefatos invisíveis/de interface inseridos no endereço pelo Maps.
+ * Não remove letras, acentos ou pontuação válidos.
  */
 const LEADING_ADDRESS_NOISE = /^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]+/u;
+const ADDRESS_ARTIFACTS = /[\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]/gu;
 
 function normalizeAddress(value) {
   return String(value ?? '')
     .normalize('NFC')
-    .replace(LEADING_ADDRESS_NOISE, '')
+    .replace(ADDRESS_ARTIFACTS, ' ')
     .replace(/\s+/gu, ' ')
     .trim();
 }

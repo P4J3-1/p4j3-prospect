@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { normalizeAddress } = require('../utils/address-normalizer');
 
 const VERSION = 1;
 const MAX_COLUMNS = 12;
@@ -193,7 +194,7 @@ function profileFrom(raw = {}) {
     website: cleanText(company.website || company.site || raw.website || raw.site || '', 300),
     email: cleanText(company.email || company.mail || raw.email || raw.mail || '', 180),
     category: cleanText(company.category || company.cat || raw.category || raw.cat || '', 100),
-    address: cleanText(company.address || raw.address || '', 220),
+    address: cleanText(normalizeAddress(company.address || raw.address || ''), 220),
     city: cleanText(company.city || company.cidade || raw.city || raw.cidade || '', 100),
     state: cleanText(company.state || company.uf || raw.state || raw.uf || '', 8),
     score: toNumber(scoreSource),

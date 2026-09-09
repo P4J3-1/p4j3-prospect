@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("cancel-scrape", { queryId }),
   repairMapAddresses: (leads) =>
     ipcRenderer.invoke("repair-map-addresses", { leads }),
+  migrateExistingData: (localStorage) =>
+    ipcRenderer.invoke("migrate-existing-data", { localStorage }),
   exportLeads: (leads, format) =>
     ipcRenderer.invoke("export-leads", { leads, format }),
   deleteTempFiles: () => ipcRenderer.invoke("delete-temp-files"),

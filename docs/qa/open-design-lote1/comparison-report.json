@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-09T15:10:42.423Z",
+  "generatedAt": "2026-09-09T16:42:18.476Z",
   "desktopOnly": true,
   "reference": "sigma-gmaps-lote1-prototype.html",
   "expectedPairs": 23,
@@ -113,7 +113,7 @@
       "name": "detalhe-scoring-modal",
       "dimensions": "1920x1020",
       "sameDimensions": true,
-      "pixelSimilarityDiagnostic": 86.14
+      "pixelSimilarityDiagnostic": 86.15
     },
     {
       "type": "modal",
