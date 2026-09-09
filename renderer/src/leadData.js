@@ -25,9 +25,12 @@ export function hasLeadingLeadAddressNoise(value) {
 function hasUsableLeadCoordinates(lead) {
   const lat = Number(lead?.latitude ?? lead?.lat);
   const lng = Number(lead?.longitude ?? lead?.lng);
-  return Number.isFinite(lat) && Number.isFinite(lng)
+  if (Number.isFinite(lat) && Number.isFinite(lng)
     && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
-    && !(lat === 0 && lng === 0);
+    && !(lat === 0 && lng === 0)) return true;
+  let mapsUrl = String(lead?.googleMapsUrl || lead?.mapsUrl || lead?.google_maps_url || '');
+  try { mapsUrl = decodeURIComponent(mapsUrl); } catch {}
+  return /!3d-?\d+(?:\.\d+)?!4d-?\d+(?:\.\d+)?/.test(mapsUrl);
 }
 
 function repairMojibake(value) {
@@ -79,8 +82,7 @@ export function normalizeLeadRecord(lead) {
   if (!lead || typeof lead !== 'object') return lead;
   const category = normalizeLeadCategory(lead.category);
   const address = normalizeLeadAddress(lead.address);
-  const needsMapAddressRepair = !hasUsableLeadCoordinates(lead)
-    && Boolean(lead.needsMapAddressRepair || address !== lead.address);
+  const needsMapAddressRepair = !hasUsableLeadCoordinates(lead) && address.length >= 4;
   return category === lead.category && address === lead.address && needsMapAddressRepair === Boolean(lead.needsMapAddressRepair)
     ? lead
     : { ...lead, category, address, needsMapAddressRepair };
