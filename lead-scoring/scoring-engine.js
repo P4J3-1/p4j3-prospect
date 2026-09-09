@@ -154,6 +154,7 @@ function scoreConversionPotential(company, site) {
   if (!company.website) {
     return Number(company.reviewCount || 0) >= 50 ? 12 : 8;
   }
+  if (site.digitalPresence && site.digitalPresence.reachable !== true) return 0;
 
   // Tem site = dá para oferecer reforma/landing/sistema.
   score += 6;
@@ -179,25 +180,29 @@ function scoreConversionPotential(company, site) {
 
 function buildReasons(company, site, score, pains = []) {
   const reasons = [];
+  const siteReachable = !company.website || !site.digitalPresence || site.digitalPresence.reachable === true;
   if (!company.website) {
     reasons.push("Empresa sem site: boa chance de oferecer um site ou página simples (mas sites com falhas vêm antes na fila).");
   }
-  if (company.website && pains.length >= 2) {
+  if (company.website && !siteReachable) {
+    reasons.push("O site não respondeu à análise; a prioridade considera apenas os dados comerciais e de contato confirmados.");
+  }
+  if (company.website && siteReachable && pains.length >= 2) {
     reasons.push("Tem site com várias falhas — prioridade alta para oferecer correção ou redesign.");
   }
   if (company.reviewCount >= 50) reasons.push("Tem bastante avaliação no Google — já tem credibilidade para vender.");
-  if (!site.conversion?.hasWhatsappButton && company.website) reasons.push("No site não aparece WhatsApp de forma clara para o cliente chamar.");
-  if (!site.conversion?.hasForm && company.website) reasons.push("Não tem formulário visível para pedir orçamento.");
-  if (!hasMediaPixel(site) && company.website) reasons.push("Sem pixel de anúncio — difícil medir campanhas; ótimo argumento de venda.");
-  if (!site.tracking?.googleAnalytics && !site.tracking?.googleTagManager && company.website) {
+  if (!site.conversion?.hasWhatsappButton && company.website && siteReachable) reasons.push("No site não aparece WhatsApp de forma clara para o cliente chamar.");
+  if (!site.conversion?.hasForm && company.website && siteReachable) reasons.push("Não tem formulário visível para pedir orçamento.");
+  if (!hasMediaPixel(site) && company.website && siteReachable) reasons.push("Sem pixel de anúncio — difícil medir campanhas; ótimo argumento de venda.");
+  if (!site.tracking?.googleAnalytics && !site.tracking?.googleTagManager && company.website && siteReachable) {
     reasons.push("Parece que o site não mede visitas nem resultados.");
   }
-  if (site.mobile?.isResponsive === false && company.website) reasons.push("O site pode não funcionar bem no celular.");
-  if ((site.performance?.loadTimeMs || 0) > 3500 && company.website) {
+  if (site.mobile?.isResponsive === false && company.website && siteReachable) reasons.push("O site pode não funcionar bem no celular.");
+  if ((site.performance?.loadTimeMs || 0) > 3500 && company.website && siteReachable) {
     reasons.push("O site carrega devagar — muita gente desiste antes de ver o conteúdo.");
   }
-  if (!site.hasHttps && company.website) reasons.push("O site não está seguro (sem cadeado HTTPS) — isso gera desconfiança.");
-  if (score >= 75 && company.website) {
+  if (!site.hasHttps && company.website && siteReachable) reasons.push("O site não está seguro (sem cadeado HTTPS) — isso gera desconfiança.");
+  if (score >= 75 && company.website && siteReachable) {
     reasons.push("Prioridade alta: site com problemas claros e potencial comercial juntos.");
   }
   if (score < 40) reasons.push("Por enquanto vale menos a pena investir tempo neste lead.");
@@ -228,4 +233,4 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, Math.round(Number(value || 0))));
 }
 
-module.exports = { calculateScore, classify, DEFAULT_RULES, listSitePains, hasMediaPixel };
+module.exports = { calculateScore, classify, DEFAULT_RULES, listSitePains, hasMediaPixel, buildReasons };

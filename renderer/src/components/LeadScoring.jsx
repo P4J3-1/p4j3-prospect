@@ -766,6 +766,53 @@ function LeadScoring({ onUpdateScoringCount, addLog }) {
     }
   };
 
+  const runSelectedAnalysis = async () => {
+    if (!filters.groupId) {
+      handleAnalyzeVisible();
+      return;
+    }
+    if (!window.leadScoringAPI) return;
+
+    const group = groups.find((item) => String(item.id) === String(filters.groupId));
+    const scanInput = leads
+      .filter((lead) => lead?.company?.website || lead?.website)
+      .slice(0, 1000)
+      .map((lead) => ({
+        id: lead.id,
+        ...(lead.company || lead),
+        source: lead.source,
+        query: lead.query,
+        searchId: lead.searchId,
+        searchLabel: lead.searchLabel,
+      }));
+
+    if (scanInput.length === 0) {
+      alert('Este grupo não possui leads analisáveis com site. Escolha uma pesquisa para adicionar novos leads ao scoring.');
+      return;
+    }
+
+    const label = group?.name || 'grupo selecionado';
+    setIsScanning(true);
+    setScanProgress(0);
+    setScanMessage(`Reanalisando ${scanInput.length} sites de “${label}”…`);
+    addLog(`[SCORING] Reanálise do grupo “${label}”: ${scanInput.length} leads.`);
+    try {
+      const res = await window.leadScoringAPI.analyzeBatch(scanInput, {});
+      if (!res?.success) throw new Error(res?.error || res?.message || 'Erro desconhecido');
+      const ok = res.analyzedCount || 0;
+      const fail = res.failures || 0;
+      setScanMessage(`Pronto! ${ok} leads reanalisados${fail ? `, ${fail} com problema` : ''}.`);
+      addLog(`[SCORING] Grupo reanalisado: ${ok} ok, ${fail} falhas.`);
+      await fetchScoringLeads();
+      await fetchGroups();
+    } catch (error) {
+      addLog(`[SCORING] Erro ao reanalisar grupo: ${error.message}`);
+      alert(`Erro na reanálise: ${error.message}`);
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
   const handleClearAnalyses = async (mode = 'all') => {
     if (!window.leadScoringAPI?.clearAnalyses) return;
     if (mode === 'selected') {
@@ -1160,9 +1207,37 @@ function LeadScoring({ onUpdateScoringCount, addLog }) {
   const opportunities = cleanList(ai.principais_oportunidades);
   const reasons = cleanList(selectedLead?.score?.reasons);
   const objections = Array.isArray(ai.objecoes_provaveis) ? ai.objecoes_provaveis.filter((o) => o?.objecao) : [];
+  const analysisSourceValue = filters.groupId
+    ? `group:${filters.groupId}`
+    : filters.searchId
+      ? `search:${filters.searchId}`
+      : '';
+  const analysisSourceCount = filters.groupId
+    ? (groups.find((group) => String(group.id) === String(filters.groupId))?.count || leads.length)
+    : filters.searchId
+      ? getSearchStats(filters.searchId).total
+      : sourceLeads.length;
+  const configuredProvider = aiProviders.find((provider) => provider.value === getAi('provider', ''))?.label
+    || 'Análise local';
+  const configuredModel = getAi('model', '');
+
+  const handleAnalysisSourceChange = (event) => {
+    const [kind, ...idParts] = String(event.target.value || '').split(':');
+    const id = idParts.join(':');
+    if (kind === 'group') {
+      setFilters((prev) => ({ ...prev, groupId: id, searchId: '' }));
+      return;
+    }
+    if (kind === 'search') {
+      setFilters((prev) => ({ ...prev, searchId: id, groupId: '' }));
+      setAnalyzeSearchId(id);
+      return;
+    }
+    setFilters((prev) => ({ ...prev, searchId: '', groupId: '' }));
+  };
 
   return (
-    <div className="view-column">
+    <div className="view-column ls-open-design">
       <div className="page-header ls-page-header">
         <div className="info">
           <h1>Quem ligar primeiro</h1>
@@ -1204,16 +1279,56 @@ function LeadScoring({ onUpdateScoringCount, addLog }) {
           >
             <Trash2 size={14} /> {selectedIds.length ? 'Limpar sel.' : 'Zerar'}
           </button>
+        </div>
+      </div>
+
+      <div className="ls-open-design-steps" aria-label="Fluxo da análise">
+        <section className="ls-open-design-step">
+          <span className="ls-step-label">1 · Fonte</span>
+          <select aria-label="Selecionar fonte da fila" value={analysisSourceValue} onChange={handleAnalysisSourceChange}>
+            <option value="">Todos os leads</option>
+            {groups.length > 0 && (
+              <optgroup label="Grupos salvos">
+                {groups.map((group) => (
+                  <option key={group.id} value={`group:${group.id}`}>{group.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {searchOptions.length > 0 && (
+              <optgroup label="Pesquisas do Maps">
+                {searchOptions.map((search) => (
+                  <option key={search.id} value={`search:${search.id}`}>
+                    {search.label || search.query || search.id}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+          <span className="ls-step-meta">{analysisSourceCount} lead(s) nesta fila</span>
+        </section>
+
+        <section className="ls-open-design-step">
+          <span className="ls-step-label">2 · IA e análise</span>
+          <strong className="ls-step-value">{configuredProvider}</strong>
+          <span className="ls-step-meta">{configuredModel || (hasAiKey ? 'Modelo configurado' : 'Regras locais ativas')}</span>
+          <button type="button" className="btn btn-ghost btn-compact" onClick={() => setIsSettingsOpen(true)}>
+            Configurar
+          </button>
+        </section>
+
+        <section className="ls-open-design-step ls-open-design-action">
+          <span className="ls-step-label">3 · Ação</span>
           {!isScanning ? (
-            <button type="button" className="btn btn-primary" onClick={handleAnalyzeVisible} title="Analisar sites (headless, sem janela)">
-              <Play size={14} /> Analisar sites
+            <button type="button" className="btn btn-primary" onClick={runSelectedAnalysis} title="Analisar sites em segundo plano">
+              <Play size={14} /> {filters.groupId ? 'Reanalisar grupo' : 'Analisar pesquisa'}
             </button>
           ) : (
             <button type="button" className="btn btn-danger" disabled>
               Analisando… {scanProgress}%
             </button>
           )}
-        </div>
+          <span className="ls-step-meta">Fetch seguro, sem abrir janelas</span>
+        </section>
       </div>
 
       {isScanning && (

@@ -117,7 +117,13 @@ async function analyzeWebsite(lead, settings, userDataPath, onProgress = () => {
     return analysis;
   } catch (e) {
     if (e.code === "LEAD_SCORE_CANCELLED") throw e;
-    return { ...emptySiteAnalysis(e.message), finalUrl: url, analyzedAt: Date.now(), method: "fetch" };
+    return {
+      ...emptySiteAnalysis(e.message),
+      digitalPresence: { ...digitalPresence, finalUrl: url, reachable: false },
+      finalUrl: url,
+      analyzedAt: Date.now(),
+      method: "fetch",
+    };
   }
 }
 
@@ -440,6 +446,7 @@ function emptySiteAnalysis(error) {
     domain: "",
     hasHttps: false,
     hasOwnDomain: false,
+    digitalPresence: { kind: "unknown", reachable: false },
     cms: "",
     technologies: [],
     frameworks: [],
@@ -465,4 +472,4 @@ function checkCancelled(cancelToken) {
   }
 }
 
-module.exports = { analyzeWebsite, normalizeUrl, parseHtmlDocument, fetchHtmlPage };
+module.exports = { analyzeWebsite, normalizeUrl, parseHtmlDocument, fetchHtmlPage, emptySiteAnalysis };

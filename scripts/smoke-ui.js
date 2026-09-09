@@ -58,7 +58,7 @@ app.whenReady().then(async () => {
       const out = { clicks: [], text: '', error: null };
       try {
         // clica no item do menu que contenha "ligar" ou "scoring"
-        const items = [...document.querySelectorAll('#sideNav .ni, .ni, [class*="ni"]')];
+        const items = [...document.querySelectorAll('.app-sidebar .nav-item, #sideNav .ni, .ni')];
         out.navCount = items.length;
         const scoring = items.find((el) => /ligar|scoring|score/i.test(el.textContent || ''));
         if (scoring) {

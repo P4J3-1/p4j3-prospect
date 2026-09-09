@@ -253,3 +253,69 @@ test("batch AI falls back locally when no provider key exists", async () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].rawProvider, "fallback");
 });
+
+test("unreachable website does not fabricate digital defects", () => {
+  const { emptySiteAnalysis } = require("../lead-scoring/site-crawler");
+  const lead = {
+    company: {
+      name: "Clinica Indisponivel",
+      category: "Clinica odontologica",
+      website: "https://timeout.example",
+      phone: "5521999999999",
+      rating: 4.8,
+      reviewCount: 120,
+    },
+  };
+  const result = calculateScore(lead, emptySiteAnalysis("Timeout"));
+  assert.equal(result.components.digitalPain, 0);
+  assert.equal(result.components.conversionPotential, 0);
+  assert.deepEqual(result.sitePains, []);
+  assert.ok(result.reasons.some((reason) => /não respondeu/i.test(reason)));
+  assert.ok(result.reasons.every((reason) => !/sem pixel|sem cadeado|celular|formulário visível/i.test(reason)));
+});
+
+test("OpenCode settings survive store round-trip", () => {
+  const os = require("os");
+  const path = require("path");
+  const fs = require("fs");
+  const { ProspectingStore } = require("../lead-scoring/prospecting-store");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sigma-ls-opencode-"));
+  const store = new ProspectingStore(dir);
+  const updated = store.updateSettings({
+    ai: {
+      provider: "opencode",
+      model: "deepseek-v4-flash-free",
+      baseUrl: "https://opencode.ai/zen/v1",
+    },
+  });
+  assert.equal(updated.ai.provider, "opencode");
+  assert.equal(updated.ai.baseUrl, "https://opencode.ai/zen/v1");
+  const reloaded = new ProspectingStore(dir).getSettings();
+  assert.equal(reloaded.ai.provider, "opencode");
+  assert.equal(reloaded.ai.model, "deepseek-v4-flash-free");
+  assert.equal(reloaded.ai.baseUrl, "https://opencode.ai/zen/v1");
+});
+
+test("AI score is blended exactly once and reasons follow final score", () => {
+  const os = require("os");
+  const path = require("path");
+  const fs = require("fs");
+  const { LeadScoringService } = require("../lead-scoring");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sigma-ls-blend-"));
+  const service = new LeadScoringService(dir);
+  const normalized = {
+    id: "lead_blend",
+    company: { name: "Lead Blend", category: "Serviços", website: "" },
+  };
+  const saved = service._saveAnalyzedLead(
+    normalized,
+    {},
+    { value: 20 },
+    { score: 100 },
+    service.store.getSettings(),
+  );
+  assert.equal(saved.score.value, 44);
+  assert.equal(saved.score.components.baseScore, 20);
+  assert.equal(saved.score.components.aiScore, 100);
+  assert.ok(saved.score.reasons.every((reason) => !/vale menos a pena/i.test(reason)));
+});

@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer, webFrame } = require("electron");
 
-webFrame.setZoomFactor(0.7);
+// O layout do Open Design usa escala CSS 1:1; zoom global menor distorcia tipografia,
+// alvos de clique e proporções do protótipo.
+webFrame.setZoomFactor(1);
 
 contextBridge.exposeInMainWorld("electronAPI", {
   startScrape: (query, maxResults, queryId) =>

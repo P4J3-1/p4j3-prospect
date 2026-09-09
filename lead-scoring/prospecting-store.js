@@ -564,14 +564,6 @@ function mergeSettings(base, patch) {
     commercial: { ...base.commercial, ...(patch.commercial || {}) },
     rules,
   };
-  if (String(out.ai?.provider || "").toLowerCase() === "opencode") {
-    out.ai = {
-      ...out.ai,
-      provider: "custom",
-      baseUrl: "",
-      model: out.ai.model || "gpt-4.1-mini",
-    };
-  }
   return out;
 }
 

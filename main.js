@@ -873,7 +873,7 @@ function createWindow() {
     (webContents, permission, callback) => {
       const allowed =
         webContents === mainWindow.webContents &&
-        ["media", "microphone", "audioCapture", "notifications"].includes(permission);
+        ["media", "microphone", "audioCapture", "notifications", "geolocation"].includes(permission);
       callback(allowed);
     },
   );
@@ -881,7 +881,7 @@ function createWindow() {
   mainWindow.webContents.session.setPermissionCheckHandler(
     (webContents, permission) => {
       if (webContents !== mainWindow.webContents) return false;
-      return ["media", "microphone", "audioCapture", "notifications", "clipboard-read"].includes(
+      return ["media", "microphone", "audioCapture", "notifications", "clipboard-read", "geolocation"].includes(
         permission,
       );
     },

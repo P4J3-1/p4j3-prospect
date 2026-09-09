@@ -145,7 +145,7 @@ function CampaignNameInput({
 }
 
 function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
-  const [waTab, setWaTab] = useState('connect');
+  const [waTab, setWaTab] = useState('chats');
   const [connections, setConnections] = useState([]);
   const [activeConnectionId, setActiveConnectionId] = useState(null);
   const [qrCodeUrl, setQrCodeUrl] = useState(null);
@@ -3266,35 +3266,54 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', height: '100%' }}>
-      {/* Subtab Nav — reusa .wa-tabs/.wa-tab do styles.css */}
-      <div className="wa-tabs" style={{ flexShrink: 0 }}>
-        <button className={`wa-tab ${waTab === 'connect' ? 'act' : ''}`} onClick={() => setWaTab('connect')}>
-          <Plug size={14} /> Conexão
-        </button>
-        <button
-          className={`wa-tab ${waTab === 'campaigns' ? 'act' : ''}`}
-          onClick={() => {
-            setWaTab('campaigns');
-          }}
-        >
-          <ListTodo size={14} /> Campanhas
-        </button>
-        {monitoringCampaignId && (
-          <button className={`wa-tab ${waTab === 'monitor' ? 'act' : ''}`} onClick={() => setWaTab('monitor')}>
-            <Activity size={14} /> Monitoramento ({monitoringCampaign?.name})
+    <div className="wa-open-design">
+      <header className="wa-open-design-top">
+        <nav className="wa-open-design-tabs" role="tablist" aria-label="WhatsApp">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={waTab === 'chats'}
+            className={waTab === 'chats' ? 'active' : ''}
+            onClick={() => setWaTab('chats')}
+          >
+            <MessageSquare size={14} /> Conversas
           </button>
-        )}
-        <button className={`wa-tab ${waTab === 'chats' ? 'act' : ''}`} onClick={() => setWaTab('chats')}>
-          <MessageSquare size={14} /> Conversas
-        </button>
-        <button className={`wa-tab ${waTab === 'settings' ? 'act' : ''}`} onClick={() => setWaTab('settings')}>
-          <Settings size={14} /> Configurações
-        </button>
-      </div>
+        </nav>
+        <div className="wa-open-design-actions">
+          <label className="wa-account-select" title="Alternar número conectado">
+            <span className={`wa-presence-dot ${waStatus === 'connected' ? 'on' : 'off'}`} aria-hidden="true" />
+            <select
+              aria-label="Número ativo"
+              value={activeConnectionId || ''}
+              onChange={(event) => event.target.value && handleSwitchConnection(event.target.value)}
+            >
+              {connections.length === 0 && <option value="">Nenhum número</option>}
+              {connections.map((connection) => (
+                <option key={connection.id} value={connection.id}>
+                  {connection.phoneNumber || connection.id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="button" className="wa-session-button" onClick={() => setWaTab('connect')}>
+            <Plug size={13} /> Sessão
+          </button>
+          <button type="button" className="wa-icon-button" aria-label="Configurações do WhatsApp" onClick={() => setWaTab('settings')}>
+            <Settings size={15} />
+          </button>
+          <span className="wa-sigma-separator" aria-hidden="true" />
+          <span className="wa-sigma-label">Sigma</span>
+          <button type="button" className="btn btn-ghost btn-compact" onClick={() => setWaTab('campaigns')}>
+            Campanhas {campaigns.length > 0 && <b>{campaigns.length}</b>}
+          </button>
+          <button type="button" className="btn btn-primary btn-compact" onClick={openCreateCampaign}>
+            <PlusCircle size={14} /> Nova campanha
+          </button>
+        </div>
+      </header>
 
       {/* Main Panel Content */}
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div className="wa-open-design-body">
         
         {/* CONNECTION TAB */}
         {waTab === 'connect' && (
@@ -3411,14 +3430,23 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
         {/* CAMPAIGNS TAB */}
         {waTab === 'campaigns' && (
-          <div className="camp-hub" style={{ padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div className="sigma-campaign-overlay" role="presentation" onClick={() => setWaTab('chats')}>
+          <section className="sigma-campaign-dialog" role="dialog" aria-modal="true" aria-labelledby="sigma-campaign-title" onClick={(event) => event.stopPropagation()}>
+          <div className="camp-hub">
             <div className="camp-hub-hero camp-hub-hero-compact">
               <div>
-                <h2 style={{ margin: 0 }}>Campanhas</h2>
+                <span className="camp-hub-kicker">Sigma</span>
+                <h2 id="sigma-campaign-title" style={{ margin: 0 }}>Campanhas</h2>
+                <p>Organize envios, acompanhe respostas e abra o relatório de cada campanha.</p>
               </div>
-              <button className="btn btn-primary" onClick={openCreateCampaign} style={{ gap: 8 }}>
-                <PlusCircle size={16} /> Nova
-              </button>
+              <div className="sigma-campaign-head-actions">
+                <button className="btn btn-primary" onClick={openCreateCampaign}>
+                  <PlusCircle size={16} /> Nova campanha
+                </button>
+                <button type="button" className="wa-icon-button" aria-label="Fechar campanhas" onClick={() => setWaTab('chats')}>
+                  <X size={17} />
+                </button>
+              </div>
             </div>
 
             {(() => {
@@ -3923,7 +3951,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                               {creatingCampaignBusy
                                 ? 'Criando…'
                                 : campaignConnectionIds.length > 1
-                                  ? `Criar ${campaignConnectionIds.length} campanhas`
+                                  ? `Criar campanha com ${campaignConnectionIds.length} números`
                                   : 'Criar campanha'}
                             </button>
                           )}
@@ -3935,6 +3963,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
               </div>,
               document.body,
             )}
+          </div>
+          </section>
           </div>
         )}
 
@@ -3949,7 +3979,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
         {/* CHATS TAB */}
         {waTab === 'chats' && (
-          <div className="chat-shell">
+          <div className={`chat-shell ${activeChatJid ? 'has-active-chat' : ''}`} role="tabpanel" aria-label="Conversas">
             {/* Left Chats List */}
             <aside className="chat-list">
               <div className="chat-list-header">
@@ -3964,9 +3994,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                 </div>
                 <div className="chat-filter-tabs">
                   {[
-                    { id: 'all', label: 'Tudo', count: chatCounts.all },
+                    { id: 'all', label: 'Todas', count: chatCounts.all },
                     { id: 'unread', label: 'Não lidas', count: chatCounts.unread },
-                    { id: 'groups', label: 'Grupos', count: chatCounts.groups },
                     { id: 'archived', label: 'Arquivadas', count: chatCounts.archived },
                   ].map((tab) => (
                     <button
@@ -3981,11 +4010,10 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   ))}
                 </div>
               </div>
-              <div className="chat-threads">
+              <div className="chat-threads" role="listbox" aria-label="Lista de conversas">
                 {filteredChats.length === 0 ? (
                   <div className="chat-empty-list">
                     {chatFilter === 'unread' && 'Nenhuma conversa não lida.'}
-                    {chatFilter === 'groups' && 'Nenhum grupo sincronizado.'}
                     {chatFilter === 'archived' && 'Nenhuma conversa arquivada.'}
                     {chatFilter === 'all' && 'Nenhuma conversa sincronizada.'}
                   </div>
@@ -3994,7 +4022,10 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                     const unread = getUnread(c);
                     const name = c.name || c.phone || c.jid.split('@')[0];
                     return (
-                      <div
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={activeChatJid === c.jid}
                         key={c.jid}
                         className={`chat-thread ${activeChatJid === c.jid ? 'active' : ''}${unread > 0 ? ' unread' : ''}`}
                         onClick={() => handleSelectChat(c)}
@@ -4032,7 +4063,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             </div>
                           )}
                         </div>
-                      </div>
+                      </button>
                     );
                   })
                 )}
@@ -4044,6 +4075,14 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
               {activeChatJid ? (
                 <>
                   <div className="chat-room-header">
+                    <button
+                      type="button"
+                      className="chat-mobile-back"
+                      aria-label="Voltar à lista de conversas"
+                      onClick={() => setActiveChatJid(null)}
+                    >
+                      <ChevronLeft size={18} />
+                    </button>
                     <button
                       type="button"
                       className="chat-room-header-left chat-room-profile-btn"

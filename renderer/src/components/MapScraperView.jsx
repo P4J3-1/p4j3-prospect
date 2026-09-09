@@ -5,7 +5,6 @@ import {
   Phone,
   Globe,
   Instagram,
-  Layers,
   Filter,
   Download,
   UploadCloud,
@@ -29,188 +28,137 @@ import {
 } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { dedupeLeads, readLocalArray } from '../leadData';
+import {
+  dedupeLeads,
+  getExtractionSearches,
+  normalizeLeadCollection,
+  readLocalArray,
+} from '../leadData';
 import { useNotifications } from './NotificationCenter';
 
-// Dicionário extensivo de coordenadas de cidades e bairros brasileiros
-const MAP_LAYERS = {
-  streets: {
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '© OpenStreetMap contributors',
-    subdomains: 'abc',
-    maxZoom: 19,
-  },
-  humanitarian: {
-    url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
-    attribution: '© OpenStreetMap contributors, HOT',
-    subdomains: 'abc',
-    maxZoom: 19,
-  },
-  topo: {
-    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    attribution: '© OpenStreetMap © OpenTopoMap',
-    subdomains: 'abc',
-    maxZoom: 17,
-  },
-  satellite: {
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: '© Esri, Maxar, Earthstar Geographics',
-    maxZoom: 18,
-  },
+const STREET_MAP_LAYER = {
+  url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  attribution: '© OpenStreetMap contributors',
+  subdomains: 'abc',
+  maxZoom: 19,
 };
 
-const LAYER_LABELS = {
-  streets: 'Ruas',
-  humanitarian: 'Humanitário',
-  topo: 'Relevo',
-  satellite: 'Satélite',
-};
+const DEFAULT_MAP_CENTER = [-14.235, -51.9253];
+const DEFAULT_MAP_ZOOM = 4;
 
-const LAYER_FALLBACK = {
-  streets: 'humanitarian',
-  humanitarian: 'streets',
-  topo: 'streets',
-  satellite: 'streets',
-};
+function toCoordinateNumber(value) {
+  if (value == null || String(value).trim() === '') return Number.NaN;
+  return Number(value);
+}
 
-function getStoredMapLayer() {
+function isValidCoordinatePair(lat, lng) {
+  return Number.isFinite(lat)
+    && Number.isFinite(lng)
+    && lat >= -90
+    && lat <= 90
+    && lng >= -180
+    && lng <= 180
+    && !(lat === 0 && lng === 0);
+}
+
+function parseCanonicalGoogleCoordinates(url = '') {
+  let decoded = String(url);
+  try { decoded = decodeURIComponent(decoded); } catch {}
+  const match = decoded.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  const lat = Number(match[1]);
+  const lng = Number(match[2]);
+  return isValidCoordinatePair(lat, lng) ? { lat, lng } : null;
+}
+
+// Um pin só é desenhado quando a origem permite tratá-lo como um ponto real.
+// Coordenadas de viewport, cidade/bairro ou sem proveniência ficam fora do mapa.
+function getExactLeadLocation(lead = {}) {
+  const canonicalCoords = parseCanonicalGoogleCoordinates(
+    lead.googleMapsUrl || lead.mapsUrl || lead.google_maps_url || ''
+  );
+  if (canonicalCoords) {
+    return { ...canonicalCoords, source: 'Google Maps' };
+  }
+
+  const lat = toCoordinateNumber(lead.latitude ?? lead.lat);
+  const lng = toCoordinateNumber(lead.longitude ?? lead.lng);
+  if (!isValidCoordinatePair(lat, lng)) return null;
+
+  const source = String(lead.coordSource || '').toLowerCase();
+  if (source === 'poi' || source === 'meta') {
+    return { lat, lng, source: 'Google Maps' };
+  }
+  if (source === 'nominatim' && String(lead.geocodeConfidence || '').toLowerCase() === 'exact') {
+    return { lat, lng, source: 'endereço exato' };
+  }
+  return null;
+}
+
+function readStoredUserLocation() {
   try {
-    const saved = localStorage.getItem('sigma_map_layer');
-    if (saved && MAP_LAYERS[saved]) return saved;
-  } catch {}
-  return 'streets';
-}
-
-const GEO_DICT = {
-  // Rio de Janeiro e Bairros
-  'paciência': [-22.8988, -43.6429],
-  'paciencia': [-22.8988, -43.6429],
-  'campo grande': [-22.9035, -43.5594],
-  'santa cruz': [-22.9200, -43.6850],
-  'bangu': [-22.8756, -43.4667],
-  'realengo': [-22.8789, -43.4319],
-  'madureira': [-22.8722, -43.3378],
-  'tijuca': [-22.9248, -43.2328],
-  'barra da tijuca': [-23.0003, -43.3659],
-  'barra': [-23.0003, -43.3659],
-  'recreio': [-23.0278, -43.4639],
-  'jacarepaguá': [-22.9358, -43.3428],
-  'jacarepagua': [-22.9358, -43.3428],
-  'freguesia': [-22.9328, -43.3411],
-  'taquara': [-22.9198, -43.3688],
-  'vila valqueire': [-22.8894, -43.3667],
-  'méier': [-22.8997, -43.2797],
-  'meier': [-22.8997, -43.2797],
-  'centro': [-22.9068, -43.1829],
-  'lapa': [-22.9133, -43.1800],
-  'copacabana': [-22.9698, -43.1868],
-  'ipanema': [-22.9840, -43.2045],
-  'leblon': [-22.9844, -43.2239],
-  'botafogo': [-22.9510, -43.1810],
-  'flamengo': [-22.9310, -43.1780],
-  'rio de janeiro': [-22.9068, -43.1729],
-  'niterói': [-22.8833, -43.1039],
-  'niteroi': [-22.8833, -43.1039],
-  'duque de caxias': [-22.7856, -43.3117],
-  'nova iguaçu': [-22.7556, -43.4603],
-  'nova iguacu': [-22.7556, -43.4603],
-  'são gonçalo': [-22.8269, -43.0539],
-  'sao goncalo': [-22.8269, -43.0539],
-
-  // São Paulo e Bairros
-  'são paulo': [-23.5505, -46.6333],
-  'sao paulo': [-23.5505, -46.6333],
-  'pinheiros': [-23.5617, -46.6928],
-  'vila madalena': [-23.5547, -46.6908],
-  'moema': [-23.6015, -46.6617],
-  'vila mariana': [-23.5896, -46.6346],
-  'itaim bibi': [-23.5843, -46.6789],
-  'jardins': [-23.5658, -46.6678],
-  'bela vista': [-23.5620, -46.6470],
-  'paulista': [-23.5615, -46.6559],
-  'santana': [-23.5042, -46.6269],
-  'tatuapé': [-23.5404, -46.5768],
-  'tatuape': [-23.5404, -46.5768],
-  'mooca': [-23.5540, -46.6020],
-  'morumbi': [-23.6022, -46.7214],
-  'santo amaro': [-23.6536, -46.7083],
-  'campinas': [-22.9099, -47.0626],
-  'santos': [-23.9608, -46.3331],
-  'guarulhos': [-23.4542, -46.5333],
-
-  // Outras Capitais
-  'curitiba': [-25.4284, -49.2733],
-  'belo horizonte': [-19.9167, -43.9345],
-  'brasília': [-15.7975, -47.8919],
-  'brasilia': [-15.7975, -47.8919],
-  'salvador': [-12.9777, -38.5016],
-  'fortaleza': [-3.7319, -38.5267],
-  'recife': [-8.0476, -34.8770],
-  'porto alegre': [-30.0346, -51.2177],
-  'florianópolis': [-27.5954, -48.5480],
-  'florianopolis': [-27.5954, -48.5480],
-  'goiânia': [-16.6869, -49.2648],
-  'goiania': [-16.6869, -49.2648],
-  'manaus': [-3.1190, -60.0217],
-  'belém': [-1.4558, -48.5039],
-  'belem': [-1.4558, -48.5039],
-  'vitória': [-20.3155, -40.3128],
-  'vitoria': [-20.3155, -40.3128],
-  'san francisco': [37.7749, -122.4194]
-};
-
-// Resolução inteligente de coordenadas com base em texto e CEP
-function resolveLeadLocation(address = '', query = '') {
-  const combined = (address + ' ' + query).toLowerCase();
-
-  // 1. Busca por CEPs conhecidos da Zona Oeste RJ
-  if (/235\d{2}-\d{3}/.test(combined)) {
-    return [-22.8988, -43.6429]; // Paciência / Zona Oeste RJ
-  }
-  if (/230\d{2}-\d{3}/.test(combined)) {
-    return [-22.9035, -43.5594]; // Campo Grande RJ
-  }
-
-  // 2. Busca por termos no dicionário
-  for (const [key, coords] of Object.entries(GEO_DICT)) {
-    if (combined.includes(key)) {
-      return coords;
+    const saved = JSON.parse(localStorage.getItem('sigma_ref') || 'null');
+    const lat = toCoordinateNumber(saved?.lat);
+    const lng = toCoordinateNumber(saved?.lng);
+    if (isValidCoordinatePair(lat, lng)) {
+      return {
+        lat,
+        lng,
+        accuracy: Number.isFinite(Number(saved.accuracy)) ? Number(saved.accuracy) : null,
+        timestamp: Number.isFinite(Number(saved.timestamp)) ? Number(saved.timestamp) : null,
+      };
     }
-  }
-
-  // 3. Fallbacks por estado
-  if (combined.includes('rj') || combined.includes('rio')) return [-22.9068, -43.1829];
-  if (combined.includes('sp') || combined.includes('paulo')) return [-23.5505, -46.6333];
-  if (combined.includes('mg') || combined.includes('minas')) return [-19.9167, -43.9345];
-  if (combined.includes('pr') || combined.includes('paraná')) return [-25.4284, -49.2733];
-
-  return [-22.9068, -43.1829];
+  } catch {}
+  return null;
 }
 
-// Marcador limpo
+// O desenho fica dentro do host do Leaflet. Assim o hover/seleção não sobrescreve
+// o transform usado pelo próprio Leaflet para posicionar o marcador.
 function createPinIcon(hasEmail = false, isSelected = false) {
-  const bg = isSelected ? '#2563EB' : hasEmail ? '#10B981' : '#475569';
-  const size = isSelected ? 22 : 16;
+  const fill = isSelected ? '#E8B33D' : hasEmail ? '#10A37F' : '#475569';
+  const scale = isSelected ? 1.12 : 1;
   return L.divIcon({
-    className: 'custom-leaflet-marker',
+    className: '',
     html: `
       <div style="
-        width: ${size}px;
-        height: ${size}px;
-        background: ${bg};
-        border: 2px solid #FFFFFF;
-        border-radius: 50%;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
+        width: 36px;
+        height: 44px;
+        filter: drop-shadow(0 3px 5px rgba(15, 23, 42, 0.35));
+        transform: scale(${scale});
+        transform-origin: 50% 100%;
+        transition: transform 160ms ease;
+        pointer-events: none;
       ">
-        <div style="width: 4px; height: 4px; background: #FFF; border-radius: 50%;"></div>
+        <svg viewBox="0 0 36 44" width="36" height="44" aria-hidden="true">
+          <path d="M18 1C8.61 1 1 8.61 1 18c0 11.8 15.26 24.1 15.91 24.62a1.75 1.75 0 0 0 2.18 0C19.74 42.1 35 29.8 35 18 35 8.61 27.39 1 18 1Z" fill="${fill}" stroke="#FFFFFF" stroke-width="2" />
+          <circle cx="18" cy="18" r="5" fill="#FFFFFF" />
+        </svg>
       </div>
     `,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2]
+    iconSize: [36, 44],
+    iconAnchor: [18, 43],
+    popupAnchor: [0, -42],
+  });
+}
+
+function createUserLocationIcon() {
+  return L.divIcon({
+    className: '',
+    html: `
+      <div style="
+        width: 22px;
+        height: 22px;
+        box-sizing: border-box;
+        border-radius: 50%;
+        background: #0F172A;
+        border: 3px solid #FFFFFF;
+        box-shadow: 0 0 0 4px rgba(16, 163, 127, 0.48), 0 3px 9px rgba(15, 23, 42, 0.35);
+        pointer-events: none;
+      "></div>
+    `,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    popupAnchor: [0, -15],
   });
 }
 
@@ -221,8 +169,8 @@ export default function MapScraperView({
 }) {
   const { addNotification } = useNotifications();
 
-  const [leads, setLeads] = useState(() => readLocalArray('sigma_leads'));
-  const [searches, setSearches] = useState(() => readLocalArray('sigma_searches'));
+  const [leads, setLeads] = useState(() => normalizeLeadCollection(readLocalArray('sigma_leads')));
+  const [searches, setSearches] = useState(() => getExtractionSearches(readLocalArray('sigma_searches')));
   const [activeSearchId, setActiveSearchId] = useState('__all__');
 
   // Estado de processamento
@@ -232,9 +180,8 @@ export default function MapScraperView({
 
   // Interface e visualização
   const [viewMode, setViewMode] = useState('map'); // 'map' | 'table'
-  const [mapLayer, setMapLayer] = useState(() => getStoredMapLayer());
-  const [tileErrorCount, setTileErrorCount] = useState(0);
-  const tileErrorCountRef = useRef(0);
+  const [userLocation, setUserLocation] = useState(() => readStoredUserLocation());
+  const [isLocating, setIsLocating] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [copiedId, setCopiedId] = useState(null);
   const [selectedLeadId, setSelectedLeadId] = useState(null);
@@ -242,6 +189,7 @@ export default function MapScraperView({
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersLayerRef = useRef(null);
+  const userLocationMarkerRef = useRef(null);
   const leadCardRefs = useRef({});
 
   // Sincronizar contagem global
@@ -251,8 +199,17 @@ export default function MapScraperView({
   }, [leads, onUpdateLeadsCount]);
 
   useEffect(() => {
-    localStorage.setItem('sigma_searches', JSON.stringify(searches));
-  }, [searches]);
+    const refreshStoredData = () => {
+      setLeads(normalizeLeadCollection(readLocalArray('sigma_leads')));
+      setSearches(getExtractionSearches(readLocalArray('sigma_searches')));
+    };
+    window.addEventListener('sigma:leads-updated', refreshStoredData);
+    window.addEventListener('storage', refreshStoredData);
+    return () => {
+      window.removeEventListener('sigma:leads-updated', refreshStoredData);
+      window.removeEventListener('storage', refreshStoredData);
+    };
+  }, []);
 
   // IPC de progresso do Playwright
   useEffect(() => {
@@ -310,35 +267,20 @@ export default function MapScraperView({
     if (viewMode !== 'map' || !mapContainerRef.current) return;
 
     if (!mapInstanceRef.current) {
-      const initialCenter = resolveLeadLocation(visibleLeads[0]?.address, activeQueryLabel);
-
       const map = L.map(mapContainerRef.current, {
-        center: initialCenter,
-        zoom: 13,
+        center: userLocation ? [userLocation.lat, userLocation.lng] : DEFAULT_MAP_CENTER,
+        zoom: userLocation ? 13 : DEFAULT_MAP_ZOOM,
         zoomControl: false,
         attributionControl: true
       });
 
       L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-      const layerCfg = MAP_LAYERS[mapLayer] || MAP_LAYERS.streets;
-      const tileLayer = L.tileLayer(layerCfg.url, {
-        maxZoom: layerCfg.maxZoom,
-        attribution: layerCfg.attribution,
-        subdomains: layerCfg.subdomains || 'abc',
-      });
-      tileLayer.on('tileerror', () => {
-        tileErrorCountRef.current += 1;
-        setTileErrorCount(tileErrorCountRef.current);
-        if (tileErrorCountRef.current >= 4) {
-          const fallback = LAYER_FALLBACK[mapLayer];
-          if (fallback && MAP_LAYERS[fallback]) {
-            setMapLayer(fallback);
-            tileErrorCountRef.current = 0;
-          }
-        }
-      });
-      tileLayer.addTo(map);
+      L.tileLayer(STREET_MAP_LAYER.url, {
+        maxZoom: STREET_MAP_LAYER.maxZoom,
+        attribution: STREET_MAP_LAYER.attribution,
+        subdomains: STREET_MAP_LAYER.subdomains,
+      }).addTo(map);
       mapInstanceRef.current = map;
       markersLayerRef.current = L.layerGroup().addTo(map);
 
@@ -355,46 +297,6 @@ export default function MapScraperView({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [viewMode]);
-
-  useEffect(() => {
-    try { localStorage.setItem('sigma_map_layer', mapLayer); } catch {}
-    tileErrorCountRef.current = 0;
-    setTileErrorCount(0);
-  }, [mapLayer]);
-
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-    if (!markersLayerRef.current) return;
-
-    map.eachLayer((layer) => {
-      if (layer instanceof L.TileLayer) {
-        map.removeLayer(layer);
-      }
-    });
-
-    const cfg = MAP_LAYERS[mapLayer] || MAP_LAYERS.streets;
-    const layer = L.tileLayer(cfg.url, {
-      maxZoom: cfg.maxZoom,
-      attribution: cfg.attribution,
-      subdomains: cfg.subdomains || 'abc',
-    });
-    layer.on('tileerror', () => {
-      tileErrorCountRef.current += 1;
-      setTileErrorCount(tileErrorCountRef.current);
-      if (tileErrorCountRef.current >= 4) {
-        const fallback = LAYER_FALLBACK[mapLayer];
-        if (fallback && MAP_LAYERS[fallback]) {
-          setMapLayer(fallback);
-          tileErrorCountRef.current = 0;
-        }
-      }
-    });
-    layer.addTo(map);
-    if (markersLayerRef.current && !map.hasLayer(markersLayerRef.current)) {
-      markersLayerRef.current.addTo(map);
-    }
-  }, [mapLayer]);
 
   const markersMapRef = useRef(new Map());
 
@@ -413,49 +315,19 @@ export default function MapScraperView({
     const skippedCount = { current: 0 };
     leadsToRender.forEach((lead, i) => {
       const leadKey = lead.id || i;
-
-      const rawLat = parseFloat(lead.latitude ?? lead.lat ?? lead.geocodeLat ?? '');
-      const rawLng = parseFloat(lead.longitude ?? lead.lng ?? lead.geocodeLng ?? '');
-      const hasRealCoords = Number.isFinite(rawLat) && Number.isFinite(rawLng) && Math.abs(rawLat) > 0.1 && Math.abs(rawLng) > 0.1;
-      const isPrecise = hasRealCoords && (lead.coordSource === 'poi' || lead.coordSource === 'meta');
-      const isGeocoded = hasRealCoords && lead.coordSource === 'nominatim';
-      const isViewportJunk = hasRealCoords && lead.coordSource === 'viewport';
-      const shouldShow = hasRealCoords && (isPrecise || isGeocoded) && !isViewportJunk;
-      const geoLat = parseFloat(lead.geocodeLat ?? lead.geocode?.lat ?? '');
-      const geoLng = parseFloat(lead.geocodeLng ?? lead.geocode?.lng ?? '');
-      const hasGeoCoords = !shouldShow && Number.isFinite(geoLat) && Number.isFinite(geoLng) && Math.abs(geoLat) > 0.1;
-
-      let lat, lng;
-      let coordSource = 'sem-coord';
-      let coordConfidence = 'none';
-      if (shouldShow) {
-        lat = rawLat;
-        lng = rawLng;
-        coordSource = lead.coordSource || 'poi';
-        coordConfidence = lead.geocodeConfidence || 'exact';
-      } else if (hasGeoCoords) {
-        lat = geoLat;
-        lng = geoLng;
-        coordSource = 'nominatim';
-        coordConfidence = lead.geocodeConfidence || 'approximate';
-      } else if (hasRealCoords && !isViewportJunk) {
-        lat = rawLat;
-        lng = rawLng;
-        coordSource = lead.coordSource || 'url';
-        coordConfidence = lead.geocodeConfidence || 'approximate';
-      } else {
+      const location = getExactLeadLocation(lead);
+      if (!location) {
         skippedCount.current += 1;
         return;
       }
+      const { lat, lng } = location;
 
       const hasEmail = Boolean(lead.email);
       const marker = L.marker([lat, lng], {
-        icon: createPinIcon(hasEmail, false)
+        icon: createPinIcon(hasEmail, false),
+        title: lead.name || 'Lead',
       });
 
-      const precise = coordSource === 'poi' || coordSource === 'meta' || coordConfidence === 'exact';
-      const confidenceBadge = precise ? '✓ exato' : coordConfidence === 'approximate' ? '~ aproximado' : coordSource === 'nominatim' ? '~ geocodificado' : '? bairro';
-      const confidenceColor = precise ? '#059669' : coordSource === 'nominatim' ? '#0EA5E9' : coordConfidence === 'approximate' ? '#D97706' : '#94A3B8';
       marker.bindPopup(`
         <div style="font-family: system-ui, -apple-system, sans-serif; min-width: 200px; padding: 4px;">
           <h4 style="margin: 0 0 4px; font-size: 13px; font-weight: 700; color: #0F172A;">${lead.name || 'Empresa'}</h4>
@@ -463,7 +335,7 @@ export default function MapScraperView({
           ${lead.phone ? `<div style="font-size: 11px; margin-bottom: 2px;"><strong>Telefone:</strong> ${lead.phone}</div>` : ''}
           ${lead.email ? `<div style="font-size: 11px; margin-bottom: 2px;"><strong>E-mail:</strong> ${lead.email}</div>` : ''}
           ${lead.address ? `<div style="font-size: 10px; color: #94A3B8; margin-top: 4px;">📍 ${lead.address}</div>` : ''}
-          <div style="font-size: 10px; color: ${confidenceColor}; margin-top: 4px;">${confidenceBadge} · ${coordSource}</div>
+          <div style="font-size: 10px; color: #059669; margin-top: 4px;">✓ Coordenada confirmada · ${location.source}</div>
         </div>
       `);
 
@@ -488,17 +360,50 @@ export default function MapScraperView({
     });
 
     if (skippedCount.current > 0) {
-      console.warn(`[MAP] ${skippedCount.current} leads sem coordenada precisa — ocultos (re-scrape para geocodificar)`);
+      console.warn(`[MAP] ${skippedCount.current} leads sem coordenada exata confirmada — pins ocultos`);
     }
     if (bounds.length > 0) {
       try {
         map.fitBounds(bounds, { padding: [60, 60], maxZoom: 14 });
       } catch {}
+    } else if (userLocation) {
+      map.setView([userLocation.lat, userLocation.lng], 13);
     } else {
-      const defaultCenter = resolveLeadLocation('', activeQueryLabel);
-      map.setView(defaultCenter, 13);
+      map.setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
     }
-  }, [visibleLeads, activeQueryLabel]);
+  }, [visibleLeads]);
+
+  // Marcador separado para a localização real do usuário, inclusive se foi salva antes.
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (viewMode !== 'map' || !map) return undefined;
+
+    if (userLocationMarkerRef.current) {
+      userLocationMarkerRef.current.removeFrom(map);
+      userLocationMarkerRef.current = null;
+    }
+    if (!userLocation) return undefined;
+
+    const accuracyText = Number.isFinite(userLocation.accuracy)
+      ? `<div style="font-size: 11px; color: #64748B; margin-top: 4px;">Precisão informada pelo dispositivo: ${Math.round(userLocation.accuracy)} m</div>`
+      : '';
+    const marker = L.marker([userLocation.lat, userLocation.lng], {
+      icon: createUserLocationIcon(),
+      title: 'Sua localização',
+      zIndexOffset: 2000,
+    }).bindPopup(`
+      <div style="font-family: system-ui, -apple-system, sans-serif; min-width: 190px; padding: 4px;">
+        <strong style="font-size: 13px; color: #0F172A;">Sua localização</strong>
+        ${accuracyText}
+      </div>
+    `).addTo(map);
+
+    userLocationMarkerRef.current = marker;
+    return () => {
+      marker.removeFrom(map);
+      if (userLocationMarkerRef.current === marker) userLocationMarkerRef.current = null;
+    };
+  }, [userLocation, viewMode]);
 
   // Efeito dedicado para atualizar o destaque visual do marcador selecionado
   useEffect(() => {
@@ -523,10 +428,79 @@ export default function MapScraperView({
     if (item && map) {
       map.panTo([item.lat, item.lng], { animate: true, duration: 0.4 });
       item.marker.openPopup();
-    } else if (map) {
-      const baseCoords = resolveLeadLocation(lead.address, activeQueryLabel);
-      map.panTo(baseCoords, { animate: true, duration: 0.4 });
+    } else {
+      addNotification({
+        type: 'warning',
+        category: 'scraper',
+        title: 'Localização não confirmada',
+        message: 'Este lead não tem coordenada exata. O mapa não cria um pin aproximado.',
+        duration: 3200,
+      });
     }
+  };
+
+  const handleUseMyLocation = () => {
+    if (!navigator.geolocation) {
+      addNotification({
+        type: 'warning',
+        category: 'system',
+        title: 'Localização indisponível',
+        message: 'Este dispositivo não oferece geolocalização.',
+      });
+      return;
+    }
+
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = Number(position.coords.latitude);
+        const lng = Number(position.coords.longitude);
+        if (!isValidCoordinatePair(lat, lng)) {
+          setIsLocating(false);
+          addNotification({
+            type: 'warning',
+            category: 'system',
+            title: 'Localização inválida',
+            message: 'O dispositivo não retornou coordenadas utilizáveis.',
+          });
+          return;
+        }
+
+        const nextLocation = {
+          lat,
+          lng,
+          accuracy: Number.isFinite(Number(position.coords.accuracy)) ? Number(position.coords.accuracy) : null,
+          timestamp: Number(position.timestamp) || Date.now(),
+        };
+        try { localStorage.setItem('sigma_ref', JSON.stringify(nextLocation)); } catch {}
+        setUserLocation(nextLocation);
+        setIsLocating(false);
+        mapInstanceRef.current?.flyTo([lat, lng], 15, { animate: true, duration: 0.7 });
+        addNotification({
+          type: 'success',
+          category: 'system',
+          title: 'Localização definida',
+          message: Number.isFinite(nextLocation.accuracy)
+            ? `Pin posicionado com precisão informada de ${Math.round(nextLocation.accuracy)} m.`
+            : 'Seu pin foi posicionado no mapa.',
+        });
+      },
+      (error) => {
+        const messages = {
+          1: 'Permita o acesso à localização e tente novamente.',
+          2: 'O dispositivo não conseguiu determinar sua posição.',
+          3: 'A localização demorou demais para responder. Tente novamente.',
+        };
+        setIsLocating(false);
+        addNotification({
+          type: 'warning',
+          category: 'system',
+          title: 'Não foi possível localizar',
+          message: messages[error.code] || 'Falha ao obter sua localização.',
+        });
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
   };
 
   // Exportar dados
@@ -571,7 +545,13 @@ export default function MapScraperView({
       <div className="map-center-panel">
         {viewMode === 'map' ? (
           <div className="map-wrapper">
-            <div id="leafletMap" ref={mapContainerRef} className="map-canvas" />
+            <div
+              id="leafletMap"
+              ref={mapContainerRef}
+              className="map-canvas"
+              role="application"
+              aria-label="Mapa de ruas com leads de coordenada confirmada"
+            />
 
             {/* Card Flutuante Superior Esquerdo com Seletor de Busca */}
             <div className="map-floating-scan-card">
@@ -603,26 +583,23 @@ export default function MapScraperView({
 
             {/* Controles Flutuantes Superiores Direitos */}
             <div className="map-floating-controls">
-              <div className="map-layer-switcher" title="Camada do mapa — gratuita">
-                {Object.keys(MAP_LAYERS).map((key) => (
-                  <button
-                    key={key}
-                    className={`map-layer-btn ${mapLayer === key ? 'active' : ''}`}
-                    onClick={() => setMapLayer(key)}
-                    title={`${LAYER_LABELS[key]} — ${MAP_LAYERS[key].attribution}`}
-                  >
-                    {LAYER_LABELS[key]}
-                  </button>
-                ))}
+              <div className="map-layer-switcher" aria-label="Mapa em modo Ruas" title="Mapa de ruas">
+                <span className="map-layer-btn active" style={{ cursor: 'default' }}>Ruas</span>
               </div>
               <button
-                className={`map-ctrl-btn ${mapLayer === 'satellite' ? 'active' : ''}`}
-                onClick={() => setMapLayer(mapLayer === 'satellite' ? 'streets' : 'satellite')}
-                title="Alternar rápido Ruas/Satélite"
+                type="button"
+                className={`map-ctrl-btn ${isLocating ? 'active' : ''}`}
+                onClick={handleUseMyLocation}
+                disabled={isLocating}
+                aria-label="Usar minha localização"
+                title="Usar minha localização"
+                style={{ width: 'auto', minWidth: 34, padding: '0 10px', gap: 6, whiteSpace: 'nowrap' }}
               >
-                <Layers size={16} />
+                {isLocating ? <Loader2 size={16} className="spin-icon" /> : <MapPin size={16} />}
+                <span>{isLocating ? 'Localizando…' : 'Usar minha localização'}</span>
               </button>
               <button
+                type="button"
                 className="map-ctrl-btn"
                 onClick={() => setViewMode('table')}
                 title="Alternar para Modo Planilha"
@@ -722,6 +699,21 @@ export default function MapScraperView({
 
       {/* Painel Direito (Métricas e Feed em Tempo Real) */}
       <aside className="feed-right-panel">
+        <div className="feed-search-row">
+          <label className="feed-search-field">
+            <Search size={15} aria-hidden="true" />
+            <input
+              type="search"
+              placeholder="Buscar lead…"
+              aria-label="Buscar leads"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+            />
+          </label>
+          <button type="button" className="feed-filter-button" title="Filtrar leads" aria-label="Filtrar leads">
+            <Filter size={16} />
+          </button>
+        </div>
         {/* Cards de Métricas Superiores */}
         <div className="kpi-cards-grid">
           <div className="kpi-card">

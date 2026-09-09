@@ -4,23 +4,18 @@ import {
   Search,
   Sparkles,
   MessageSquare,
-  Megaphone,
   Settings,
-  HelpCircle,
-  LogOut,
   Plus,
-  Bell,
-  Github,
-  Sun,
-  Moon,
-  Monitor,
-  Check,
   Compass,
-  Users
+  TableProperties,
+  Menu,
+  Minus,
+  Square,
+  X
 } from 'lucide-react';
 import Overview from './components/Overview';
 import MapScraperView from './components/MapScraperView';
-import Dashboard from './components/Dashboard';
+import LeadsManager from './components/LeadsManager';
 import LeadScoring from './components/LeadScoring';
 import WhatsAppPanel from './components/WhatsAppPanel';
 import NewExtractionModal from './components/NewExtractionModal';
@@ -28,6 +23,18 @@ import OnboardingTour from './components/OnboardingTour';
 import { NotificationProvider, useNotifications } from './components/NotificationCenter';
 import UpdateBanner from './components/UpdateBanner';
 import UsagePanel from './components/UsagePanel';
+import { dedupeLeads, normalizeLeadCollection, readLocalArray } from './leadData';
+
+function organizeStoredLeads() {
+  const raw = readLocalArray('sigma_leads');
+  const organized = normalizeLeadCollection(raw);
+  try {
+    if (organized.some((lead, index) => lead?.category !== raw[index]?.category)) {
+      localStorage.setItem('sigma_leads', JSON.stringify(organized));
+    }
+  } catch {}
+  return organized;
+}
 
 class ErrorBoundaryLite extends React.Component {
   constructor(props) {
@@ -81,6 +88,7 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
   const items = [
     { id: 'scraper', label: 'Ir para Scraper Maps', desc: 'Mapa + feed de leads', icon: '◎', action: () => { onNavigate('scraper'); onClose(false); } },
     { id: 'overview', label: 'Ir para Visão Geral', desc: 'Centro de comando', icon: '▦', action: () => { onNavigate('overview'); onClose(false); } },
+    { id: 'base', label: 'Ir para Base de Leads', desc: 'Filtrar, organizar e exportar', icon: '▤', action: () => { onNavigate('base'); onClose(false); } },
     { id: 'scoring', label: 'Ir para Lead Scoring', desc: 'Quem ligar primeiro', icon: '✦', action: () => { onNavigate('scoring'); onClose(false); } },
     { id: 'whatsapp', label: 'Ir para WhatsApp', desc: 'Chats e campanhas', icon: '◐', action: () => { onNavigate('whatsapp'); onClose(false); } },
     { id: 'dashboard', label: 'Ir para Dashboard', desc: 'Métricas e categorias', icon: '▭', action: () => { onNavigate('dashboard'); onClose(false); } },
@@ -113,16 +121,18 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
 
 function AppInner() {
   const [activeTab, setActiveTab] = useState(() => {
-    try { const h = location.hash.slice(1); if(['overview','scraper','scoring','whatsapp','dashboard','settings'].includes(h)) return h; } catch{}
+    try { const h = location.hash.slice(1); if(['overview','scraper','base','scoring','whatsapp','dashboard','settings'].includes(h)) return h; } catch{}
     return 'overview';
   });
   const [isNewExtractionOpen, setIsNewExtractionOpen] = useState(false);
   const [isCmdOpen, setIsCmdOpen] = useState(false);
+  const [isSidebarLocked, setIsSidebarLocked] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [waStatus, setWaStatus] = useState('disconnected');
-  const [leadsCount, setLeadsCount] = useState(142);
-  const [scoringCount, setScoringCount] = useState(87);
+  const [leadsCount, setLeadsCount] = useState(() => dedupeLeads(organizeStoredLeads()).length);
+  const [scoringCount, setScoringCount] = useState(0);
 
-  const { unreadCount, setIsDrawerOpen, addNotification } = useNotifications();
+  const { addNotification } = useNotifications();
   const mapScraperRef = useRef(null);
 
   // Persist hash + shortcuts ⌘1-5
@@ -131,7 +141,7 @@ function AppInner() {
     const onKey=(e)=>{
       if((e.metaKey||e.ctrlKey) && /^[1-5]$/.test(e.key)){
         e.preventDefault();
-        const map=['overview','scraper','scoring','whatsapp','dashboard'];
+        const map=['overview','scraper','base','scoring','whatsapp'];
         const i=Number(e.key)-1; if(map[i]) setActiveTab(map[i]);
       }
       if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); setIsCmdOpen(v=>!v); }
@@ -139,6 +149,20 @@ function AppInner() {
     window.addEventListener('keydown', onKey);
     return()=> window.removeEventListener('keydown', onKey);
   }, []);
+
+  useEffect(() => {
+    document.body.classList.toggle('side-locked', isSidebarLocked);
+    document.body.classList.toggle('nav-open', isMobileNavOpen);
+    document.body.classList.toggle('route-whatsapp', activeTab === 'whatsapp');
+    return () => {
+      document.body.classList.remove('side-locked', 'nav-open', 'route-whatsapp');
+    };
+  }, [isSidebarLocked, isMobileNavOpen, activeTab]);
+
+  const navigate = (tab) => {
+    setActiveTab(tab);
+    setIsMobileNavOpen(false);
+  };
 
   const handleMinimize = () => window.electronAPI?.winMinimize();
   const handleMaximize = () => window.electronAPI?.winMaximize();
@@ -148,6 +172,7 @@ function AppInner() {
     setActiveTab('scraper');
     // Start extraction through electron IPC directly
     const qstr = `${niche} ${neigh} ${city}`;
+    const searchId = `scrape_${Date.now()}`;
     addNotification({
       type: 'info',
       category: 'scraper',
@@ -156,7 +181,7 @@ function AppInner() {
     });
 
     if (window.electronAPI && typeof window.electronAPI.startScrape === 'function') {
-      window.electronAPI.startScrape(qstr, limit, `scrape_${Date.now()}`)
+      window.electronAPI.startScrape(qstr, limit, searchId)
         .then((res) => {
           if (res && res.success && res.data) {
             addNotification({
@@ -168,9 +193,27 @@ function AppInner() {
             // Update local storage
             try {
               const current = JSON.parse(localStorage.getItem('sigma_leads') || '[]');
-              const combined = [...res.data.map(d => ({ ...d, id: Math.random().toString(36).slice(2) })), ...current];
+              const combined = normalizeLeadCollection([
+                ...res.data.map(d => ({ ...d, searchId, id: d.id || Math.random().toString(36).slice(2) })),
+                ...current,
+              ]);
+              const currentSearches = readLocalArray('sigma_searches');
+              const nextSearches = [
+                ...currentSearches.filter((search) => String(search?.id) !== searchId),
+                {
+                  id: searchId,
+                  query: qstr,
+                  label: `${niche} · ${neigh}${city ? ` · ${city}` : ''}`,
+                  source: 'maps',
+                  timestamp: Date.now(),
+                },
+              ];
               localStorage.setItem('sigma_leads', JSON.stringify(combined));
+              localStorage.setItem('sigma_searches', JSON.stringify(nextSearches));
               setLeadsCount(combined.length);
+              window.dispatchEvent(new CustomEvent('sigma:leads-updated', {
+                detail: { leads: combined, searches: nextSearches },
+              }));
             } catch {}
           }
         })
@@ -188,7 +231,7 @@ function AppInner() {
   const renderContent = () => {
     switch (activeTab) {
       case 'overview':
-        return <Overview onNavigate={setActiveTab} waStatus={waStatus} leadsCount={leadsCount} scoringCount={scoringCount} />;
+        return <Overview onNavigate={navigate} onNewExtraction={() => setIsNewExtractionOpen(true)} waStatus={waStatus} leadsCount={leadsCount} scoringCount={scoringCount} />;
       case 'scraper':
         return (
           <ErrorBoundaryLite label="Scraper">
@@ -205,6 +248,12 @@ function AppInner() {
             <LeadScoring onUpdateScoringCount={setScoringCount} addLog={(msg) => console.log(msg)} />
           </ErrorBoundaryLite>
         );
+      case 'base':
+        return (
+          <ErrorBoundaryLite label="Base de Leads">
+            <LeadsManager onUpdateLeadsCount={setLeadsCount} addLog={(msg) => console.log(msg)} />
+          </ErrorBoundaryLite>
+        );
       case 'whatsapp':
         return (
           <ErrorBoundaryLite label="WhatsApp">
@@ -219,9 +268,12 @@ function AppInner() {
         );
       case 'dashboard':
         return (
-          <ErrorBoundaryLite label="Dashboard">
-            <Dashboard />
-          </ErrorBoundaryLite>
+          <section className="prototype-soon-card">
+            <span>Lote 2 · especificado, não construído</span>
+            <h2>Painel de análises</h2>
+            <p>Metric-strip, filtros por categoria e período e exportação CSV/XLSX com progresso e confirmação visual.</p>
+            <button type="button" className="btn" onClick={() => navigate('overview')}>Voltar à Visão Geral</button>
+          </section>
         );
       case 'settings':
         return (
@@ -260,21 +312,21 @@ function AppInner() {
       {/* Left Sidebar */}
       <aside className="app-sidebar">
         {/* Brand Header */}
-        <div className="sidebar-brand">
+        <button
+          type="button"
+          className="sidebar-brand"
+          onClick={() => setIsSidebarLocked((value) => !value)}
+          aria-pressed={isSidebarLocked}
+          title="Fixar ou soltar o menu"
+        >
           <div className="brand-icon-box">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="18" cy="5" r="3" />
-              <circle cx="6" cy="12" r="3" />
-              <circle cx="18" cy="19" r="3" />
-              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
-              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
-            </svg>
+            Σ
           </div>
           <div className="brand-text-col">
             <span className="brand-name">Sigma GMaps</span>
-            <span className="brand-tag">COMMUNITY <Check size={11} className="brand-check" /></span>
+            <span className="brand-tag">COMMUNITY</span>
           </div>
-        </div>
+        </button>
 
         {/* Primary CTA Button */}
         <div className="sidebar-action-wrap">
@@ -289,146 +341,89 @@ function AppInner() {
 
         {/* Navigation Menu */}
         <nav className="sidebar-nav">
+          <div className="sidebar-nav-label">Produto</div>
           <button
             className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
-            onClick={() => setActiveTab('overview')}
+            onClick={() => navigate('overview')}
           >
             <LayoutGrid size={18} />
-            <span>Visão Geral</span>
+            <span className="nav-label-text">Visão Geral</span><span className="nav-kbd">1</span>
           </button>
 
           <button
             className={`nav-item ${activeTab === 'scraper' ? 'active' : ''}`}
-            onClick={() => setActiveTab('scraper')}
+            onClick={() => navigate('scraper')}
           >
             <Compass size={18} />
-            <span>Scraper Maps</span>
+            <span className="nav-label-text">Scraper Maps</span><span className="nav-kbd">2</span>
+          </button>
+
+          <button
+            className={`nav-item ${activeTab === 'base' ? 'active' : ''}`}
+            onClick={() => navigate('base')}
+          >
+            <TableProperties size={18} />
+            <span className="nav-label-text">Base de Leads</span><span className="nav-kbd">3</span>
           </button>
 
           <button
             className={`nav-item ${activeTab === 'scoring' ? 'active' : ''}`}
-            onClick={() => setActiveTab('scoring')}
+            onClick={() => navigate('scoring')}
           >
             <Sparkles size={18} />
-            <span>Lead Scoring</span>
+            <span className="nav-label-text">Lead Scoring</span><span className="nav-kbd">4</span>
           </button>
 
           <button
             className={`nav-item ${activeTab === 'whatsapp' ? 'active' : ''}`}
-            onClick={() => setActiveTab('whatsapp')}
+            onClick={() => navigate('whatsapp')}
           >
             <MessageSquare size={18} />
-            <span>WhatsApp</span>
+            <span className="nav-label-text">WhatsApp</span>
           </button>
 
           <button
             className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
+            onClick={() => navigate('dashboard')}
           >
             <LayoutGrid size={18} />
-            <span>Dashboard</span>
-          </button>
-
-          <button
-            className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
-            onClick={() => setActiveTab('settings')}
-          >
-            <Settings size={18} />
-            <span>Configurações</span>
+            <span className="nav-label-text">Dashboard</span><span className="nav-lote">Lote 2</span>
           </button>
         </nav>
 
         {/* Sidebar Footer */}
         <div className="sidebar-footer">
-          <button className="nav-item sub-nav-item" onClick={() => { try{ localStorage.removeItem('sigma_onboarding_done'); }catch{}; setIsCmdOpen(false); setActiveTab('overview'); setTimeout(()=> window.dispatchEvent(new Event('sigma:retrigger-onboarding')), 100); // fallback: reload
-            // trigger tour by clearing flag and reloading state
-            window.location.hash='overview'; location.reload();
-          }}>
-            <Sparkles size={13} />
-            <span>Ver tour</span>
+          <button className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}>
+            <Settings size={18} />
+            <span className="nav-label-text">Configurações</span>
           </button>
-          <button className="nav-item sub-nav-item" onClick={() => addNotification({ type: 'info', title: 'Central de Ajuda', message: 'Documentação do Sigma GMaps Scraper disponível.' })}>
-            <HelpCircle size={17} />
-            <span>Central de Ajuda</span>
-          </button>
-          <button className="nav-item sub-nav-item text-danger" onClick={handleClose}>
-            <LogOut size={17} />
-            <span>Sair</span>
-          </button>
+          <div className="sidebar-release">Lote 1 · Teal · Light</div>
         </div>
       </aside>
+      <button type="button" className="app-nav-scrim" aria-label="Fechar navegação" onClick={() => setIsMobileNavOpen(false)} />
 
       {/* Main Container (Header + Main Screen Area) */}
       <div className="app-main-viewport">
         {/* Top Header Bar — 48px, light, blur */}
         <header className="app-header-bar" onDoubleClick={handleMaximize}>
-          <div className="header-search-wrap" onClick={() => setIsCmdOpen(true)} style={{ cursor:'pointer' }} title="Abrir spotlight (⌘K)">
+          <button type="button" className="mobile-menu-btn" onClick={() => setIsMobileNavOpen(true)} aria-label="Abrir navegação"><Menu size={18} /></button>
+          <button type="button" className="header-search-wrap" onClick={() => setIsCmdOpen(true)} title="Abrir busca global (⌘K)">
             <Search size={14} className="header-search-icon" />
-            <input
-              type="text"
-              readOnly
-              placeholder="Buscar leads, campanhas…  ⌘K"
-              value=""
-              onFocus={() => setIsCmdOpen(true)}
-              className="header-search-input"
-              style={{ cursor:'pointer' }}
-            />
-            <span style={{ fontSize:10, padding:'2px 6px', borderRadius:4, border:'1px solid var(--border)', color:'var(--muted)', background:'var(--surface-2)', flexShrink:0 }}>⌘K</span>
-          </div>
+            <span>Buscar leads, campanhas, ações…</span>
+          </button>
 
           {/* Right Header Actions */}
           <div className="header-right-actions">
-            {/* Star on GitHub */}
-            <button
-              className="header-pill-btn github-star-btn"
-              onClick={() => window.electronAPI?.openExternal?.('https://github.com/olucianobotelho/google-maps-sigma-scrapper')}
-            >
-              <Github size={14} />
-              <span>GitHub</span>
+            <button type="button" className="wa-status-pill" onClick={() => navigate('whatsapp')}>
+              <span className={`wa-status-dot ${waStatus === 'connected' ? 'online' : ''}`} />
+              <span>{waStatus === 'connected' ? '1 WhatsApp online' : 'WhatsApp desconectado'}</span>
             </button>
-
-            {/* Notification Bell */}
-            <button
-              className="header-icon-btn notif-bell-btn"
-              onClick={() => setIsDrawerOpen(true)}
-              title="Notificações"
-            >
-              <Bell size={16} />
-              {unreadCount > 0 && <span className="notif-red-dot" />}
-            </button>
-
-            {/* Help Question Icon */}
-            <button
-              className="header-icon-btn"
-              onClick={() => addNotification({ type: 'info', title: 'Suporte', message: 'Clique em Suporte para atendimento.' })}
-              title="Ajuda"
-            >
-              <HelpCircle size={16} />
-            </button>
-
-            <div className="header-vertical-divider" />
-
-            {/* Support Button */}
-            <button
-              className="header-pill-btn support-btn"
-              onClick={() => addNotification({ type: 'info', title: 'Suporte Sigma', message: 'Canal de atendimento aberto.' })}
-            >
-              Suporte
-            </button>
-
-            {/* User Avatar */}
-            <div className="user-avatar-wrap" title="Usuário Ativo">
-              <div className="user-avatar-fallback">
-                <span>L</span>
-              </div>
-              <span className="user-online-dot" />
-            </div>
 
             {/* Window Controls (Frameless Drag/Close) */}
             <div className="window-control-buttons">
-              <button onClick={handleMinimize} title="Minimizar" className="win-btn">─</button>
-              <button onClick={handleMaximize} title="Maximizar" className="win-btn">☐</button>
-              <button onClick={handleClose} title="Fechar" className="win-btn win-close">✕</button>
+              <button onClick={handleMinimize} title="Minimizar" className="win-btn"><Minus size={13} /></button>
+              <button onClick={handleMaximize} title="Maximizar" className="win-btn"><Square size={11} /></button>
+              <button onClick={handleClose} title="Fechar" className="win-btn win-close"><X size={13} /></button>
             </div>
           </div>
         </header>
@@ -436,7 +431,7 @@ function AppInner() {
         {/* Screen Content — view-transition */}
         <main className="app-screen-container">
           <UpdateBanner />
-          <div key={activeTab} className="view-transition" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+          <div key={activeTab} className="view-transition" style={{ flex:1, display:'flex', flexDirection:'column' }}>
             {renderContent()}
           </div>
         </main>

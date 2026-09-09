@@ -1,83 +1,349 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
+  BarChart3,
+  Globe,
+  Instagram,
+  List,
+  Mail,
+  MessageCircle,
+  Percent,
+  Phone,
+  Plus,
+  Rows3,
+  Send,
   Users,
-  LayoutDashboard,
-  Target,
-  MessageSquare,
-  GitBranch,
-  PlusCircle,
-  ArrowRight,
-  TrendingUp,
-  Sparkles,
-  Zap,
-  CheckCircle2,
-  AlertCircle
 } from 'lucide-react';
-import CollapsibleText from './CollapsibleText';
+import {
+  dedupeLeads,
+  getExtractionSearches,
+  getLeadStats,
+  getSearchLeadCount,
+  normalizeLeadCategory,
+  normalizeLeadCollection,
+  readLocalArray,
+} from '../leadData';
 
-function Overview({ onNavigate, waStatus, leadsCount, scoringCount }) {
+const METRICS = [
+  { id: 'leads', Icon: Users, label: 'Leads', title: 'Quantidade de leads', color: '#10a37f' },
+  { id: 'sent', Icon: Send, label: 'Enviadas', title: 'Mensagens enviadas', color: '#2563eb' },
+  { id: 'replies', Icon: MessageCircle, label: 'Respostas', title: 'Respostas recebidas', color: '#f59e0b' },
+  { id: 'rate', Icon: Percent, label: 'Taxa de resposta', title: 'Taxa de resposta', color: '#db2777' },
+];
+
+function metricDefinition(id) {
+  return METRICS.find((item) => item.id === id) || METRICS[0];
+}
+
+function metricValue(category, id) {
+  if (id === 'rate') return category.sent ? (category.replies / category.sent) * 100 : 0;
+  return Number(category[id] || 0);
+}
+
+function formatMetric(id, value) {
+  return id === 'rate' ? `${Math.round(value)}%` : Number(value || 0).toLocaleString('pt-BR');
+}
+
+function aggregateCategories(rows, name = 'Outros') {
+  const aggregate = rows.reduce((acc, row) => ({
+    leads: acc.leads + row.leads,
+    sent: acc.sent + row.sent,
+    replies: acc.replies + row.replies,
+  }), { leads: 0, sent: 0, replies: 0 });
+  return { name, ...aggregate, isOther: true, members: rows };
+}
+
+function getCampaignsFromResponse(response) {
+  if (Array.isArray(response)) return response;
+  return Array.isArray(response?.campaigns) ? response.campaigns : [];
+}
+
+function getCampaignCategoryMetrics(campaigns) {
+  const byCategory = new Map();
+  campaigns.forEach((campaign) => {
+    (Array.isArray(campaign?.leads) ? campaign.leads : []).forEach((lead) => {
+      const category = normalizeLeadCategory(lead?.category || lead?.company?.category);
+      const current = byCategory.get(category) || { sent: 0, replies: 0 };
+      const status = String(lead?.status || '').toLowerCase();
+      const sent = Boolean(lead?.sentAt || lead?.messageId || ['sent', 'delivered', 'read', 'replied'].includes(status));
+      const replied = Boolean(lead?.repliedAt || lead?.replyCount > 0 || status === 'replied');
+      if (sent) current.sent += 1;
+      if (replied) current.replies += 1;
+      byCategory.set(category, current);
+    });
+  });
+  return byCategory;
+}
+
+function Overview({ onNewExtraction, leadsCount = 0 }) {
+  const [categoryView, setCategoryView] = useState(() => localStorage.getItem('sigma_overview_category_view') || 'bars');
+  const [searchView, setSearchView] = useState(() => localStorage.getItem('sigma_overview_search_view') || 'bars');
+  const [selectedMetrics, setSelectedMetrics] = useState(['leads']);
+  const [expandedOther, setExpandedOther] = useState(false);
+  const [selectedCategories, setSelectedCategories] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+
+  useEffect(() => {
+    let mounted = true;
+    window.campaignAPI?.getAll?.()
+      .then((response) => {
+        if (mounted) setCampaigns(getCampaignsFromResponse(response));
+      })
+      .catch(() => {
+        if (mounted) setCampaigns([]);
+      });
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem('sigma_overview_category_view', categoryView); } catch {}
+  }, [categoryView]);
+
+  useEffect(() => {
+    try { localStorage.setItem('sigma_overview_search_view', searchView); } catch {}
+  }, [searchView]);
+
+  const data = useMemo(() => {
+    const leads = dedupeLeads(normalizeLeadCollection(readLocalArray('sigma_leads')));
+    const searches = getExtractionSearches(readLocalArray('sigma_searches'));
+    const stats = getLeadStats(leads);
+    const campaignMetrics = getCampaignCategoryMetrics(campaigns);
+    const categoryMap = new Map();
+
+    leads.forEach((lead) => {
+      const name = normalizeLeadCategory(lead.category);
+      categoryMap.set(name, (categoryMap.get(name) || 0) + 1);
+    });
+
+    const categories = [...categoryMap.entries()]
+      .map(([name, count]) => ({
+        name,
+        leads: count,
+        sent: campaignMetrics.get(name)?.sent || 0,
+        replies: campaignMetrics.get(name)?.replies || 0,
+      }))
+      .sort((a, b) => b.leads - a.leads || a.name.localeCompare(b.name, 'pt-BR'));
+
+    const recent = searches.slice(0, 7).map((search) => ({
+      ...search,
+      label: String(search.label || search.query || 'Extração sem nome').trim(),
+      count: getSearchLeadCount(leads, search.id),
+    }));
+
+    return {
+      total: stats.total || Number(leadsCount || 0),
+      phone: stats.phoneCount,
+      web: stats.webCount,
+      instagram: stats.igCount,
+      email: stats.emailCount,
+      categories,
+      recent,
+    };
+  }, [campaigns, leadsCount]);
+
+  const displayedCategories = useMemo(() => {
+    if (data.categories.length <= 5) return data.categories;
+    const top = data.categories.slice(0, 4);
+    const rest = data.categories.slice(4);
+    const other = aggregateCategories(rest);
+    return expandedOther
+      ? [...top, other, ...rest.map((item) => ({ ...item, isOtherMember: true }))]
+      : [...top, other];
+  }, [data.categories, expandedOther]);
+
+  const metricMax = useMemo(() => Object.fromEntries(selectedMetrics.map((id) => [
+    id,
+    Math.max(...displayedCategories.map((category) => metricValue(category, id)), 1),
+  ])), [displayedCategories, selectedMetrics]);
+
+  const maxSearch = Math.max(...data.recent.map((item) => item.count), 1);
+
+  const toggleMetric = (id) => {
+    setSelectedMetrics((current) => {
+      if (current.includes(id)) return current.length === 1 ? current : current.filter((metricId) => metricId !== id);
+      return current.length >= 2 ? [current[1], id] : [...current, id];
+    });
+  };
+
+  const toggleCategory = (category) => {
+    if (category.isOther) {
+      setExpandedOther((value) => !value);
+      return;
+    }
+    setSelectedCategories((current) => (
+      current.includes(category.name)
+        ? current.filter((name) => name !== category.name)
+        : [...current, category.name]
+    ));
+  };
+
+  const categoryClassName = (category) => [
+    category.isOtherMember ? 'is-other-member' : '',
+    selectedCategories.length && !selectedCategories.includes(category.name) && !category.isOther ? 'is-dimmed' : '',
+  ].filter(Boolean).join(' ');
+
+  const renderCategoryValues = (category) => (
+    <span className="overview-values">
+      {selectedMetrics.map((id) => {
+        const metric = metricDefinition(id);
+        return (
+          <span key={id} title={`${metric.label}: ${formatMetric(id, metricValue(category, id))}`}>
+            <i style={{ background: metric.color }} />
+            {formatMetric(id, metricValue(category, id))}
+          </span>
+        );
+      })}
+    </span>
+  );
+
+  const renderCategoryBody = () => {
+    if (!displayedCategories.length) {
+      return (
+        <div className="overview-empty">
+          <b>Nenhum lead na base</b>
+          <span>Faça uma extração para ver as categorias reais aqui.</span>
+        </div>
+      );
+    }
+
+    if (categoryView === 'columns') {
+      return (
+        <div className="overview-columns">
+          {displayedCategories.map((category) => (
+            <button
+              type="button"
+              className={categoryClassName(category)}
+              key={`${category.name}-${category.isOtherMember ? 'member' : 'main'}`}
+              onClick={() => toggleCategory(category)}
+              aria-pressed={!category.isOther && selectedCategories.includes(category.name)}
+              title={category.isOther ? `${expandedOther ? 'Recolher' : 'Ver'} categorias agrupadas` : category.name}
+            >
+              {renderCategoryValues(category)}
+              <span className="overview-column-bars">
+                {selectedMetrics.map((id) => (
+                  <i
+                    key={id}
+                    style={{
+                      height: `${Math.max(6, (metricValue(category, id) / metricMax[id]) * 112)}px`,
+                      background: metricDefinition(id).color,
+                    }}
+                  />
+                ))}
+              </span>
+              <span title={category.name}>{category.isOther ? `Outros ${expandedOther ? '−' : '+'}` : category.name}</span>
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <div className={`overview-bar-list ${categoryView === 'list' ? 'is-list' : ''} ${selectedMetrics.length === 2 ? 'is-comparing' : ''}`}>
+        {displayedCategories.map((category, index) => (
+          <button
+            type="button"
+            className={categoryClassName(category)}
+            key={`${category.name}-${category.isOtherMember ? 'member' : 'main'}`}
+            onClick={() => toggleCategory(category)}
+            aria-pressed={!category.isOther && selectedCategories.includes(category.name)}
+          >
+            {categoryView === 'list' && <em>{category.isOtherMember ? '↳' : `#${index + 1}`}</em>}
+            <span title={category.name}>{category.isOther ? `Outros ${expandedOther ? '−' : '+'}` : category.name}</span>
+            {categoryView === 'bars' && (
+              <span className="overview-compare-bars">
+                {selectedMetrics.map((id) => (
+                  <i key={id} title={`${metricDefinition(id).label}: ${formatMetric(id, metricValue(category, id))}`}>
+                    <i style={{ width: `${(metricValue(category, id) / metricMax[id]) * 100}%`, background: metricDefinition(id).color }} />
+                  </i>
+                ))}
+              </span>
+            )}
+            {renderCategoryValues(category)}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   return (
-    <>
-      <div className="page-header" style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end', gap:16 }}>
-        <div className="info">
-          <h1 style={{ fontSize:20, fontWeight:800, letterSpacing:'-.015em' }}>Centro de Comando</h1>
-          <p style={{ fontSize:12.5, color:'var(--muted)', marginTop:4, maxWidth:'56ch' }}>Visão geral respirável — 1 accent, muito branco, sem cards repetidos. Escolha 1 ação e siga.</p>
+    <div className="overview-view">
+      <section className="overview-hero" aria-label="Resumo da base">
+        <div className="overview-hero-main">
+          <span className="overview-kicker">Total de leads na base</span>
+          <strong>{Number(data.total || 0).toLocaleString('pt-BR')}</strong>
         </div>
-        <button onClick={() => onNavigate('scraper')} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', height:36, padding:'0 14px', borderRadius:8 }}>
-          <PlusCircle size={14} /> Nova Busca
+        <button type="button" className="btn btn-primary overview-new-button" onClick={onNewExtraction}>
+          <Plus size={16} /> Nova Extração
         </button>
-      </div>
+        <div className="overview-coverage">
+          <span><Phone size={17} /><b>{data.phone}</b><small>com telefone</small></span>
+          <span><Globe size={17} /><b>{data.web}</b><small>com site</small></span>
+          <span><Instagram size={17} /><b>{data.instagram}</b><small>com Instagram</small></span>
+          <span><Mail size={17} /><b>{data.email}</b><small>com e-mail</small></span>
+        </div>
+      </section>
 
-      {/* Metric strip — Stripe style, 1 linha */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, overflow:'hidden' }}>
-        <div style={{ padding:'12px 14px', borderRight:'1px solid var(--border)' }}>
-          <div style={{ fontSize:10, fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--muted)', display:'flex', alignItems:'center', gap:6 }}><Users size={12} style={{ color:'var(--accent)' }}/> Total de Leads</div>
-          <div style={{ fontSize:20, fontWeight:800, marginTop:4 }}>{leadsCount.toLocaleString()}</div>
-          <div style={{ fontSize:11, color:'var(--muted)', display:'flex', alignItems:'center', gap:4, marginTop:2 }}><TrendingUp size={11}/> Base sincronizada</div>
-        </div>
-        <div style={{ padding:'12px 14px', borderRight:'1px solid var(--border)' }}>
-          <div style={{ fontSize:10, fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--muted)', display:'flex', alignItems:'center', gap:6 }}>{waStatus==='connected' ? <CheckCircle2 size={12} style={{ color:'var(--success)' }}/> : <AlertCircle size={12} style={{ color:'var(--danger)' }}/>} WhatsApp</div>
-          <div style={{ fontSize:16, fontWeight:700, marginTop:4, color: waStatus==='connected' ? 'var(--success)' : 'var(--danger)', display:'flex', alignItems:'center', gap:6 }}>{waStatus==='connected' ? 'Online' : 'Desconectado'} <span className={`status-dot ${waStatus==='connected'?'green':'red'}`} style={{ width:7, height:7 }}/></div>
-          <div style={{ fontSize:11, color:'var(--muted)', marginTop:2 }}>{waStatus==='connected' ? 'Multi-sessão' : 'Requer QR'}</div>
-        </div>
-        <div style={{ padding:'12px 14px', borderRight:'1px solid var(--border)' }}>
-          <div style={{ fontSize:10, fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--muted)', display:'flex', alignItems:'center', gap:6 }}><Zap size={12} style={{ color:'var(--warn)' }}/> Fila</div>
-          <div style={{ fontSize:16, fontWeight:700, marginTop:4 }}>Pronto</div>
-          <div style={{ fontSize:11, color:'var(--muted)', marginTop:2 }}>Scraper ocioso</div>
-        </div>
-        <div style={{ padding:'12px 14px' }}>
-          <div style={{ fontSize:10, fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--muted)', display:'flex', alignItems:'center', gap:6 }}><Sparkles size={12} style={{ color:'var(--success)' }}/> Ligar primeiro</div>
-          <div style={{ fontSize:20, fontWeight:800, marginTop:4, color:'var(--success)' }}>{scoringCount}</div>
-          <div style={{ fontSize:11, color:'var(--muted)', marginTop:2 }}>Oportunidades</div>
-        </div>
-      </div>
+      <div className="overview-grid">
+        <section className="overview-panel">
+          <div className="overview-panel-head">
+            <h2>Leads por categoria</h2>
+            <div className="overview-segment" aria-label="Visualização de categorias">
+              <button type="button" aria-pressed={categoryView === 'bars'} onClick={() => setCategoryView('bars')} title="Barras"><Rows3 size={15} /></button>
+              <button type="button" aria-pressed={categoryView === 'columns'} onClick={() => setCategoryView('columns')} title="Colunas"><BarChart3 size={15} /></button>
+              <button type="button" aria-pressed={categoryView === 'list'} onClick={() => setCategoryView('list')} title="Lista"><List size={15} /></button>
+            </div>
+          </div>
+          <div className="overview-metrics" aria-label="Selecione até duas métricas para comparar">
+            {METRICS.map(({ id, Icon, title }) => (
+              <button
+                key={id}
+                type="button"
+                className={selectedMetrics.indexOf(id) === 1 ? 'is-secondary' : ''}
+                aria-pressed={selectedMetrics.includes(id)}
+                onClick={() => toggleMetric(id)}
+                title={`${title} — selecione até 2`}
+              >
+                <Icon size={15} />
+              </button>
+            ))}
+            <span className="overview-metric-legend">
+              {selectedMetrics.map((id) => {
+                const metric = metricDefinition(id);
+                return <span key={id}><i style={{ background: metric.color }} />{metric.label}</span>;
+              })}
+            </span>
+          </div>
 
-      {/* 2 primários + lista compacta secundária */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-        <button onClick={() => onNavigate('scraper')} style={{ textAlign:'left', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:16, display:'flex', flexDirection:'column', gap:10, cursor:'pointer' }}>
-          <div style={{ width:32, height:32, borderRadius:7, background:'var(--accent-soft)', color:'var(--accent)', display:'grid', placeItems:'center' }}><Users size={16}/></div>
-          <div><h3 style={{ fontSize:13.5, fontWeight:700 }}>Módulo de Leads</h3><CollapsibleText lines={2} style={{ fontSize:11.5, color:'var(--muted)', marginTop:4, lineHeight:1.5 }}>Busca no Google Maps por nicho e região com enriquecimento automático de e-mails, redes sociais e telefones.</CollapsibleText></div>
-          <span style={{ fontSize:11.5, fontWeight:600, color:'var(--accent)', display:'flex', alignItems:'center', gap:4 }}>Explorar <ArrowRight size={12}/></span>
-        </button>
-        <button onClick={() => onNavigate('scoring')} style={{ textAlign:'left', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:16, display:'flex', flexDirection:'column', gap:10, cursor:'pointer' }}>
-          <div style={{ width:32, height:32, borderRadius:7, background:'rgba(5,150,105,.08)', color:'var(--success)', display:'grid', placeItems:'center' }}><Target size={16}/></div>
-          <div><h3 style={{ fontSize:13.5, fontWeight:700 }}>Quem Ligar Primeiro</h3><CollapsibleText lines={2} style={{ fontSize:11.5, color:'var(--muted)', marginTop:4, lineHeight:1.5 }}>Auditoria técnica dos sites (Pixel, SSL, mobile, velocidade) e geração de pitch de IA pronto para envio. Priorize quem tem maior falha rápida de corrigir.</CollapsibleText></div>
-          <span style={{ fontSize:11.5, fontWeight:600, color:'var(--success)', display:'flex', alignItems:'center', gap:4 }}>Abrir fila <ArrowRight size={12}/></span>
-        </button>
+          {renderCategoryBody()}
+        </section>
+
+        <section className="overview-panel">
+          <div className="overview-panel-head">
+            <h2>Últimas extrações</h2>
+            <div className="overview-segment" aria-label="Visualização de extrações">
+              <button type="button" aria-pressed={searchView === 'bars'} onClick={() => setSearchView('bars')} title="Barras"><BarChart3 size={15} /></button>
+              <button type="button" aria-pressed={searchView === 'table'} onClick={() => setSearchView('table')} title="Tabela"><Rows3 size={15} /></button>
+            </div>
+          </div>
+          {data.recent.length ? (
+            <div className={`overview-search-list ${searchView === 'table' ? 'is-table' : ''}`}>
+              {data.recent.map((item) => (
+                <div key={item.id}>
+                  <span title={item.label}>{item.label}</span>
+                  {searchView === 'bars' && <i><i style={{ width: `${Math.max(2, (item.count / maxSearch) * 100)}%` }} /></i>}
+                  <b>{item.count} <small>leads</small></b>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="overview-empty">
+              <b>Nenhuma extração ainda</b>
+              <span>Importações de planilha não aparecem neste histórico.</span>
+            </div>
+          )}
+        </section>
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-        <button onClick={() => onNavigate('whatsapp')} style={{ textAlign:'left', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'10px 12px', display:'flex', alignItems:'center', gap:10, cursor:'pointer' }}>
-          <div style={{ width:28, height:28, borderRadius:7, background:'var(--surface-2)', display:'grid', placeItems:'center', color:'var(--accent)' }}><MessageSquare size={14}/></div>
-          <div style={{ minWidth:0 }}><div style={{ fontSize:12, fontWeight:600 }}>WhatsApp Omnichannel</div><div style={{ fontSize:11, color:'var(--muted)' }}>Multi-sessão · anti-ban →</div></div>
-        </button>
-        <button onClick={() => onNavigate('dashboard')} style={{ textAlign:'left', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'10px 12px', display:'flex', alignItems:'center', gap:10, cursor:'pointer' }}>
-          <div style={{ width:28, height:28, borderRadius:7, background:'var(--surface-2)', display:'grid', placeItems:'center' }}><LayoutDashboard size={14}/></div>
-          <div style={{ minWidth:0 }}><div style={{ fontSize:12, fontWeight:600 }}>Painel de Análises</div><div style={{ fontSize:11, color:'var(--muted)' }}>Métricas e histórico →</div></div>
-        </button>
-      </div>
-    </>
+    </div>
   );
 }
 
 export default Overview;
-

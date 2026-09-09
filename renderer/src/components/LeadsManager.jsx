@@ -21,7 +21,7 @@ import {
   MapPin
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { dedupeLeads, getLeadIdentity, getLeadStats, readLocalArray } from '../leadData';
+import { dedupeLeads, getLeadIdentity, getLeadStats, normalizeLeadCategory, readLocalArray } from '../leadData';
 import { useNotifications } from './NotificationCenter';
 
 function LeadsManager({ onUpdateLeadsCount, addLog }) {
@@ -145,7 +145,7 @@ function LeadsManager({ onUpdateLeadsCount, addLog }) {
         // Try to guess columns
         const name = r.Nome || r.name || r.NOME || r.Name || `Importado ${i}`;
         const phone = r.Telefone || r.telefone || r.Phone || r.phone || r.WhatsApp || r.whatsapp || null;
-        const category = r.Categoria || r.category || r.Nicho || r.niche || "Importado";
+        const category = normalizeLeadCategory(r.Categoria || r.category || r.Nicho || r.niche);
         const email = r.Email || r.email || r.EMAIL || null;
         const website = r.Site || r.site || r.Website || r.website || null;
         
@@ -433,11 +433,11 @@ function LeadsManager({ onUpdateLeadsCount, addLog }) {
   };
 
   return (
-    <>
+    <div className="base-leads-view">
       <div className="page-header">
         <div className="info">
-          <h1>Módulo de Leads</h1>
-          <p>Configure buscas por nicho, bairro e cidade no Google Maps e filtre os resultados obtidos.</p>
+          <h1>Base de Leads</h1>
+          <p>Filtre, organize e exporte os contatos encontrados nas suas extrações.</p>
         </div>
         <div className="toolbar-actions">
           {activeSearchId !== '__all__' && (
@@ -735,7 +735,7 @@ function LeadsManager({ onUpdateLeadsCount, addLog }) {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 

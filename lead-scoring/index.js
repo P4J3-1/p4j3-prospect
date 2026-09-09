@@ -1,7 +1,7 @@
 const { ProspectingStore } = require("./prospecting-store");
 const { normalizeLead } = require("./normalizer");
 const { analyzeWebsite } = require("./site-crawler");
-const { calculateScore } = require("./scoring-engine");
+const { calculateScore, classify, buildReasons } = require("./scoring-engine");
 const { analyzeWithSalesAI, analyzeBatchWithSalesAI } = require("./ai-sales-analyzer");
 
 class LeadScoringService {
@@ -220,12 +220,17 @@ class LeadScoringService {
   }
 
   _saveAnalyzedLead(normalized, siteAnalysis, baseScore, aiAnalysis, settings) {
-    const finalScore = calculateScore(normalized, siteAnalysis, {
-      scoreContribution: aiContribution(aiAnalysis, baseScore),
-    }, settings);
+    const finalScore = calculateScore(normalized, siteAnalysis, {}, settings);
     if (Number.isFinite(Number(aiAnalysis?.score))) {
-      finalScore.value = Math.round((finalScore.value * 0.7) + (Number(aiAnalysis.score) * 0.3));
-      finalScore.priority = require("./scoring-engine").classify(finalScore.value, settings?.rules?.thresholds);
+      const aiScore = Math.max(0, Math.min(100, Number(aiAnalysis.score)));
+      finalScore.components = {
+        ...finalScore.components,
+        aiSignal: Math.round(aiScore * 0.3),
+        aiScore,
+        baseScore: baseScore.value,
+      };
+      finalScore.value = Math.round((baseScore.value * 0.7) + (aiScore * 0.3));
+      finalScore.priority = classify(finalScore.value, settings?.rules?.thresholds);
       finalScore.classification = {
         ignorar: "Pular por agora",
         baixa: "Depois",
@@ -233,6 +238,12 @@ class LeadScoringService {
         alta: "Ligar primeiro",
       }[finalScore.priority];
       finalScore.worthProspecting = finalScore.value >= Number(settings?.rules?.thresholds?.goodFrom || 60);
+      finalScore.reasons = buildReasons(
+        normalized.company || {},
+        siteAnalysis,
+        finalScore.value,
+        finalScore.sitePains || [],
+      ).slice(0, 6);
     }
     const previous = this.store.get(normalized.id) || {};
     return this.store.upsert({
@@ -250,13 +261,6 @@ class LeadScoringService {
       },
     });
   }
-}
-
-function aiContribution(aiAnalysis, baseScore) {
-  if (!aiAnalysis) return 0;
-  const aiScore = Number(aiAnalysis.score);
-  if (!Number.isFinite(aiScore)) return 0;
-  return Math.max(-8, Math.min(15, Math.round((aiScore - baseScore.value) * 0.2)));
 }
 
 function maskSettings(settings) {

@@ -16,7 +16,7 @@ try {
   }
 } catch { try { document.documentElement.setAttribute('data-theme','light'); } catch{} }
 
-const BUILD_STAMP = '2026-07-10-ui-fix-v9-sigma-app';
+const BUILD_STAMP = '2026-09-08-open-design-lote1-teal';
 
 // Descarta erro antigo em localStorage (ex.: stack de index-7F4QwPd2 / ui-mrfg9u99)
 try {
