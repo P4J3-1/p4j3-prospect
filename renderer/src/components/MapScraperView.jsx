@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   MapPin,
   Mail,
@@ -7,24 +7,20 @@ import {
   Instagram,
   Filter,
   Download,
-  UploadCloud,
   CheckCircle2,
   AlertCircle,
   Loader2,
   Search,
   Users,
   Sparkles,
-  Play,
-  Square,
-  ChevronLeft,
-  ChevronRight,
   ExternalLink,
   Table,
   Map as MapIcon,
-  Copy,
   Check,
   ChevronDown,
-  FileSpreadsheet
+  FileSpreadsheet,
+  X,
+  Navigation
 } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -36,11 +32,31 @@ import {
 } from '../leadData';
 import { useNotifications } from './NotificationCenter';
 
-const STREET_MAP_LAYER = {
-  url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  attribution: '© OpenStreetMap contributors',
-  subdomains: 'abc',
-  maxZoom: 19,
+const BASEMAPS = {
+  padrao: {
+    key: 'padrao',
+    label: 'Padrão',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap contributors',
+    subdomains: 'abc',
+    maxZoom: 19,
+  },
+  satelite: {
+    key: 'satelite',
+    label: 'Satélite',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri, Maxar, Earthstar Geographics',
+    subdomains: 'abc',
+    maxZoom: 18,
+  },
+  terreno: {
+    key: 'terreno',
+    label: 'Terreno',
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap, OpenTopoMap (CC-BY-SA)',
+    subdomains: 'abc',
+    maxZoom: 17,
+  }
 };
 
 const DEFAULT_MAP_CENTER = [-14.235, -51.9253];
@@ -71,8 +87,6 @@ function parseCanonicalGoogleCoordinates(url = '') {
   return isValidCoordinatePair(lat, lng) ? { lat, lng } : null;
 }
 
-// Um pin só é desenhado quando a origem permite tratá-lo como um ponto real.
-// Coordenadas de viewport, cidade/bairro ou sem proveniência ficam fora do mapa.
 function getExactLeadLocation(lead = {}) {
   const canonicalCoords = parseCanonicalGoogleCoordinates(
     lead.googleMapsUrl || lead.mapsUrl || lead.google_maps_url || ''
@@ -92,7 +106,7 @@ function getExactLeadLocation(lead = {}) {
   if (source === 'nominatim' && String(lead.geocodeConfidence || '').toLowerCase() === 'exact') {
     return { lat, lng, source: 'endereço exato' };
   }
-  return null;
+  return { lat, lng, source: 'coordenada' };
 }
 
 function readStoredUserLocation() {
@@ -104,98 +118,117 @@ function readStoredUserLocation() {
       return {
         lat,
         lng,
+        label: saved?.label || 'Sua referência',
         accuracy: Number.isFinite(Number(saved.accuracy)) ? Number(saved.accuracy) : null,
-        timestamp: Number.isFinite(Number(saved.timestamp)) ? Number(saved.timestamp) : null,
       };
     }
   } catch {}
   return null;
 }
 
-// O desenho fica dentro do host do Leaflet. Assim o hover/seleção não sobrescreve
-// o transform usado pelo próprio Leaflet para posicionar o marcador.
-function createPinIcon(hasEmail = false, isSelected = false) {
-  const fill = isSelected ? '#E8B33D' : hasEmail ? '#10A37F' : '#475569';
-  const scale = isSelected ? 1.12 : 1;
-  return L.divIcon({
-    className: '',
-    html: `
-      <div style="
-        width: 36px;
-        height: 44px;
-        filter: drop-shadow(0 3px 5px rgba(15, 23, 42, 0.35));
-        transform: scale(${scale});
-        transform-origin: 50% 100%;
-        transition: transform 160ms ease;
-        pointer-events: none;
-      ">
-        <svg viewBox="0 0 36 44" width="36" height="44" aria-hidden="true">
-          <path d="M18 1C8.61 1 1 8.61 1 18c0 11.8 15.26 24.1 15.91 24.62a1.75 1.75 0 0 0 2.18 0C19.74 42.1 35 29.8 35 18 35 8.61 27.39 1 18 1Z" fill="${fill}" stroke="#FFFFFF" stroke-width="2" />
-          <circle cx="18" cy="18" r="5" fill="#FFFFFF" />
-        </svg>
-      </div>
-    `,
-    iconSize: [36, 44],
-    iconAnchor: [18, 43],
-    popupAnchor: [0, -42],
-  });
+function distM(lat1, lon1, lat2, lon2) {
+  const R = 6371e3;
+  const p1 = (lat1 * Math.PI) / 180;
+  const p2 = (lat2 * Math.PI) / 180;
+  const dp = ((lat2 - lat1) * Math.PI) / 180;
+  const dl = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dp / 2) * Math.sin(dp / 2) +
+    Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function createUserLocationIcon() {
-  return L.divIcon({
-    className: '',
-    html: `
-      <div style="
-        width: 22px;
-        height: 22px;
-        box-sizing: border-box;
-        border-radius: 50%;
-        background: #0F172A;
-        border: 3px solid #FFFFFF;
-        box-shadow: 0 0 0 4px rgba(16, 163, 127, 0.48), 0 3px 9px rgba(15, 23, 42, 0.35);
-        pointer-events: none;
-      "></div>
-    `,
-    iconSize: [22, 22],
-    iconAnchor: [11, 11],
-    popupAnchor: [0, -15],
-  });
+function fmtD(m) {
+  if (!Number.isFinite(m)) return '';
+  if (m < 1000) return Math.round(m) + ' m';
+  return (m / 1000).toFixed(1).replace('.', ',') + ' km';
 }
+
+function norm(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+// Accessors
+function getLeadName(l) { return l.name || l.n || 'Empresa'; }
+function getLeadCat(l) { return l.category || l.cat || 'Geral'; }
+function getLeadPhone(l) { return l.phone || l.tel || ''; }
+function getLeadEmail(l) { return l.email || l.mail || ''; }
+function getLeadWebsite(l) { return l.website || l.site || ''; }
+function getLeadIg(l) { return l.instagram || l.ig || ''; }
+function getLeadBairro(l) { return l.neighborhood || l.bairro || l.hood || ''; }
+function getLeadCity(l) { return l.city || l.cidade || ''; }
+function getLeadState(l) { return l.state || l.uf || ''; }
+function getLeadRating(l) { return l.rating != null ? l.rating : (l.rn != null ? l.rn : 0); }
+function getLeadReviews(l) { return l.reviews != null ? l.reviews : (l.reviewCount != null ? l.reviewCount : (l.rc != null ? l.rc : 0)); }
+function getLeadScore(l) { return l.score != null ? l.score : (l.s != null ? l.s : 0); }
 
 export default function MapScraperView({
   onUpdateLeadsCount,
   addLog,
-  onOpenNewExtraction
+  onOpenNewExtraction,
 }) {
   const { addNotification } = useNotifications();
 
   const [leads, setLeads] = useState(() => normalizeLeadCollection(readLocalArray('sigma_leads')));
   const [searches, setSearches] = useState(() => getExtractionSearches(readLocalArray('sigma_searches')));
-  const [activeSearchId, setActiveSearchId] = useState('__all__');
 
   // Estado de processamento
   const [isProcessing, setIsProcessing] = useState(false);
-  const [activeScrapeId, setActiveScrapeId] = useState(null);
   const [progressPct, setProgressPct] = useState(0);
 
-  // Interface e visualização
-  const [viewMode, setViewMode] = useState('map'); // 'map' | 'table'
+  // Basemap
+  const [baseKey, setBaseKey] = useState(() => {
+    try {
+      const b = localStorage.getItem('sigma_base');
+      if (b && BASEMAPS[b]) return b;
+    } catch {}
+    return 'padrao';
+  });
+
+  // User location
   const [userLocation, setUserLocation] = useState(() => readStoredUserLocation());
-  const [isLocating, setIsLocating] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [copiedId, setCopiedId] = useState(null);
+  const [locAddrQuery, setLocAddrQuery] = useState('');
+  const [locSuggestions, setLocSuggestions] = useState([]);
+  const [isSearchingLoc, setIsSearchingLoc] = useState(false);
+
+  // Popovers & Drawers
+  const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
+  const [isBasePopOpen, setIsBasePopOpen] = useState(false);
+  const [isLocPopOpen, setIsLocPopOpen] = useState(false);
+  const [isListPopOpen, setIsListPopOpen] = useState(false);
+
+  // Filtros do Map Filter Drawer
+  const [filterCat, setFilterCat] = useState('');
+  const [filterScore, setFilterScore] = useState(0);
+  const [filterTel, setFilterTel] = useState('');
+  const [filterOrd, setFilterOrd] = useState('score'); // 'score' | 'rating' | 'name'
+
+  // Filtros do Feed Dock / List Pop
+  const [feedSearch, setFeedSearch] = useState('');
+  const [listNicho, setListNicho] = useState('');
+  const [listUf, setListUf] = useState('');
+  const [listCidade, setListCidade] = useState('');
+  const [listBairro, setListBairro] = useState('');
+
+  // Seleção e foco
   const [selectedLeadId, setSelectedLeadId] = useState(null);
 
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  const tileLayerRef = useRef(null);
   const markersLayerRef = useRef(null);
-  const userLocationMarkerRef = useRef(null);
+  const userMarkerRef = useRef(null);
   const leadCardRefs = useRef({});
+  const markersMapRef = useRef(new Map());
+  const locDebounceRef = useRef(null);
 
   // Sincronizar contagem global
   useEffect(() => {
     localStorage.setItem('sigma_leads', JSON.stringify(leads));
-    onUpdateLeadsCount(dedupeLeads(leads).length);
+    onUpdateLeadsCount?.(dedupeLeads(leads).length);
   }, [leads, onUpdateLeadsCount]);
 
   useEffect(() => {
@@ -215,92 +248,190 @@ export default function MapScraperView({
   useEffect(() => {
     if (window.electronAPI && typeof window.electronAPI.onProgress === 'function') {
       const cleanup = window.electronAPI.onProgress((msg) => {
+        setIsProcessing(true);
         const m = msg.match(/\[(\d+)\/(\d+)\]/);
         if (m) {
           const pct = Math.round((parseInt(m[1]) / parseInt(m[2])) * 100);
           setProgressPct(pct);
+          if (pct >= 100) {
+            setTimeout(() => {
+              setIsProcessing(false);
+              setProgressPct(0);
+            }, 1200);
+          }
         }
       });
       return cleanup;
     }
   }, []);
 
-  // Determinar pesquisa ativa
-  const currentSearchObj = useMemo(() => {
-    if (activeSearchId === '__all__') return null;
-    return searches.find((s) => s.id === activeSearchId);
-  }, [activeSearchId, searches]);
-
-  const activeQueryLabel = useMemo(() => {
-    if (currentSearchObj) {
-      return currentSearchObj.label || currentSearchObj.query || 'Pesquisa Selecionada';
-    }
-    if (searches.length > 0) {
-      return searches[0].label || searches[0].query || 'Todas as Extrações';
-    }
-    return 'Todas as Extrações';
-  }, [currentSearchObj, searches]);
-
-  // Filtragem de leads
+  // Lista de leads visíveis filtrada
   const visibleLeads = useMemo(() => {
-    let list = activeSearchId === '__all__'
-      ? dedupeLeads(leads)
-      : leads.filter((l) => l.searchId === activeSearchId);
+    const nq = norm(feedSearch.trim());
 
-    const st = searchTerm.toLowerCase().trim();
-    if (st) {
-      list = list.filter((l) =>
-        `${l.name} ${l.phone} ${l.email} ${l.address} ${l.category}`
-          .toLowerCase()
-          .includes(st)
-      );
-    }
-    return list;
-  }, [leads, activeSearchId, searchTerm]);
+    return leads.filter((lead) => {
+      const name = getLeadName(lead);
+      const cat = getLeadCat(lead);
+      const tel = getLeadPhone(lead);
+      const mail = getLeadEmail(lead);
+      const hood = getLeadBairro(lead);
+      const city = getLeadCity(lead);
+      const uf = getLeadState(lead);
+      const score = getLeadScore(lead);
 
-  const totalFound = visibleLeads.length;
-  const emailsFound = visibleLeads.filter((l) => l.email).length;
-  const yieldPct = totalFound > 0 ? Math.round((emailsFound / totalFound) * 100) : 0;
+      // Filter Drawer
+      if (filterCat && cat !== filterCat) return false;
+      if (filterScore > 0 && score < filterScore) return false;
+      if (filterTel === 'yes' && !tel) return false;
 
-  // Inicializar Mapa Leaflet
+      // Feed List Pop
+      if (listNicho && cat !== listNicho) return false;
+      if (listUf && uf !== listUf) return false;
+      if (listCidade && city !== listCidade) return false;
+      if (listBairro && hood !== listBairro) return false;
+
+      // Text search
+      if (nq) {
+        const full = norm(`${name} ${cat} ${hood} ${city} ${uf} ${tel} ${mail}`);
+        if (!full.includes(nq)) return false;
+      }
+
+      return true;
+    }).sort((a, b) => {
+      if (filterOrd === 'score') return getLeadScore(b) - getLeadScore(a);
+      if (filterOrd === 'rating') return getLeadRating(b) - getLeadRating(a);
+      if (filterOrd === 'name') return getLeadName(a).localeCompare(getLeadName(b), 'pt-BR');
+      return 0;
+    });
+  }, [
+    leads,
+    feedSearch,
+    filterCat,
+    filterScore,
+    filterTel,
+    filterOrd,
+    listNicho,
+    listUf,
+    listCidade,
+    listBairro,
+  ]);
+
+  // Contagem de filtros ativos do feed
+  const activeListFiltersCount = useMemo(() => {
+    let count = 0;
+    if (feedSearch) count++;
+    if (listNicho) count++;
+    if (listUf) count++;
+    if (listCidade) count++;
+    if (listBairro) count++;
+    return count;
+  }, [feedSearch, listNicho, listUf, listCidade, listBairro]);
+
+  // Opções únicas para filtros
+  const uniqueCategories = useMemo(() => {
+    return [...new Set(leads.map(getLeadCat).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [leads]);
+
+  const uniqueUfs = useMemo(() => {
+    return [...new Set(leads.map(getLeadState).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [leads]);
+
+  const uniqueCities = useMemo(() => {
+    return [...new Set(leads.map(getLeadCity).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [leads]);
+
+  const uniqueBairros = useMemo(() => {
+    return [...new Set(leads.map(getLeadBairro).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [leads]);
+
+  // Inicializar Leaflet Map
   useEffect(() => {
-    if (viewMode !== 'map' || !mapContainerRef.current) return;
+    if (!mapContainerRef.current) return;
 
     if (!mapInstanceRef.current) {
       const map = L.map(mapContainerRef.current, {
         center: userLocation ? [userLocation.lat, userLocation.lng] : DEFAULT_MAP_CENTER,
         zoom: userLocation ? 13 : DEFAULT_MAP_ZOOM,
         zoomControl: false,
-        attributionControl: true
+        attributionControl: true,
       });
 
       L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-      L.tileLayer(STREET_MAP_LAYER.url, {
-        maxZoom: STREET_MAP_LAYER.maxZoom,
-        attribution: STREET_MAP_LAYER.attribution,
-        subdomains: STREET_MAP_LAYER.subdomains,
+      const cfg = BASEMAPS[baseKey] || BASEMAPS.padrao;
+      const tile = L.tileLayer(cfg.url, {
+        maxZoom: cfg.maxZoom,
+        attribution: cfg.attribution,
+        subdomains: cfg.subdomains || 'abc',
       }).addTo(map);
+
+      tileLayerRef.current = tile;
       mapInstanceRef.current = map;
       markersLayerRef.current = L.layerGroup().addTo(map);
 
       setTimeout(() => {
         map.invalidateSize();
-      }, 200);
-    } else {
-      setTimeout(() => {
-        mapInstanceRef.current?.invalidateSize();
-      }, 100);
+      }, 150);
     }
 
     const handleResize = () => mapInstanceRef.current?.invalidateSize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [viewMode]);
+  }, []);
 
-  const markersMapRef = useRef(new Map());
+  // Atualizar camada de basemap quando baseKey mudar
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
 
-  // Renderizar Marcadores no Mapa (Apenas quando a lista de leads ou a pesquisa mudar)
+    const cfg = BASEMAPS[baseKey] || BASEMAPS.padrao;
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+    }
+    const nextTile = L.tileLayer(cfg.url, {
+      maxZoom: cfg.maxZoom,
+      attribution: cfg.attribution,
+      subdomains: cfg.subdomains || 'abc',
+    }).addTo(map);
+
+    tileLayerRef.current = nextTile;
+    try { localStorage.setItem('sigma_base', baseKey); } catch {}
+  }, [baseKey]);
+
+  // Atualizar marcador de referência do usuário
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (userMarkerRef.current) {
+      map.removeLayer(userMarkerRef.current);
+      userMarkerRef.current = null;
+    }
+
+    if (userLocation && isValidCoordinatePair(userLocation.lat, userLocation.lng)) {
+      const marker = L.marker([userLocation.lat, userLocation.lng], {
+        icon: L.divIcon({
+          className: '',
+          html: '<div class="me"></div>',
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+        }),
+        title: userLocation.label || 'Sua referência',
+        zIndexOffset: 600,
+      }).addTo(map);
+
+      marker.bindPopup(`
+        <div style="font-family: var(--font-body); font-size: 12px; padding: 4px;">
+          <b>${userLocation.label || 'Sua referência'}</b>
+          <div style="color: var(--muted); font-size: 11px; margin-top: 2px;">Ponto de referência ativo</div>
+        </div>
+      `);
+
+      userMarkerRef.current = marker;
+    }
+  }, [userLocation]);
+
+  // Renderizar Marcadores de Leads
   useEffect(() => {
     const map = mapInstanceRef.current;
     const markers = markersLayerRef.current;
@@ -310,198 +441,115 @@ export default function MapScraperView({
     markersMapRef.current.clear();
 
     const bounds = [];
-    const leadsToRender = visibleLeads.slice(0, 80);
+    const leadsWithCoords = visibleLeads.slice(0, 100);
 
-    const skippedCount = { current: 0 };
-    leadsToRender.forEach((lead, i) => {
-      const leadKey = lead.id || i;
-      const location = getExactLeadLocation(lead);
-      if (!location) {
-        skippedCount.current += 1;
-        return;
-      }
-      const { lat, lng } = location;
+    leadsWithCoords.forEach((lead, idx) => {
+      const loc = getExactLeadLocation(lead);
+      if (!loc) return;
 
-      const hasEmail = Boolean(lead.email);
-      const marker = L.marker([lat, lng], {
-        icon: createPinIcon(hasEmail, false),
-        title: lead.name || 'Lead',
+      const leadId = lead.id || `lead_${idx}`;
+      const isSel = leadId === selectedLeadId;
+      const name = getLeadName(lead);
+      const cat = getLeadCat(lead);
+      const phone = getLeadPhone(lead);
+      const rating = getLeadRating(lead);
+      const reviews = getLeadReviews(lead);
+      const hood = getLeadBairro(lead) || getLeadCity(lead);
+
+      const marker = L.marker([loc.lat, loc.lng], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div class="lp${isSel ? ' sel' : ''}"></div>`,
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
+          popupAnchor: [0, -15],
+        }),
+        title: name,
       });
 
       marker.bindPopup(`
-        <div style="font-family: system-ui, -apple-system, sans-serif; min-width: 200px; padding: 4px;">
-          <h4 style="margin: 0 0 4px; font-size: 13px; font-weight: 700; color: #0F172A;">${lead.name || 'Empresa'}</h4>
-          <div style="font-size: 11px; color: #64748B; margin-bottom: 6px;">${lead.category || 'Estabelecimento'}</div>
-          ${lead.phone ? `<div style="font-size: 11px; margin-bottom: 2px;"><strong>Telefone:</strong> ${lead.phone}</div>` : ''}
-          ${lead.email ? `<div style="font-size: 11px; margin-bottom: 2px;"><strong>E-mail:</strong> ${lead.email}</div>` : ''}
-          ${lead.address ? `<div style="font-size: 10px; color: #94A3B8; margin-top: 4px;">📍 ${lead.address}</div>` : ''}
-          <div style="font-size: 10px; color: #059669; margin-top: 4px;">✓ Coordenada confirmada · ${location.source}</div>
+        <div class="lp-pop">
+          <b>${name}</b>
+          <div class="m">${hood ? `${hood} · ` : ''}★ ${rating} (${reviews})</div>
+          <div class="m">${phone || cat}</div>
+          <button type="button" data-lead-key="${leadId}">Ver no feed</button>
         </div>
       `);
 
-      marker.on('click', (e) => {
-        L.DomEvent.stopPropagation(e);
-        setSelectedLeadId(leadKey);
-
-        // Focar no mapa suavemente SEM resetar o zoom do usuário
-        map.panTo([lat, lng], { animate: true, duration: 0.4 });
-        marker.openPopup();
-
-        // Rolar card no feed lateral
-        const cardEl = leadCardRefs.current[leadKey];
-        if (cardEl) {
-          cardEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
+      marker.on('click', () => {
+        handleSpotlightLead(lead, leadId, loc.lat, loc.lng, false);
       });
 
       markers.addLayer(marker);
-      markersMapRef.current.set(leadKey, { marker, lead, hasEmail, lat, lng });
-      bounds.push([lat, lng]);
+      markersMapRef.current.set(leadId, { marker, lat: loc.lat, lng: loc.lng, lead });
+      bounds.push([loc.lat, loc.lng]);
     });
 
-    if (skippedCount.current > 0) {
-      console.warn(`[MAP] ${skippedCount.current} leads sem coordenada exata confirmada — pins ocultos`);
-    }
-    if (bounds.length > 0) {
+    if (bounds.length > 0 && !selectedLeadId) {
       try {
-        map.fitBounds(bounds, { padding: [60, 60], maxZoom: 14 });
+        map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
       } catch {}
-    } else if (userLocation) {
-      map.setView([userLocation.lat, userLocation.lng], 13);
-    } else {
-      map.setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
     }
-  }, [visibleLeads]);
+  }, [visibleLeads, selectedLeadId]);
 
-  // Marcador separado para a localização real do usuário, inclusive se foi salva antes.
+  // Efeito para delegar clique do botão "Ver no feed" dentro do popup Leaflet
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (viewMode !== 'map' || !map) return undefined;
+    if (!map) return;
 
-    if (userLocationMarkerRef.current) {
-      userLocationMarkerRef.current.removeFrom(map);
-      userLocationMarkerRef.current = null;
-    }
-    if (!userLocation) return undefined;
-
-    const accuracyText = Number.isFinite(userLocation.accuracy)
-      ? `<div style="font-size: 11px; color: #64748B; margin-top: 4px;">Precisão informada pelo dispositivo: ${Math.round(userLocation.accuracy)} m</div>`
-      : '';
-    const marker = L.marker([userLocation.lat, userLocation.lng], {
-      icon: createUserLocationIcon(),
-      title: 'Sua localização',
-      zIndexOffset: 2000,
-    }).bindPopup(`
-      <div style="font-family: system-ui, -apple-system, sans-serif; min-width: 190px; padding: 4px;">
-        <strong style="font-size: 13px; color: #0F172A;">Sua localização</strong>
-        ${accuracyText}
-      </div>
-    `).addTo(map);
-
-    userLocationMarkerRef.current = marker;
-    return () => {
-      marker.removeFrom(map);
-      if (userLocationMarkerRef.current === marker) userLocationMarkerRef.current = null;
-    };
-  }, [userLocation, viewMode]);
-
-  // Efeito dedicado para atualizar o destaque visual do marcador selecionado
-  useEffect(() => {
-    markersMapRef.current.forEach(({ marker, hasEmail }, key) => {
-      const isSelected = key === selectedLeadId;
-      marker.setIcon(createPinIcon(hasEmail, isSelected));
-      if (isSelected) {
-        marker.setZIndexOffset(1000);
-      } else {
-        marker.setZIndexOffset(0);
+    const handlePopupOpen = (e) => {
+      const el = e.popup?.getElement();
+      if (!el) return;
+      const btn = el.querySelector('[data-lead-key]');
+      if (btn) {
+        btn.onclick = () => {
+          const key = btn.getAttribute('data-lead-key');
+          setSelectedLeadId(key);
+          const cardEl = leadCardRefs.current[key];
+          if (cardEl) {
+            cardEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            cardEl.classList.remove('flash');
+            void cardEl.offsetWidth;
+            cardEl.classList.add('flash');
+          }
+        };
       }
-    });
-  }, [selectedLeadId]);
+    };
 
-  // Ao selecionar um card no feed, centralizar suavemente no marcador correspondente
-  const handleSelectLeadFromFeed = (lead, idx) => {
-    const leadKey = lead.id || idx;
-    setSelectedLeadId(leadKey);
+    map.on('popupopen', handlePopupOpen);
+    return () => map.off('popupopen', handlePopupOpen);
+  }, []);
 
-    const item = markersMapRef.current.get(leadKey);
+  // Spotlight lead (pan map, trigger ping animation, select card)
+  const handleSpotlightLead = useCallback((lead, leadId, lat, lng, pan = true) => {
+    setSelectedLeadId(leadId);
+
     const map = mapInstanceRef.current;
+    const item = markersMapRef.current.get(leadId);
+
     if (item && map) {
-      map.panTo([item.lat, item.lng], { animate: true, duration: 0.4 });
+      if (pan) {
+        map.flyTo([lat || item.lat, lng || item.lng], 15, { duration: 0.8 });
+      }
       item.marker.openPopup();
-    } else {
-      addNotification({
-        type: 'warning',
-        category: 'scraper',
-        title: 'Localização não confirmada',
-        message: 'Este lead não tem coordenada exata. O mapa não cria um pin aproximado.',
-        duration: 3200,
-      });
-    }
-  };
 
-  const handleUseMyLocation = () => {
-    if (!navigator.geolocation) {
-      addNotification({
-        type: 'warning',
-        category: 'system',
-        title: 'Localização indisponível',
-        message: 'Este dispositivo não oferece geolocalização.',
-      });
-      return;
-    }
-
-    setIsLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const lat = Number(position.coords.latitude);
-        const lng = Number(position.coords.longitude);
-        if (!isValidCoordinatePair(lat, lng)) {
-          setIsLocating(false);
-          addNotification({
-            type: 'warning',
-            category: 'system',
-            title: 'Localização inválida',
-            message: 'O dispositivo não retornou coordenadas utilizáveis.',
-          });
-          return;
+      const el = item.marker.getElement();
+      if (el) {
+        const lpDiv = el.querySelector('.lp');
+        if (lpDiv) {
+          lpDiv.classList.remove('ping');
+          void lpDiv.offsetWidth;
+          lpDiv.classList.add('ping');
+          setTimeout(() => lpDiv.classList.remove('ping'), 1300);
         }
+      }
+    }
 
-        const nextLocation = {
-          lat,
-          lng,
-          accuracy: Number.isFinite(Number(position.coords.accuracy)) ? Number(position.coords.accuracy) : null,
-          timestamp: Number(position.timestamp) || Date.now(),
-        };
-        try { localStorage.setItem('sigma_ref', JSON.stringify(nextLocation)); } catch {}
-        setUserLocation(nextLocation);
-        setIsLocating(false);
-        mapInstanceRef.current?.flyTo([lat, lng], 15, { animate: true, duration: 0.7 });
-        addNotification({
-          type: 'success',
-          category: 'system',
-          title: 'Localização definida',
-          message: Number.isFinite(nextLocation.accuracy)
-            ? `Pin posicionado com precisão informada de ${Math.round(nextLocation.accuracy)} m.`
-            : 'Seu pin foi posicionado no mapa.',
-        });
-      },
-      (error) => {
-        const messages = {
-          1: 'Permita o acesso à localização e tente novamente.',
-          2: 'O dispositivo não conseguiu determinar sua posição.',
-          3: 'A localização demorou demais para responder. Tente novamente.',
-        };
-        setIsLocating(false);
-        addNotification({
-          type: 'warning',
-          category: 'system',
-          title: 'Não foi possível localizar',
-          message: messages[error.code] || 'Falha ao obter sua localização.',
-        });
-      },
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
-    );
-  };
+    const cardEl = leadCardRefs.current[leadId];
+    if (cardEl) {
+      cardEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, []);
 
   // Exportar dados
   const handleExport = async (format = 'csv') => {
@@ -520,379 +568,761 @@ export default function MapScraperView({
         type: 'success',
         category: 'scraper',
         title: 'Exportado com Sucesso',
-        message: `Arquivo ${format.toUpperCase()} gerado no seu computador.`
+        message: `leads_${Date.now()}.${format} com ${visibleLeads.length} registros.`
+      });
+    } else {
+      addNotification({
+        type: 'info',
+        category: 'scraper',
+        title: 'Exportação',
+        message: `${visibleLeads.length} leads prontos para envio.`
       });
     }
   };
 
-  const copyText = (text, id) => {
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+  // Preparar WhatsApp
+  const handleWhatsAppLead = (lead) => {
+    const name = getLeadName(lead);
+    const phone = getLeadPhone(lead);
+    if (!phone) {
+      addNotification({
+        type: 'warning',
+        category: 'whatsapp',
+        title: 'Sem Telefone',
+        message: `${name} não possui número de telefone cadastrado.`
+      });
+      return;
+    }
+    try {
+      localStorage.setItem('sigma_wa_pending', JSON.stringify({ name, tel: phone }));
+    } catch {}
     addNotification({
-      type: 'info',
-      category: 'system',
-      title: 'Copiado para Área de Transferência',
-      message: text,
-      duration: 1800
+      type: 'success',
+      category: 'whatsapp',
+      title: 'Conversa Preparada',
+      message: `${name} · ${phone} — continue no módulo WhatsApp.`
     });
   };
 
+  // Usar localização atual
+  const handleUseMyLocation = () => {
+    if (!navigator.geolocation) {
+      addNotification({
+        type: 'warning',
+        category: 'system',
+        title: 'Localização indisponível',
+        message: 'Este dispositivo não oferece geolocalização.',
+      });
+      return;
+    }
+
+    addNotification({
+      type: 'info',
+      category: 'system',
+      title: 'Localizando…',
+      message: 'Aguarde a posição do seu dispositivo.',
+    });
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = Number(position.coords.latitude);
+        const lng = Number(position.coords.longitude);
+        if (!isValidCoordinatePair(lat, lng)) {
+          addNotification({
+            type: 'warning',
+            category: 'system',
+            title: 'Localização inválida',
+            message: 'O dispositivo não retornou coordenadas utilizáveis.',
+          });
+          return;
+        }
+
+        const nextRef = {
+          lat,
+          lng,
+          label: 'Sua posição',
+          accuracy: Number.isFinite(Number(position.coords.accuracy)) ? Number(position.coords.accuracy) : null,
+        };
+        try { localStorage.setItem('sigma_ref', JSON.stringify(nextRef)); } catch {}
+        setUserLocation(nextRef);
+        setIsLocPopOpen(false);
+
+        mapInstanceRef.current?.flyTo([lat, lng], 13, { duration: 0.8 });
+        addNotification({
+          type: 'success',
+          category: 'system',
+          title: 'Localização definida',
+          message: 'Sua posição foi definida como ponto de referência.',
+        });
+      },
+      (error) => {
+        addNotification({
+          type: 'warning',
+          category: 'system',
+          title: 'Localização negada',
+          message: 'Permita o acesso à localização no seu dispositivo.',
+        });
+      },
+      { timeout: 9000 }
+    );
+  };
+
+  // Busca de endereço com Nominatim
+  const handleAddrSearchChange = (text) => {
+    setLocAddrQuery(text);
+    clearTimeout(locDebounceRef.current);
+    if (text.trim().length < 4) {
+      setLocSuggestions([]);
+      return;
+    }
+    locDebounceRef.current = setTimeout(() => {
+      setIsSearchingLoc(true);
+      fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=br&q=${encodeURIComponent(text.trim())}`, {
+        headers: { Accept: 'application/json' }
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          setIsSearchingLoc(false);
+          if (Array.isArray(data)) {
+            setLocSuggestions(
+              data.map((item) => ({
+                label: String(item.display_name).split(',').slice(0, 3).join(','),
+                full: item.display_name,
+                lat: Number(item.lat),
+                lng: Number(item.lon),
+              }))
+            );
+          }
+        })
+        .catch(() => {
+          setIsSearchingLoc(false);
+        });
+    }, 350);
+  };
+
+  const handlePickAddress = (suggestion) => {
+    const nextRef = {
+      lat: suggestion.lat,
+      lng: suggestion.lng,
+      label: suggestion.label,
+    };
+    try { localStorage.setItem('sigma_ref', JSON.stringify(nextRef)); } catch {}
+    setUserLocation(nextRef);
+    setLocSuggestions([]);
+    setLocAddrQuery('');
+    setIsLocPopOpen(false);
+
+    mapInstanceRef.current?.flyTo([suggestion.lat, suggestion.lng], 14, { duration: 0.8 });
+    addNotification({
+      type: 'success',
+      category: 'system',
+      title: 'Localização definida',
+      message: `${suggestion.label} · distâncias em linha reta calculadas.`,
+    });
+  };
+
+  const handleClearLocation = () => {
+    setUserLocation(null);
+    try { localStorage.removeItem('sigma_ref'); } catch {}
+    setIsLocPopOpen(false);
+    addNotification({
+      type: 'info',
+      category: 'system',
+      title: 'Referência removida',
+      message: 'Ponto de referência apagado do mapa.',
+    });
+  };
+
+  const handleCancelExtraction = () => {
+    window.electronAPI?.cancelScrape?.();
+    setIsProcessing(false);
+    setProgressPct(0);
+    addNotification({
+      type: 'info',
+      category: 'scraper',
+      title: 'Extração cancelada',
+      message: 'Nenhum lead parcial foi perdido.'
+    });
+  };
+
+  const handleClearListFilters = () => {
+    setFeedSearch('');
+    setListNicho('');
+    setListUf('');
+    setListCidade('');
+    setListBairro('');
+    setIsListPopOpen(false);
+  };
+
+  const handleResetAllFilters = () => {
+    handleClearListFilters();
+    setFilterCat('');
+    setFilterScore(0);
+    setFilterTel('');
+    setFilterOrd('score');
+    setIsFilterDrawerOpen(false);
+  };
+
   return (
-    <div className="map-scraper-layout">
-      {/* Painel Central (Mapa ou Tabela) */}
-      <div className="map-center-panel">
-        {viewMode === 'map' ? (
-          <div className="map-wrapper">
-            <div
-              id="leafletMap"
-              ref={mapContainerRef}
-              className="map-canvas"
-              role="application"
-              aria-label="Mapa de ruas com leads de coordenada confirmada"
-            />
+    <div className="map-full" data-od-id="scraper-map-full">
+      {/* Map Wrap (Protagonista) */}
+      <div className="map-wrap">
+        <div
+          id="realMap"
+          ref={mapContainerRef}
+          role="application"
+          aria-label="Mapa de leads"
+        />
 
-            {/* Card Flutuante Superior Esquerdo com Seletor de Busca */}
-            <div className="map-floating-scan-card">
-              <div className="scan-card-icon">
-                <MapPin size={16} style={{ color: 'var(--app-primary)' }} />
-              </div>
-              <div className="scan-card-info">
-                <span className="scan-label">PESQUISA ATIVA</span>
-                <div className="scan-dropdown-wrap">
-                  <select
-                    className="scan-select-dropdown"
-                    value={activeSearchId}
-                    onChange={(e) => setActiveSearchId(e.target.value)}
-                  >
-                    <option value="__all__">Todas as Extrações ({dedupeLeads(leads).length} leads)</option>
-                    {searches.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.label || s.query}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className={`scan-status-pill ${isProcessing ? 'active' : 'idle'}`}>
-                <span className="pulsing-dot" />
-                <span>{isProcessing ? `Extraindo... (${progressPct}%)` : 'Pronto'}</span>
-              </div>
-            </div>
+        {/* Barra superior de ações do mapa */}
+        <div className="map-bar">
+          <button
+            type="button"
+            className="btn btn-sm"
+            id="filterBtn"
+            aria-expanded={isFilterDrawerOpen}
+            data-od-id="scraper-filter"
+            onClick={() => {
+              setIsFilterDrawerOpen((v) => !v);
+              setIsBasePopOpen(false);
+              setIsLocPopOpen(false);
+            }}
+          >
+            Filtrar
+          </button>
 
-            {/* Controles Flutuantes Superiores Direitos */}
-            <div className="map-floating-controls">
-              <div className="map-layer-switcher" aria-label="Mapa em modo Ruas" title="Mapa de ruas">
-                <span className="map-layer-btn active" style={{ cursor: 'default' }}>Ruas</span>
-              </div>
-              <button
-                type="button"
-                className={`map-ctrl-btn ${isLocating ? 'active' : ''}`}
-                onClick={handleUseMyLocation}
-                disabled={isLocating}
-                aria-label="Usar minha localização"
-                title="Usar minha localização"
-                style={{ width: 'auto', minWidth: 34, padding: '0 10px', gap: 6, whiteSpace: 'nowrap' }}
-              >
-                {isLocating ? <Loader2 size={16} className="spin-icon" /> : <MapPin size={16} />}
-                <span>{isLocating ? 'Localizando…' : 'Usar minha localização'}</span>
-              </button>
-              <button
-                type="button"
-                className="map-ctrl-btn"
-                onClick={() => setViewMode('table')}
-                title="Alternar para Modo Planilha"
-              >
-                <Table size={16} />
-              </button>
-            </div>
+          <button
+            type="button"
+            className="btn btn-sm"
+            id="exportBtn"
+            data-od-id="scraper-export"
+            onClick={() => handleExport('csv')}
+          >
+            Exportar
+          </button>
 
-            {/* Barra de Telemetria Flutuante Inferior */}
-            <div className="map-floating-telemetry">
-              <div className="telemetry-item">
-                <span className="tel-label">Raio:</span>
-                <span className="tel-val">5 km</span>
-              </div>
-              <div className="telemetry-divider" />
-              <div className="telemetry-item">
-                <span className="tel-label">Termos:</span>
-                <span className="tel-val">'{activeQueryLabel.slice(0, 26)}'</span>
-              </div>
-              <div className="telemetry-divider" />
-              <div className="telemetry-item">
-                <span className="tel-label">Profundidade:</span>
-                <span className="tel-val">Nível 2</span>
-              </div>
-              <div className="telemetry-divider" />
-              <div className="telemetry-item time-remaining">
-                <span className="tel-label">Total Filtrado:</span>
-                <span className="tel-val">{totalFound.toLocaleString()} Leads</span>
-              </div>
-            </div>
+          <button
+            type="button"
+            className="icon-btn"
+            id="locBtn"
+            title="Minha localização"
+            aria-label="Minha localização"
+            aria-expanded={isLocPopOpen}
+            style={{ width: 36, height: 36, minHeight: 36, borderRadius: 10 }}
+            onClick={() => {
+              setIsLocPopOpen((v) => !v);
+              setIsBasePopOpen(false);
+              setIsFilterDrawerOpen(false);
+            }}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#EA4335"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              style={{ width: 16, height: 16 }}
+            >
+              <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+              <circle cx="12" cy="10" r="3" />
+            </svg>
+          </button>
+
+          <button
+            type="button"
+            className="icon-btn"
+            id="baseBtn"
+            aria-expanded={isBasePopOpen}
+            title="Tipo de mapa"
+            aria-label="Tipo de mapa"
+            style={{ width: 36, height: 36, minHeight: 36, borderRadius: 10 }}
+            onClick={() => {
+              setIsBasePopOpen((v) => !v);
+              setIsLocPopOpen(false);
+              setIsFilterDrawerOpen(false);
+            }}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              style={{ width: 16, height: 16 }}
+            >
+              <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+              <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
+              <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Popover de Basemap */}
+        {isBasePopOpen && (
+          <div className="map-pop" id="basePop">
+            <button
+              type="button"
+              className="bopt"
+              aria-pressed={baseKey === 'padrao'}
+              onClick={() => { setBaseKey('padrao'); setIsBasePopOpen(false); }}
+            >
+              Padrão
+            </button>
+            <button
+              type="button"
+              className="bopt"
+              aria-pressed={baseKey === 'satelite'}
+              onClick={() => { setBaseKey('satelite'); setIsBasePopOpen(false); }}
+            >
+              Satélite
+            </button>
+            <button
+              type="button"
+              className="bopt"
+              aria-pressed={baseKey === 'terreno'}
+              onClick={() => { setBaseKey('terreno'); setIsBasePopOpen(false); }}
+            >
+              Terreno
+            </button>
           </div>
-        ) : (
-          /* Visualização Alternativa em Tabela */
-          <div className="table-full-view">
-            <div className="table-top-bar">
-              <div className="table-view-switch">
-                <button className="btn btn-secondary" onClick={() => setViewMode('map')}>
-                  <MapIcon size={15} /> Voltar ao Mapa
-                </button>
-              </div>
-              <div className="table-search-box">
-                <Search size={15} />
+        )}
+
+        {/* Popover de Localização */}
+        {isLocPopOpen && (
+          <div className="map-pop" id="locPop" style={{ minWidth: 260, padding: 12 }}>
+            <div className="loc-title">Minha localização</div>
+            <div className="field" style={{ marginTop: 8 }}>
+              <div className="ac-wrap">
                 <input
-                  type="text"
-                  placeholder="Filtrar por nome, telefone, e-mail..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  id="locAddr"
+                  placeholder="Digite seu endereço…"
+                  autoComplete="off"
+                  aria-label="Digite seu endereço"
+                  style={{ minHeight: 44 }}
+                  value={locAddrQuery}
+                  onChange={(e) => handleAddrSearchChange(e.target.value)}
                 />
+                {locSuggestions.length > 0 && (
+                  <div className="ac-list" role="listbox">
+                    {locSuggestions.map((item, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="ac-item"
+                        onClick={() => handlePickAddress(item)}
+                      >
+                        <span title={item.full}>{item.label}</span>
+                        <span className="t">Endereço</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className="table-wrapper">
-              <table className="leads-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Empresa</th>
-                    <th>Categoria</th>
-                    <th>Telefone</th>
-                    <th>E-mail</th>
-                    <th>Website</th>
-                    <th>Instagram</th>
-                    <th>Endereço</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleLeads.map((item, idx) => (
-                    <tr key={item.id || idx}>
-                      <td>{idx + 1}</td>
-                      <td><strong>{item.name || '-'}</strong></td>
-                      <td><span className="feed-badge feed-badge-gray">{item.category || 'Geral'}</span></td>
-                      <td>{item.phone || '-'}</td>
-                      <td>{item.email || '-'}</td>
-                      <td>
-                        {item.website ? (
-                          <a href={item.website} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--app-primary)' }}>
-                            <Globe size={14} />
-                          </a>
-                        ) : '-'}
-                      </td>
-                      <td>
-                        {item.instagram ? (
-                          <a href={item.instagram} target="_blank" rel="noopener noreferrer" style={{ color: '#E056A0' }}>
-                            <Instagram size={14} />
-                          </a>
-                        ) : '-'}
-                      </td>
-                      <td className="truncate-address">{item.address || '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <button type="button" className="loc-auto" id="locAuto" onClick={handleUseMyLocation}>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#EA4335"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                style={{ width: 17, height: 17 }}
+              >
+                <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+                <circle cx="12" cy="10" r="3" />
+              </svg>
+              Usar minha localização
+            </button>
+
+            {userLocation && (
+              <button
+                type="button"
+                className="loc-clear"
+                id="locClear"
+                style={{ marginTop: 8, width: '100%', minHeight: 36, background: 'transparent', border: 'none', color: 'var(--muted)', fontSize: 12, cursor: 'pointer' }}
+                onClick={handleClearLocation}
+              >
+                Remover referência
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Drawer de Filtros do Mapa */}
+        <div
+          className={`drawer map-filter ${isFilterDrawerOpen ? 'on' : ''}`}
+          id="filterDrawer"
+          data-od-id="scraper-filter-drawer"
+        >
+          <div className="field">
+            <label htmlFor="fCat">Categoria</label>
+            <select
+              id="fCat"
+              className={filterCat ? 'has-value' : ''}
+              value={filterCat}
+              onChange={(e) => setFilterCat(e.target.value)}
+            >
+              <option value="">Todas</option>
+              {uniqueCategories.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field">
+            <label htmlFor="fScore">Score mínimo</label>
+            <select
+              id="fScore"
+              className={filterScore > 0 ? 'has-value' : ''}
+              value={filterScore}
+              onChange={(e) => setFilterScore(Number(e.target.value))}
+            >
+              <option value="0">Qualquer</option>
+              <option value="50">50+</option>
+              <option value="70">70+</option>
+              <option value="85">85+</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label htmlFor="fTel">Telefone</label>
+            <select
+              id="fTel"
+              className={filterTel ? 'has-value' : ''}
+              value={filterTel}
+              onChange={(e) => setFilterTel(e.target.value)}
+            >
+              <option value="">Com e sem</option>
+              <option value="yes">Só com telefone</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label htmlFor="fOrd">Ordenar</label>
+            <select
+              id="fOrd"
+              value={filterOrd}
+              onChange={(e) => setFilterOrd(e.target.value)}
+            >
+              <option value="score">Maior score</option>
+              <option value="rating">Melhor avaliados</option>
+              <option value="name">Nome A–Z</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Barra de Progresso de Extração */}
+        <div
+          className={`map-progress ${isProcessing ? 'on' : ''}`}
+          id="progWrap"
+          data-od-id="scraper-progress"
+        >
+          <div className="progress-track">
+            <div className="progress-fill" id="progFill" style={{ width: `${progressPct}%` }} />
+          </div>
+          <span className="progress-txt" id="progTxt">{progressPct}%</span>
+          <button type="button" className="btn btn-sm" id="cancelBtn" onClick={handleCancelExtraction}>
+            Cancelar
+          </button>
+        </div>
+      </div>
+
+      {/* Feed Dock Lateral Direito */}
+      <aside className="feed-dock" data-od-id="scraper-feed" aria-label="Leads no mapa">
+        <div className="feed-head">
+          <div className="feed-search">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <input
+              id="leadSearch"
+              placeholder="Buscar lead…"
+              aria-label="Buscar leads"
+              autoComplete="off"
+              value={feedSearch}
+              onChange={(e) => setFeedSearch(e.target.value)}
+            />
+          </div>
+
+          <button
+            type="button"
+            className="icon-btn"
+            id="listFilterBtn"
+            aria-expanded={isListPopOpen}
+            title="Filtros da lista"
+            aria-label="Filtros da lista"
+            onClick={() => setIsListPopOpen((v) => !v)}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+            </svg>
+            {activeListFiltersCount > 0 && (
+              <span className="fbadge pop" id="fbadge">
+                {activeListFiltersCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Popover de Filtros da Lista */}
+        {isListPopOpen && (
+          <div className="list-pop open" id="listPop">
+            <div className="field">
+              <label htmlFor="lpNicho">Nicho</label>
+              <select
+                id="lpNicho"
+                value={listNicho}
+                className={listNicho ? 'has-value' : ''}
+                onChange={(e) => setListNicho(e.target.value)}
+              >
+                <option value="">Todos os nichos</option>
+                {uniqueCategories.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="lpUf">Estado</label>
+              <select
+                id="lpUf"
+                value={listUf}
+                className={listUf ? 'has-value' : ''}
+                onChange={(e) => setListUf(e.target.value)}
+              >
+                <option value="">Todos os estados</option>
+                {uniqueUfs.map((u) => (
+                  <option key={u} value={u}>{u}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="lpCidade">Cidade</label>
+              <select
+                id="lpCidade"
+                value={listCidade}
+                className={listCidade ? 'has-value' : ''}
+                onChange={(e) => setListCidade(e.target.value)}
+              >
+                <option value="">Todas as cidades</option>
+                {uniqueCities.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="lpBairro">Bairro</label>
+              <select
+                id="lpBairro"
+                value={listBairro}
+                className={listBairro ? 'has-value' : ''}
+                onChange={(e) => setListBairro(e.target.value)}
+              >
+                <option value="">Todos os bairros</option>
+                {uniqueBairros.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="full">
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                id="lpClear"
+                style={{ width: '100%', justifyContent: 'center' }}
+                onClick={handleClearListFilters}
+              >
+                Limpar filtros
+              </button>
             </div>
           </div>
         )}
-      </div>
 
-      {/* Painel Direito (Métricas e Feed em Tempo Real) */}
-      <aside className="feed-right-panel">
-        <div className="feed-search-row">
-          <label className="feed-search-field">
-            <Search size={15} aria-hidden="true" />
-            <input
-              type="search"
-              placeholder="Buscar lead…"
-              aria-label="Buscar leads"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-            />
-          </label>
-          <button type="button" className="feed-filter-button" title="Filtrar leads" aria-label="Filtrar leads">
-            <Filter size={16} />
-          </button>
-        </div>
-        {/* Cards de Métricas Superiores */}
-        <div className="kpi-cards-grid">
-          <div className="kpi-card">
-            <div className="kpi-header">
-              <span className="kpi-label">LEADS ENCONTRADOS</span>
-              <div className="kpi-icon-wrap blue">
-                <Users size={16} />
-              </div>
-            </div>
-            <div className="kpi-value-row">
-              <span className="kpi-value">{totalFound.toLocaleString()}</span>
-              <span className="kpi-trend">↑12%</span>
-            </div>
-          </div>
-
-          <div className="kpi-card">
-            <div className="kpi-header">
-              <span className="kpi-label">E-MAILS EXTRAÍDOS</span>
-              <div className="kpi-icon-wrap outline-blue">
-                <Mail size={16} />
-              </div>
-            </div>
-            <div className="kpi-value-row">
-              <span className="kpi-value">{emailsFound.toLocaleString()}</span>
-              <span className="kpi-subtext">{yieldPct}% Taxa</span>
-            </div>
-          </div>
+        <div style={{ padding: '8px 12px 0', fontSize: 12, color: 'var(--muted)' }} id="feedCount" role="status">
+          {visibleLeads.length} lead{visibleLeads.length === 1 ? '' : 's'}
         </div>
 
-        {/* Cabeçalho do Feed */}
-        <div className="feed-header-row">
-          <h3>Feed de Extração ao Vivo</h3>
-          <div className="feed-streaming-badge">
-            <span className="feed-streaming-dot" />
-            <span>{isProcessing ? 'TRANSMITINDO' : 'SINCRONIZADO'}</span>
-          </div>
-        </div>
-
-        {/* Lista Rolável de Leads */}
-        <div className="feed-list-scroll">
+        {/* Lista de Lead Cards */}
+        <div className="feed-list" id="feedList">
           {visibleLeads.length === 0 ? (
-            <div className="feed-empty-state" style={{ textAlign:'center', padding:'28px 16px', display:'flex', flexDirection:'column', alignItems:'center', gap:10 }}>
-              <div className="empty-circle-icon" style={{ width:48, height:48, borderRadius:999, background:'var(--surface-2)', border:'1px solid var(--border)', display:'grid', placeItems:'center', color:'var(--muted)' }}>
-                <Search size={22} />
-              </div>
-              <h4 style={{ fontSize:13, fontWeight:700 }}>Nenhum lead nesta seleção</h4>
-              <p style={{ fontSize:11.5, color:'var(--muted)', maxWidth:240, lineHeight:1.5 }}>Comece em 1 clique. A extração enriquece e-mails e telefones automaticamente.</p>
-              <button className="btn btn-primary" style={{ marginTop:4, height:32, padding:'0 12px', borderRadius:8, fontSize:12, fontWeight:600 }} onClick={() => onOpenNewExtraction?.()}>
-                ＋ Nova extração
+            <div className="empty">
+              <div className="e-icon">○</div>
+              <b style={{ color: 'var(--fg)' }}>Nada por aqui</b>
+              <span>Nenhum lead passa nos filtros atuais.</span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                id="feedRestore"
+                onClick={handleResetAllFilters}
+              >
+                Limpar filtros
               </button>
             </div>
           ) : (
-            visibleLeads.map((lead, idx) => {
-              const hasEmail = Boolean(lead.email);
-              const isProcessingItem = isProcessing && idx === 0;
-              const isSelected = selectedLeadId === (lead.id || idx);
+            visibleLeads.map((lead, pos) => {
+              const leadId = lead.id || `lead_${pos}`;
+              const isSelected = selectedLeadId === leadId;
+              const name = getLeadName(lead);
+              const rating = getLeadRating(lead);
+              const reviews = getLeadReviews(lead);
+              const hood = getLeadBairro(lead);
+              const uf = getLeadState(lead);
+              const city = getLeadCity(lead);
+              const phone = getLeadPhone(lead);
+              const ig = getLeadIg(lead);
+              const loc = getExactLeadLocation(lead);
+
+              let straightDist = null;
+              if (userLocation && loc) {
+                const meters = distM(userLocation.lat, userLocation.lng, loc.lat, loc.lng);
+                straightDist = fmtD(meters);
+              }
 
               return (
-                <div
-                  key={lead.id || idx}
-                  ref={(el) => (leadCardRefs.current[lead.id || idx] = el)}
-                  className={`feed-item-card ${isSelected ? 'selected' : ''}`}
-                  onClick={() => handleSelectLeadFromFeed(lead, idx)}
+                <button
+                  key={leadId}
+                  ref={(el) => (leadCardRefs.current[leadId] = el)}
+                  type="button"
+                  className="lead-card"
+                  style={{ animationDelay: `${Math.min(pos * 40, 240)}ms` }}
+                  aria-current={isSelected ? 'true' : 'false'}
+                  data-od-id={`lead-card-${pos}`}
+                  onClick={() => handleSpotlightLead(lead, leadId, loc?.lat, loc?.lng, true)}
                 >
-                  <div className="feed-item-top">
-                    <div className="feed-item-title-group">
-                      {isSelected && <span className="blue-active-dot" />}
-                      <span className="feed-company-name">{lead.name || 'Empresa Local'}</span>
-                    </div>
+                  <div className="lead-top">
+                    <b>{name}</b>
+                    <span className="rate">
+                      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                      </svg>
+                      <b className="rv">{rating}</b>
+                      <span className="rc">({reviews})</span>
+                    </span>
+                  </div>
 
-                    {isProcessingItem ? (
-                      <span className="feed-badge feed-badge-gray">
-                        PROCESSANDO
-                      </span>
-                    ) : hasEmail ? (
-                      <span className="feed-badge feed-badge-green">
-                        VERIFICADO
-                      </span>
-                    ) : (
-                      <span className="feed-badge feed-badge-red">
-                        SEM E-MAIL
+                  <div className="lead-meta">
+                    {hood || city ? `${hood || city}${uf ? ` · ${uf}` : ''}` : getLeadCat(lead)}
+                  </div>
+
+                  <div className="lead-actions">
+                    {phone && (
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title="Enviar mensagem via WhatsApp"
+                        aria-label="Enviar mensagem via WhatsApp"
+                        style={{ width: 32, height: 32, minHeight: 32, borderRadius: 8 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleWhatsAppLead(lead);
+                        }}
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="var(--accent)"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                          style={{ width: 15, height: 15 }}
+                        >
+                          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+                        </svg>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="Ver no mapa"
+                      aria-label="Ver no mapa"
+                      style={{ width: 32, height: 32, minHeight: 32, borderRadius: 8 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSpotlightLead(lead, leadId, loc?.lat, loc?.lng, true);
+                      }}
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                        style={{ width: 15, height: 15 }}
+                      >
+                        <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+                        <circle cx="12" cy="10" r="3" />
+                      </svg>
+                    </button>
+
+                    {ig && (
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title={`Abrir Instagram de ${name}`}
+                        aria-label={`Abrir Instagram de ${name}`}
+                        style={{ width: 32, height: 32, minHeight: 32, borderRadius: 8 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          window.open(`https://instagram.com/${ig.replace('@', '')}`, '_blank', 'noopener');
+                        }}
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="#E056A0"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                          style={{ width: 15, height: 15 }}
+                        >
+                          <rect width="20" height="20" x="2" y="2" rx="5" ry="5" />
+                          <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+                          <line x1="17.5" x2="17.51" y1="6.5" y2="6.5" />
+                        </svg>
+                      </button>
+                    )}
+
+                    {straightDist && (
+                      <span className="dist" title="Distância em linha reta">
+                        {straightDist}
                       </span>
                     )}
                   </div>
-
-                  <div className="feed-item-location">
-                    <MapPin size={12} className="loc-pin-icon" />
-                    <span>{lead.address || lead.category || 'Localização identificada'}</span>
-                  </div>
-
-                  <div className="feed-item-pills-row">
-                    {isProcessingItem ? (
-                      <div className="feed-pill loading-pill">
-                        <Loader2 size={12} className="spin-icon" />
-                        <span>Buscando contatos...</span>
-                      </div>
-                    ) : (
-                      <>
-                        {lead.email && (
-                          <div
-                            className="feed-pill email-pill"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              copyText(lead.email, `email_${lead.id || idx}`);
-                            }}
-                            title="Clique para copiar e-mail"
-                          >
-                            <Mail size={12} />
-                            <span>{lead.email}</span>
-                            {copiedId === `email_${lead.id || idx}` ? <Check size={11} /> : null}
-                          </div>
-                        )}
-
-                        {lead.phone && (
-                          <div
-                            className="feed-pill phone-pill"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              copyText(lead.phone, `phone_${lead.id || idx}`);
-                            }}
-                            title="Clique para copiar telefone"
-                          >
-                            <Phone size={12} />
-                            <span>{lead.phone}</span>
-                            {copiedId === `phone_${lead.id || idx}` ? <Check size={11} /> : null}
-                          </div>
-                        )}
-
-                        {lead.website && (
-                          <a
-                            href={lead.website}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="feed-pill website-pill"
-                            title={lead.website}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <Globe size={12} />
-                          </a>
-                        )}
-
-                        {lead.instagram && (
-                          <a
-                            href={lead.instagram}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="feed-pill ig-pill"
-                            title={lead.instagram}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <Instagram size={12} />
-                          </a>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
+                </button>
               );
             })
           )}
-        </div>
-
-        {/* Ações Inferiores de Exportação */}
-        <div className="feed-bottom-action-group">
-          <button
-            className="btn btn-export-csv"
-            onClick={() => handleExport('csv')}
-            disabled={visibleLeads.length === 0}
-          >
-            Exportar CSV
-          </button>
-          <button
-            className="btn btn-export-xlsx"
-            onClick={() => handleExport('xlsx')}
-            disabled={visibleLeads.length === 0}
-            title="Exportar em formato Excel (.xlsx)"
-          >
-            <FileSpreadsheet size={15} />
-          </button>
         </div>
       </aside>
     </div>

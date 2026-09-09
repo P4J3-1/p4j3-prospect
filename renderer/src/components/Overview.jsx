@@ -1,15 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  BarChart3,
   Globe,
   Instagram,
-  List,
   Mail,
   MessageCircle,
   Percent,
   Phone,
-  Plus,
-  Rows3,
   Send,
   Users,
 } from 'lucide-react';
@@ -29,6 +25,31 @@ const METRICS = [
   { id: 'replies', Icon: MessageCircle, label: 'Respostas', title: 'Respostas recebidas', color: '#f59e0b' },
   { id: 'rate', Icon: Percent, label: 'Taxa de resposta', title: 'Taxa de resposta', color: '#db2777' },
 ];
+
+const BarsIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <line x1="4" y1="7" x2="20" y2="7" /><line x1="4" y1="12" x2="15" y2="12" /><line x1="4" y1="17" x2="20" y2="17" />
+  </svg>
+);
+
+const ColumnsIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <line x1="6" y1="20" x2="6" y2="13" /><line x1="12" y1="20" x2="12" y2="6" /><line x1="18" y1="20" x2="18" y2="10" />
+  </svg>
+);
+
+const ListIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <line x1="9" y1="6" x2="20" y2="6" /><line x1="9" y1="12" x2="20" y2="12" /><line x1="9" y1="18" x2="20" y2="18" />
+    <circle cx="5" cy="6" r="1" fill="currentColor" stroke="none" /><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="5" cy="18" r="1" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+const TableIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <rect x="4" y="4" width="16" height="16" rx="2" /><line x1="4" y1="10" x2="20" y2="10" /><line x1="10" y1="10" x2="10" y2="20" />
+  </svg>
+);
 
 function metricDefinition(id) {
   return METRICS.find((item) => item.id === id) || METRICS[0];
@@ -266,38 +287,38 @@ function Overview({ onNewExtraction, leadsCount = 0 }) {
 
   return (
     <div className="overview-view">
-      <section className="overview-hero" aria-label="Resumo da base">
-        <div className="overview-hero-main">
-          <span className="overview-kicker">Total de leads na base</span>
-          <strong>{Number(data.total || 0).toLocaleString('pt-BR')}</strong>
+      <section className="overview-hero hero-op" aria-label="Resumo da base" data-od-id="dashboard-total">
+        <div className="overview-hero-main hero-main">
+          <div className="overview-kicker lb">Total de leads na base</div>
+          <div className="big">{Number(data.total || 0).toLocaleString('pt-BR')}</div>
         </div>
-        <button type="button" className="btn btn-primary overview-new-button" onClick={onNewExtraction}>
-          <Plus size={16} /> Nova Extração
-        </button>
-        <div className="overview-coverage">
-          <span><Phone size={17} /><b>{data.phone}</b><small>com telefone</small></span>
-          <span><Globe size={17} /><b>{data.web}</b><small>com site</small></span>
-          <span><Instagram size={17} /><b>{data.instagram}</b><small>com Instagram</small></span>
-          <span><Mail size={17} /><b>{data.email}</b><small>com e-mail</small></span>
+        <div className="hero-cta">
+          <button type="button" className="btn btn-primary overview-new-button" onClick={onNewExtraction}>+ Nova Extração</button>
+        </div>
+        <div className="overview-coverage hero-contacts" data-od-id="coverage">
+          <span className="hc" title="Com telefone" aria-label={`${data.phone} com telefone`}><Phone /><b>{data.phone}</b></span>
+          <span className="hc" title="Com site" aria-label={`${data.web} com site`}><Globe /><b>{data.web}</b></span>
+          <span className="hc" title="Com Instagram" aria-label={`${data.instagram} com Instagram`}><Instagram /><b>{data.instagram}</b></span>
+          <span className="hc" title="Com e-mail" aria-label={`${data.email} com e-mail`}><Mail /><b>{data.email}</b></span>
         </div>
       </section>
 
-      <div className="overview-grid">
-        <section className="overview-panel">
-          <div className="overview-panel-head">
-            <h2>Leads por categoria</h2>
-            <div className="overview-segment" aria-label="Visualização de categorias">
-              <button type="button" aria-pressed={categoryView === 'bars'} onClick={() => setCategoryView('bars')} title="Barras"><Rows3 size={15} /></button>
-              <button type="button" aria-pressed={categoryView === 'columns'} onClick={() => setCategoryView('columns')} title="Colunas"><BarChart3 size={15} /></button>
-              <button type="button" aria-pressed={categoryView === 'list'} onClick={() => setCategoryView('list')} title="Lista"><List size={15} /></button>
+      <div className="overview-grid dash-grid">
+        <section className="overview-panel panel" data-od-id="dashboard-categories">
+          <div className="overview-panel-head panel-head">
+            <h3>Leads por categoria</h3>
+            <div className="overview-segment seg" aria-label="Visualização de categorias">
+              <button type="button" aria-pressed={categoryView === 'bars'} onClick={() => setCategoryView('bars')} title="Barras"><BarsIcon /></button>
+              <button type="button" aria-pressed={categoryView === 'columns'} onClick={() => setCategoryView('columns')} title="Colunas"><ColumnsIcon /></button>
+              <button type="button" aria-pressed={categoryView === 'list'} onClick={() => setCategoryView('list')} title="Lista"><ListIcon /></button>
             </div>
           </div>
-          <div className="overview-metrics" aria-label="Selecione até duas métricas para comparar">
+          <div className="overview-metrics mxrow" aria-label="Selecione até duas métricas para comparar">
             {METRICS.map(({ id, Icon, title }) => (
               <button
                 key={id}
                 type="button"
-                className={selectedMetrics.indexOf(id) === 1 ? 'is-secondary' : ''}
+                className={`mx ${selectedMetrics.indexOf(id) === 1 ? 'is-secondary' : ''}`}
                 aria-pressed={selectedMetrics.includes(id)}
                 onClick={() => toggleMetric(id)}
                 title={`${title} — selecione até 2`}
@@ -313,15 +334,15 @@ function Overview({ onNewExtraction, leadsCount = 0 }) {
             </span>
           </div>
 
-          {renderCategoryBody()}
+          <div className="scrollbox">{renderCategoryBody()}</div>
         </section>
 
-        <section className="overview-panel">
-          <div className="overview-panel-head">
-            <h2>Últimas extrações</h2>
-            <div className="overview-segment" aria-label="Visualização de extrações">
-              <button type="button" aria-pressed={searchView === 'bars'} onClick={() => setSearchView('bars')} title="Barras"><BarChart3 size={15} /></button>
-              <button type="button" aria-pressed={searchView === 'table'} onClick={() => setSearchView('table')} title="Tabela"><Rows3 size={15} /></button>
+        <section className="overview-panel panel" data-od-id="dashboard-recent">
+          <div className="overview-panel-head panel-head">
+            <h3>Últimas extrações</h3>
+            <div className="overview-segment seg" aria-label="Visualização de extrações">
+              <button type="button" aria-pressed={searchView === 'bars'} onClick={() => setSearchView('bars')} title="Barras"><BarsIcon /></button>
+              <button type="button" aria-pressed={searchView === 'table'} onClick={() => setSearchView('table')} title="Tabela"><TableIcon /></button>
             </div>
           </div>
           {data.recent.length ? (

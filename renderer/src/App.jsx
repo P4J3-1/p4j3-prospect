@@ -1,13 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  LayoutGrid,
   Search,
-  Sparkles,
-  MessageSquare,
-  Settings,
-  Plus,
-  Compass,
-  TableProperties,
   Menu,
   Minus,
   Square,
@@ -22,7 +15,6 @@ import NewExtractionModal from './components/NewExtractionModal';
 import OnboardingTour from './components/OnboardingTour';
 import { NotificationProvider, useNotifications } from './components/NotificationCenter';
 import UpdateBanner from './components/UpdateBanner';
-import UsagePanel from './components/UsagePanel';
 import { dedupeLeads, normalizeLeadCollection, readLocalArray } from './leadData';
 
 function organizeStoredLeads() {
@@ -96,22 +88,22 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
   ];
   const filtered = q.trim() ? items.filter(i => (`${i.label} ${i.desc}`.toLowerCase().includes(q.toLowerCase()))) : items;
   return (
-    <div className="cmdk-overlay" onClick={() => onClose(false)} style={{ position:'fixed', inset:0, background:'rgba(15,23,42,.32)', display:'grid', placeItems:'start center', paddingTop:'14vh', zIndex:9999 }}>
-      <div onClick={e=>e.stopPropagation()} style={{ width:'min(560px,92vw)', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12, boxShadow:'0 20px 40px rgba(15,23,42,.18)', overflow:'hidden' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', borderBottom:'1px solid var(--border)' }}>
-          <Search size={14} style={{ color:'var(--muted)' }}/>
-          <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar leads, campanhas, ações… (digite para filtrar)" style={{ flex:1, border:'none', outline:'none', fontSize:13, background:'transparent', color:'var(--fg)' }}/>
-          <span style={{ fontSize:10, padding:'3px 6px', borderRadius:4, border:'1px solid var(--border)', color:'var(--muted)', background:'var(--surface-2)' }}>ESC</span>
+    <div className="overlay on" id="cmdkOv" data-od-id="cmdk" onClick={() => onClose(false)}>
+      <div className="cmdk" role="dialog" aria-modal="true" aria-label="Busca global" onClick={e=>e.stopPropagation()}>
+        <div className="cmdk-row">
+          <span aria-hidden="true">⌕</span>
+          <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar leads, campanhas, ações…" />
+          <span className="tag-lote">ESC</span>
         </div>
-        <div style={{ maxHeight:320, overflow:'auto', padding:6 }}>
-          {filtered.length===0 ? <div style={{ padding:'18px 12px', textAlign:'center', color:'var(--muted)', fontSize:12 }}>Nenhum resultado para “{q}”.</div> : filtered.map(it=> (
-            <button key={it.id} onClick={it.action} style={{ width:'100%', display:'flex', alignItems:'center', gap:10, padding:'9px 10px', borderRadius:8, border:'none', background:'transparent', textAlign:'left', cursor:'pointer' }} onMouseEnter={e=> e.currentTarget.style.background='var(--hover-bg)'} onMouseLeave={e=> e.currentTarget.style.background='transparent'}>
-              <span style={{ width:26, height:26, borderRadius:6, background:'var(--accent-soft)', color:'var(--accent)', display:'grid', placeItems:'center', fontSize:12, flexShrink:0 }}>{it.icon}</span>
-              <span style={{ minWidth:0 }}><span style={{ display:'block', fontSize:12.5, fontWeight:600, color:'var(--fg)' }}>{it.label}</span><span style={{ display:'block', fontSize:11, color:'var(--muted)' }}>{it.desc}</span></span><span style={{ marginLeft:'auto', fontSize:11, color:'var(--muted)' }}>↵</span>
+        <div className="cmdk-list">
+          {filtered.length===0 ? <div className="empty"><b>Nenhum resultado</b><span>Tente outro termo.</span></div> : filtered.map(it=> (
+            <button key={it.id} className="cmdk-item" onClick={it.action}>
+              <span className="cmdk-ic">{it.icon}</span>
+              <span style={{ minWidth:0 }}><b style={{ display:'block', fontSize:13 }}>{it.label}</b><span style={{ display:'block', fontSize:12, color:'var(--muted)' }}>{it.desc}</span></span>
             </button>
           ))}
         </div>
-        <div style={{ padding:'7px 10px', borderTop:'1px solid var(--border)', display:'flex', gap:10, fontSize:10.5, color:'var(--muted)', background:'var(--surface-2)' }}>
+        <div className="cmdk-row" style={{ fontSize:11, color:'var(--muted)', gap:12 }}>
           <span><b>↵</b> selecionar</span><span><b>↑↓</b> navegar</span><span><b>⌘K</b> abrir/fechar</span>
         </div>
       </div>
@@ -268,33 +260,35 @@ function AppInner() {
         );
       case 'dashboard':
         return (
-          <section className="prototype-soon-card">
-            <span>Lote 2 · especificado, não construído</span>
-            <h2>Painel de análises</h2>
-            <p>Metric-strip, filtros por categoria e período e exportação CSV/XLSX com progresso e confirmação visual.</p>
+          <section className="soon-card">
+            <div className="eyebrow">Lote 2 · especificado, não construído</div>
+            <h2 style={{ fontSize:20, color:'var(--fg)' }}>Painel de análises</h2>
+            <p>Metric-strip + filtros por categoria e período + exportação CSV/XLSX com progresso e toast.</p>
             <button type="button" className="btn" onClick={() => navigate('overview')}>Voltar à Visão Geral</button>
           </section>
         );
       case 'settings':
         return (
-          <div style={{ padding: '24px', maxWidth: '820px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div>
-              <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: '4px' }}>Configurações do Sigma GMaps</h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>Preferências, uso anônimo e atualizações.</p>
+          <section className="settings-open-design-view">
+            <div className="page-head">
+              <div><h1 style={{ fontSize: 20 }}>Configurações</h1></div>
             </div>
-            <div className="wa-card" style={{ padding: '16px', background: '#FFF', borderRadius: '12px', border: '1px solid var(--border)' }}>
-              <h4 style={{ margin: '0 0 8px' }}>Modo de Interface</h4>
-              <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '0 0 12px' }}>Tema claro (SaaS Clean) com suporte a dark mode.</p>
-              <button className="btn btn-secondary" onClick={() => addNotification({ type: 'info', title: 'Configurações Salvas', message: 'Preferências atualizadas com sucesso.' })}>
-                Salvar Preferências
-              </button>
+            <div className="table-wrap settings-open-design-card">
+              <div className="field">
+                <label htmlFor="themeSel">Modo de interface</label>
+                <select id="themeSel" defaultValue="light">
+                  <option value="light">Claro (padrão travado)</option>
+                  <option value="dark">Escuro (override futuro)</option>
+                </select>
+              </div>
+              <div>
+                <button className="btn btn-primary" onClick={() => addNotification({ type: 'info', title: 'Preferências salvas', message: 'Modo de interface atualizado.' })}>
+                  Salvar preferências
+                </button>
+              </div>
+              <p>Contagem local por instalação. Nenhum dado pessoal sai do app sem endpoint configurado.</p>
             </div>
-            <div className="wa-card" style={{ padding: '16px', background: '#FFF', borderRadius: '12px', border: '1px solid var(--border)' }}>
-              <h4 style={{ margin: '0 0 8px' }}>Uso do App (anônimo)</h4>
-              <p style={{ fontSize: 11, color: 'var(--muted)', margin: '0 0 10px' }}>Contagem local por instalação — sem PII. Ative envio se tiver um endpoint.</p>
-              <UsagePanel />
-            </div>
-          </div>
+          </section>
         );
       default:
         return (
@@ -334,7 +328,7 @@ function AppInner() {
             className="btn-new-extraction"
             onClick={() => setIsNewExtractionOpen(true)}
           >
-            <Plus size={16} strokeWidth={2.5} />
+            <span className="sidebar-plus" aria-hidden="true">+</span>
             <span>Nova Extração</span>
           </button>
         </div>
@@ -346,7 +340,7 @@ function AppInner() {
             className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
             onClick={() => navigate('overview')}
           >
-            <LayoutGrid size={18} />
+            <span className="ico" aria-hidden="true">▦</span>
             <span className="nav-label-text">Visão Geral</span><span className="nav-kbd">1</span>
           </button>
 
@@ -354,7 +348,7 @@ function AppInner() {
             className={`nav-item ${activeTab === 'scraper' ? 'active' : ''}`}
             onClick={() => navigate('scraper')}
           >
-            <Compass size={18} />
+            <span className="ico" aria-hidden="true">◎</span>
             <span className="nav-label-text">Scraper Maps</span><span className="nav-kbd">2</span>
           </button>
 
@@ -362,7 +356,7 @@ function AppInner() {
             className={`nav-item ${activeTab === 'base' ? 'active' : ''}`}
             onClick={() => navigate('base')}
           >
-            <TableProperties size={18} />
+            <span className="ico" aria-hidden="true">▤</span>
             <span className="nav-label-text">Base de Leads</span><span className="nav-kbd">3</span>
           </button>
 
@@ -370,7 +364,7 @@ function AppInner() {
             className={`nav-item ${activeTab === 'scoring' ? 'active' : ''}`}
             onClick={() => navigate('scoring')}
           >
-            <Sparkles size={18} />
+            <span className="ico" aria-hidden="true">✦</span>
             <span className="nav-label-text">Lead Scoring</span><span className="nav-kbd">4</span>
           </button>
 
@@ -378,7 +372,7 @@ function AppInner() {
             className={`nav-item ${activeTab === 'whatsapp' ? 'active' : ''}`}
             onClick={() => navigate('whatsapp')}
           >
-            <MessageSquare size={18} />
+            <span className="ico" aria-hidden="true">◐</span>
             <span className="nav-label-text">WhatsApp</span>
           </button>
 
@@ -386,7 +380,7 @@ function AppInner() {
             className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
             onClick={() => navigate('dashboard')}
           >
-            <LayoutGrid size={18} />
+            <span className="ico" aria-hidden="true">▭</span>
             <span className="nav-label-text">Dashboard</span><span className="nav-lote">Lote 2</span>
           </button>
         </nav>
@@ -394,7 +388,7 @@ function AppInner() {
         {/* Sidebar Footer */}
         <div className="sidebar-footer">
           <button className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}>
-            <Settings size={18} />
+            <span className="ico" aria-hidden="true">⚙</span>
             <span className="nav-label-text">Configurações</span>
           </button>
           <div className="sidebar-release">Lote 1 · Teal · Light</div>

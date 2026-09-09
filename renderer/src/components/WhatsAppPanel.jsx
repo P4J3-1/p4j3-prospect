@@ -1,20 +1,16 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Plug,
   ListTodo,
   Activity,
   MessageSquare,
-  Settings,
   PlusCircle,
   Play,
   Pause,
   Trash2,
   RefreshCw,
-  Send,
   User,
   Users,
-  Paperclip,
   CheckCheck,
   Download,
   FileText,
@@ -32,7 +28,6 @@ import {
   UserPlus,
   Pencil,
   ChevronLeft,
-  ChevronRight,
   Check,
   Clock,
   BarChart3,
@@ -182,6 +177,23 @@ function CampaignNameInput({
   );
 }
 
+const DEMO_QR_CELLS = (() => {
+  let seed = 7;
+  return Array.from({ length: 441 }, (_, index) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    const x = index % 21;
+    const y = Math.floor(index / 21);
+    const finder = (x < 7 && y < 7) || (x > 13 && y < 7) || (x < 7 && y > 13);
+    if (finder) {
+      const localX = x > 13 ? x - 14 : x;
+      const localY = y > 13 ? y - 14 : y;
+      return localX === 0 || localX === 6 || localY === 0 || localY === 6
+        || (localX > 1 && localX < 5 && localY > 1 && localY < 5);
+    }
+    return seed % 100 < 46;
+  });
+})();
+
 function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [waTab, setWaTab] = useState('chats');
   const [connections, setConnections] = useState([]);
@@ -205,6 +217,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [customNumberInput, setCustomNumberInput] = useState('');
   const [customNameInput, setCustomNameInput] = useState('');
   const [recipientSearch, setRecipientSearch] = useState('');
+  const [campaignManualText, setCampaignManualText] = useState('');
+  const [campaignSelectedGroupIds, setCampaignSelectedGroupIds] = useState(() => new Set());
   const [waContacts, setWaContacts] = useState([]);
   const [waGroups, setWaGroups] = useState([]);
   /** Fonte de destinatários: scrape | groups | scoring | whatsapp | manual */
@@ -237,6 +251,14 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [chatPresence, setChatPresence] = useState(null); // { online, lastSeen, statusText }
   const [chatFilter, setChatFilter] = useState('all'); // all | unread | groups | archived
   const [chatSearch, setChatSearch] = useState('');
+  const [isNewChatOpen, setIsNewChatOpen] = useState(false);
+  const [newChatSearch, setNewChatSearch] = useState('');
+  const [newChatBusy, setNewChatBusy] = useState(false);
+  const [newChatError, setNewChatError] = useState('');
+  const [forwardMessage, setForwardMessage] = useState(null);
+  const [forwardSearch, setForwardSearch] = useState('');
+  const [forwardBusy, setForwardBusy] = useState(false);
+  const [forwardError, setForwardError] = useState('');
   const [profilePics, setProfilePics] = useState({}); // jid -> dataUrl
   const [mediaCache, setMediaCache] = useState({}); // messageId -> { status, dataUrl, mimetype, filePath, error }
   const [linkPreviews, setLinkPreviews] = useState({}); // url -> { status, title, description, image, siteName }
@@ -249,6 +271,64 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [labelsByJid, setLabelsByJid] = useState({});
   const [newTagName, setNewTagName] = useState('');
   const [tagPickerOpen, setTagPickerOpen] = useState(false); // seletor individual (só este contato)
+  const [isAcctMenuOpen, setIsAcctMenuOpen] = useState(false);
+  const [isConnMenuOpen, setIsConnMenuOpen] = useState(false);
+  const [isConvMenuOpen, setIsConvMenuOpen] = useState(false);
+  const [isConnectionsModalOpen, setIsConnectionsModalOpen] = useState(false);
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+  const [qrError, setQrError] = useState('');
+  const [isSessionProfileOpen, setIsSessionProfileOpen] = useState(false);
+  const [sessionProfile, setSessionProfile] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('sigma_wa_profile') || 'null');
+      if (saved && typeof saved === 'object') return saved;
+    } catch (_) {}
+    return { name: 'Sigma Comercial', about: 'Prospecção B2B no automático', phone: '' };
+  });
+  const [isFindBarOpen, setIsFindBarOpen] = useState(false);
+  const [inChatSearchTerm, setInChatSearchTerm] = useState('');
+  const [inChatMatchIdx, setInChatMatchIdx] = useState(0);
+  const [statusSearch, setStatusSearch] = useState('');
+  const [statusDraft, setStatusDraft] = useState('');
+  const [localStatuses, setLocalStatuses] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('sigma_wa_status_local') || '[]');
+      return Array.isArray(saved) ? saved : [];
+    } catch (_) {
+      return [];
+    }
+  });
+  const [statusViewerIndex, setStatusViewerIndex] = useState(null);
+  const [chanSearch, setChanSearch] = useState('');
+  const [commSearch, setCommSearch] = useState('');
+
+  const inChatMatches = useMemo(() => {
+    if (!inChatSearchTerm.trim()) return [];
+    const term = inChatSearchTerm.toLowerCase();
+    const matches = [];
+    messages.forEach((m, idx) => {
+      const text = String(
+        m.message?.conversation ||
+        m.message?.extendedTextMessage?.text ||
+        m.text ||
+        ''
+      ).toLowerCase();
+      if (text.includes(term)) {
+        matches.push({ messageId: m.key?.id, index: idx });
+      }
+    });
+    return matches;
+  }, [messages, inChatSearchTerm]);
+
+  const handleFindNext = () => {
+    if (!inChatMatches.length) return;
+    setInChatMatchIdx((prev) => (prev + 1) % inChatMatches.length);
+  };
+
+  const handleFindPrev = () => {
+    if (!inChatMatches.length) return;
+    setInChatMatchIdx((prev) => (prev - 1 + inChatMatches.length) % inChatMatches.length);
+  };
   const chatEndRef = useRef(null);
   const mediaLoadingRef = useRef(new Set());
   const picLoadingRef = useRef(new Set());
@@ -280,6 +360,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   /** Passo do wizard de nova campanha (0-based). */
   const [campaignWizardStep, setCampaignWizardStep] = useState(0);
   const [creatingCampaignBusy, setCreatingCampaignBusy] = useState(false);
+  const [campaignFormError, setCampaignFormError] = useState('');
   const campaignNameInputRef = useRef(null);
   const triggerSnippets = snippets;
   const [savedMedia, setSavedMedia] = useState(() => {
@@ -650,8 +731,12 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
   // WhatsApp Connect Action
   const handleConnect = async () => {
-    if (!window.whatsappAPI) return;
+    if (!window.whatsappAPI) {
+      setQrError('Integração do WhatsApp indisponível. Reinicie o app e tente novamente.');
+      return;
+    }
     try {
+      setQrError('');
       setQrCodeUrl(null);
       setConnectFlowStatus('connecting');
       pendingConnectionIdRef.current = null;
@@ -683,11 +768,13 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           (c) => c.status === 'connected'
         );
         setWaStatus(stillOnline ? 'connected' : 'disconnected');
+        setQrError(res.error || 'Não foi possível preparar o QR Code. Tente novamente.');
         addLog(`[WHATSAPP] Falha ao conectar: ${res.error || 'erro desconhecido'}`);
       }
     } catch (e) {
       setConnectFlowStatus(null);
       setQrCodeUrl(null);
+      setQrError(e?.message || 'Não foi possível preparar o QR Code. Tente novamente.');
       addLog(`[WHATSAPP] Erro ao conectar: ${e.message}`);
     }
   };
@@ -717,6 +804,26 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         console.error(e);
       }
     }
+  };
+
+  const openQrModal = () => {
+    setQrError('');
+    setIsQrModalOpen(true);
+    setIsAcctMenuOpen(false);
+    setIsConnMenuOpen(false);
+    handleConnect();
+  };
+
+  const saveSessionProfile = () => {
+    const next = {
+      name: String(sessionProfile.name || '').trim() || 'Sigma Comercial',
+      about: String(sessionProfile.about || '').trim(),
+      phone: String(sessionProfile.phone || '').trim(),
+    };
+    setSessionProfile(next);
+    try { localStorage.setItem('sigma_wa_profile', JSON.stringify(next)); } catch (_) {}
+    setIsSessionProfileOpen(false);
+    addLog('[WHATSAPP] Perfil da sessão atualizado.');
   };
 
   const handleRemoveConnection = async (id) => {
@@ -1933,8 +2040,10 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     setWaTab('campaigns');
     setEditingCampaignId(null);
     // Prefill com nome genérico (editável). Se apagar, cria com data/hora na hora do create.
-    setNewCampaignName(buildDefaultCampaignName());
+    setNewCampaignName('');
     setCampaignRecipients([]);
+    setCampaignManualText('');
+    setCampaignSelectedGroupIds(new Set());
     setCustomNumberInput('');
     setCustomNameInput('');
     setRecipientSearch('');
@@ -1944,6 +2053,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     setScoringPriorityFilter('all');
     setCampaignWizardStep(0);
     setCreatingCampaignBusy(false);
+    setCampaignFormError('');
     const defaults = connectedSessions.map((c) => c.id);
     const initial =
       campaignConnectionIds.length
@@ -1980,11 +2090,19 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   // Carrega scrapings + grupos do scoring ao abrir passo de destinatários
   useEffect(() => {
     if (!isCreatingCampaign) return;
-    if (campaignWizardStep === 1 || editingCampaignId) {
+    if (campaignWizardStep === 0 || editingCampaignId) {
       loadRecipientSources();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCreatingCampaign, campaignWizardStep, editingCampaignId]);
+
+  useEffect(() => {
+    if (!isCreatingCampaign || editingCampaignId || campaignWizardStep !== 0) return;
+    if (campaignSelectedGroupIds.size || !scoringGroups.length) return;
+    toggleCampaignGroup(scoringGroups[0], true);
+    // toggleCampaignGroup is stable enough for this one-time Open Design default.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCreatingCampaign, editingCampaignId, campaignWizardStep, scoringGroups]);
 
   // Foco no nome ao abrir wizard (só uma vez por abertura)
   useEffect(() => {
@@ -2011,6 +2129,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     setEditingCampaignId(null);
     setCampaignWizardStep(0);
     setCreatingCampaignBusy(false);
+    setCampaignFormError('');
   };
 
   const leaveMonitor = () => {
@@ -2097,7 +2216,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   // Create / update campaign — uma campanha pode ter vários números
   const handleCreateCampaign = async (e) => {
     if (e?.preventDefault) e.preventDefault();
-    if (!window.campaignAPI) return;
+    if (!window.campaignAPI) {
+      setCampaignFormError('Serviço de campanhas indisponível. Reinicie o app e tente novamente.');
+      return;
+    }
+    setCampaignFormError('');
 
     // Nome: digita ou genérico com data/hora
     const baseName = (newCampaignName || '').trim() || buildDefaultCampaignName();
@@ -2120,10 +2243,10 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           loadCampaigns();
           addLog(`[CAMPAIGN] Lista da campanha atualizada (${campaignRecipients.length} destinatários).`);
         } else {
-          alert('Erro ao salvar: ' + (res?.error || 'desconhecido'));
+          setCampaignFormError('Erro ao salvar: ' + (res?.error || 'desconhecido'));
         }
       } catch (err) {
-        alert('Erro: ' + err.message);
+        setCampaignFormError('Erro ao salvar: ' + (err?.message || 'falha inesperada'));
       } finally {
         setCreatingCampaignBusy(false);
       }
@@ -2186,10 +2309,10 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
             : `[CAMPAIGN] Campanha "${baseName}" criada com ${campaignRecipients.length} destinatário(s).`,
         );
       } else {
-        alert(`Erro ao criar campanha: ${res?.error || 'desconhecido'}`);
+        setCampaignFormError(`Erro ao criar campanha: ${res?.error || 'desconhecido'}`);
       }
     } catch (err) {
-      alert('Erro: ' + err.message);
+      setCampaignFormError('Erro ao criar campanha: ' + (err?.message || 'falha inesperada'));
     } finally {
       setCreatingCampaignBusy(false);
     }
@@ -2390,22 +2513,17 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   };
 
   const wizardSteps = [
-    { id: 'basics', label: 'Números', desc: 'Nome e conexões' },
-    { id: 'recipients', label: 'Destinatários', desc: 'Quem vai receber' },
-    { id: 'message', label: 'Mensagem', desc: 'Texto da mensagem' },
-    { id: 'schedule', label: 'Disparo', desc: 'Intervalo e agenda' },
-    { id: 'review', label: 'Revisar', desc: 'Confirmar e criar' },
+    { id: 'recipients', title: 'Quem recebe?' },
+    { id: 'message', title: 'Qual é a mensagem?' },
+    { id: 'schedule', title: 'Quando disparar?' },
+    { id: 'review', title: 'Revisar campanha' },
   ];
 
   const canWizardNext = () => {
     if (editingCampaignId) return true;
-    if (campaignWizardStep === 0) {
-      // O WhatsApp é opcional nesta etapa: sem conexão, a campanha fica em rascunho.
-      return true;
-    }
-    if (campaignWizardStep === 1) return campaignRecipients.length > 0;
-    if (campaignWizardStep === 2) return !!templateText.trim();
-    if (campaignWizardStep === 3) {
+    if (campaignWizardStep === 0) return campaignRecipients.length > 0;
+    if (campaignWizardStep === 1) return !!templateText.trim();
+    if (campaignWizardStep === 2) {
       if (scheduleMode === 'scheduled' && !scheduleStartAt) return false;
       return intervalSec >= 5;
     }
@@ -2414,9 +2532,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
   const goWizardNext = () => {
     if (!canWizardNext()) {
-      if (campaignWizardStep === 1) alert('Adicione ao menos um destinatário.');
-      else if (campaignWizardStep === 2) alert('Escreva a mensagem da campanha.');
-      else if (campaignWizardStep === 3) alert('Confira o intervalo e o agendamento.');
+      if (campaignWizardStep === 0) alert('Adicione ao menos um destinatário.');
+      else if (campaignWizardStep === 1) alert('Escreva a mensagem da campanha.');
+      else if (campaignWizardStep === 2) alert('Confira o intervalo e o agendamento.');
       return;
     }
     // Se o nome estiver vazio ao sair do passo 0, preenche genérico
@@ -2424,6 +2542,49 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       setNewCampaignName(buildDefaultCampaignName());
     }
     setCampaignWizardStep((s) => Math.min(wizardSteps.length - 1, s + 1));
+  };
+
+  const toggleCampaignGroup = async (group, checked) => {
+    const source = `scoring-group:${group.id}`;
+    setCampaignSelectedGroupIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(group.id); else next.delete(group.id);
+      return next;
+    });
+    if (!checked) {
+      setCampaignRecipients((items) => items.filter((item) => item.source !== source));
+      return;
+    }
+    try {
+      const result = await window.leadScoringAPI?.getAll?.({ groupId: group.id });
+      const mapped = (result?.leads || []).map(mapScoringLead).filter((lead) => lead.phone).map((lead) => ({ ...lead, source }));
+      mergeRecipients(mapped);
+    } catch (error) {
+      addLog(`[CAMPAIGN] Erro ao carregar grupo “${group.name}”: ${error.message}`);
+    }
+  };
+
+  const updateCampaignManualText = (value) => {
+    setCampaignManualText(value);
+    const manual = value.split(/\r?\n/).map((line, index) => {
+      const [phonePart, ...nameParts] = line.split(/\s+[—-]\s+/);
+      const phone = String(phonePart || '').trim();
+      if (!phone.replace(/\D/g, '')) return null;
+      return {
+        leadId: `campaign_manual_${index}_${phone.replace(/\D/g, '')}`,
+        name: nameParts.join(' — ').trim(),
+        phone,
+        phoneRaw: phone,
+        isGroup: false,
+        source: 'campaign-manual',
+      };
+    }).filter(Boolean);
+    setCampaignRecipients((items) => {
+      const keep = items.filter((item) => item.source !== 'campaign-manual');
+      const map = new Map(keep.map((item) => [recipientKey(item), item]));
+      manual.forEach((item) => map.set(recipientKey(item), item));
+      return [...map.values()];
+    });
   };
 
   const sourceTabs = [
@@ -3104,10 +3265,12 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const chatCounts = useMemo(() => {
     const unread = chats.filter((c) => getUnread(c) > 0).length;
     const groups = chats.filter((c) => c.isGroup).length;
+    const favorites = chats.filter((c) => c.pinned || c.favorite).length;
     return {
       all: chats.length,
       unread,
       groups,
+      favorites,
       archived: archivedChats.length,
     };
   }, [chats, archivedChats]);
@@ -3117,6 +3280,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     let list = source;
     if (chatFilter === 'unread') list = source.filter((c) => getUnread(c) > 0);
     if (chatFilter === 'groups') list = source.filter((c) => c.isGroup);
+    if (chatFilter === 'favorites') list = source.filter((c) => c.pinned || c.favorite);
     const q = chatSearch.trim().toLowerCase();
     if (q) {
       list = list.filter((c) => {
@@ -3129,6 +3293,126 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     }
     return list;
   }, [chats, archivedChats, chatFilter, chatSearch]);
+
+  const newChatCandidates = useMemo(() => {
+    let storedLeads = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem('sigma_leads') || '[]');
+      storedLeads = Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      storedLeads = [];
+    }
+
+    const seen = new Set();
+    const candidates = [];
+    const append = (item) => {
+      if (!item || item.isGroup || String(item.jid || '').endsWith('@g.us')) return;
+      const rawPhone = String(item.phone || item.phoneNumber || item.number || item.jid || '');
+      const phone = rawPhone.includes('@') ? rawPhone.replace(/@.*$/, '') : rawPhone;
+      const digits = phone.replace(/\D/g, '');
+      const jid = item.jid || (digits ? `${digits}@s.whatsapp.net` : '');
+      const key = digits || jid;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      candidates.push({
+        ...item,
+        jid,
+        phone: digits || phone,
+        phoneJid: item.phoneJid || jid,
+        name: item.name || item.company || item.pushName || phone || 'Contato',
+      });
+    };
+
+    chats.forEach(append);
+    waContacts.forEach(append);
+    scrapeLeadPool.forEach(append);
+    storedLeads.forEach(append);
+
+    const query = newChatSearch.trim().toLowerCase();
+    return candidates
+      .filter((item) => !query || `${item.name} ${item.phone} ${item.jid}`.toLowerCase().includes(query))
+      .slice(0, 100);
+  }, [chats, waContacts, scrapeLeadPool, newChatSearch]);
+
+  const openNewChat = () => {
+    setNewChatSearch('');
+    setNewChatError('');
+    setIsNewChatOpen(true);
+    loadWaDirectory(activeConnectionId).catch(() => {});
+  };
+
+  const handleStartNewChat = async (candidate) => {
+    if (!window.chatAPI?.startChat || newChatBusy) return;
+    setNewChatBusy(true);
+    setNewChatError('');
+    try {
+      const result = await window.chatAPI.startChat(candidate.jid || candidate.phone, candidate.name);
+      if (!result?.success || !result.jid) {
+        setNewChatError(result?.error || 'Não foi possível abrir esta conversa.');
+        return;
+      }
+      const nextChat = {
+        ...candidate,
+        jid: result.jid,
+        phone: result.phone || candidate.phone,
+        phoneJid: result.jid,
+        name: result.name || candidate.name,
+        lastMessage: candidate.lastMessage || '',
+      };
+      setChats((current) => current.some((chat) => chat.jid === nextChat.jid) ? current : [nextChat, ...current]);
+      setIsNewChatOpen(false);
+      await handleSelectChat(nextChat);
+    } catch (error) {
+      setNewChatError(error?.message || 'Não foi possível abrir esta conversa.');
+    } finally {
+      setNewChatBusy(false);
+    }
+  };
+
+  const forwardCandidates = useMemo(() => {
+    const query = forwardSearch.trim().toLowerCase();
+    return chats.filter((chat) => !query || `${chat.name || ''} ${chat.phone || ''} ${chat.jid || ''}`.toLowerCase().includes(query));
+  }, [chats, forwardSearch]);
+
+  const handleForwardMessage = async (candidate) => {
+    if (!forwardMessage || !window.chatAPI?.sendMessage || forwardBusy) return;
+    const text = extractText(unwrapMessage(forwardMessage.message || {})) || forwardMessage.text || '';
+    if (!text) {
+      setForwardError('Este tipo de mensagem ainda não pode ser encaminhado.');
+      return;
+    }
+    setForwardBusy(true);
+    setForwardError('');
+    try {
+      const result = await window.chatAPI.sendMessage(candidate.phoneJid || candidate.jid, { text }, activeConnectionId);
+      if (result?.success === false) throw new Error(result.error || 'Falha ao encaminhar.');
+      setForwardMessage(null);
+      addLog(`[WHATSAPP] Mensagem encaminhada para ${candidate.name || candidate.phone}.`);
+    } catch (error) {
+      setForwardError(error?.message || 'Falha ao encaminhar.');
+    } finally {
+      setForwardBusy(false);
+    }
+  };
+
+  const publishLocalStatus = () => {
+    const text = statusDraft.trim();
+    if (!text) return;
+    const next = [{ id: `local-status-${Date.now()}`, name: 'Você', text, ts: Date.now(), mine: true, seen: true }, ...localStatuses];
+    setLocalStatuses(next);
+    localStorage.setItem('sigma_wa_status_local', JSON.stringify(next));
+    setStatusDraft('');
+    addLog('[WHATSAPP] Atualização de status salva neste app.');
+  };
+
+  const visibleStatuses = useMemo(() => {
+    const query = statusSearch.trim().toLowerCase();
+    return localStatuses
+      .map((status, index) => ({ ...status, sourceIndex: index }))
+      .filter((status) => !query || `${status.name || ''} ${status.text || ''}`.toLowerCase().includes(query));
+  }, [localStatuses, statusSearch]);
+
+  const viewedStatus = statusViewerIndex === null ? null : localStatuses[statusViewerIndex];
 
   // Lazy-load profile pics for visible chat list
   useEffect(() => {
@@ -3440,6 +3724,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
               <button type="button" onClick={() => handleDeleteMessage(m, false)}>
                 <Trash2 size={12} /> Apagar para mim
               </button>
+              <button type="button" onClick={() => { setForwardSearch(''); setForwardError(''); setForwardMessage(m); setMsgMenuId(null); }}>
+                ↗ Encaminhar
+              </button>
               <div className="chat-msg-menu-preview">{previewText.slice(0, 48)}</div>
             </div>
           )}
@@ -3450,50 +3737,411 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
   return (
     <div className="wa-open-design">
-      <header className="wa-open-design-top">
-        <nav className="wa-open-design-tabs" role="tablist" aria-label="WhatsApp">
+      <header className="wa-top wa-open-design-top" data-od-id="wa-header">
+        <nav className="wa-tabs wa-open-design-tabs" role="tablist" aria-label="WhatsApp" data-od-id="wa-tabs">
           <button
             type="button"
             role="tab"
-            aria-selected={waTab === 'chats'}
-            className={waTab === 'chats' ? 'active' : ''}
+            id="waTabConv"
+            aria-selected={waTab === 'chats' || waTab === 'campaigns'}
+            className={waTab === 'chats' || waTab === 'campaigns' ? 'active' : ''}
+            data-od-id="wa-tab-conversas"
             onClick={() => setWaTab('chats')}
           >
             <MessageSquare size={14} /> Conversas
           </button>
+          <button
+            type="button"
+            role="tab"
+            id="waTabStatus"
+            aria-selected={waTab === 'status'}
+            className={waTab === 'status' ? 'active' : ''}
+            data-od-id="wa-tab-status"
+            onClick={() => setWaTab('status')}
+          >
+            Status
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="waTabChan"
+            aria-selected={waTab === 'channels'}
+            className={waTab === 'channels' ? 'active' : ''}
+            data-od-id="wa-tab-canais"
+            onClick={() => setWaTab('channels')}
+          >
+            Canais
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="waTabComm"
+            aria-selected={waTab === 'communities'}
+            className={waTab === 'communities' ? 'active' : ''}
+            data-od-id="wa-tab-comunidades"
+            onClick={() => setWaTab('communities')}
+          >
+            Comunidades
+          </button>
         </nav>
-        <div className="wa-open-design-actions">
-          <label className="wa-account-select" title="Alternar número conectado">
-            <span className={`wa-presence-dot ${waStatus === 'connected' ? 'on' : 'off'}`} aria-hidden="true" />
-            <select
-              aria-label="Número ativo"
-              value={activeConnectionId || ''}
-              onChange={(event) => event.target.value && handleSwitchConnection(event.target.value)}
+        <div className="wa-top-actions wa-open-design-actions">
+          <div className="wa-menuwrap" style={{ position: 'relative' }}>
+            <button
+              type="button"
+              className={`wa-acctbtn ${waStatus === 'connected' ? '' : 'off'}`}
+              id="waAcctBtn"
+              aria-haspopup="true"
+              aria-expanded={isAcctMenuOpen}
+              data-od-id="wa-account-selector"
+              title="Alternar número conectado"
+              onClick={() => setIsAcctMenuOpen((v) => !v)}
             >
-              {connections.length === 0 && <option value="">Nenhum número</option>}
-              {connections.map((connection) => (
-                <option key={connection.id} value={connection.id}>
-                  {connection.phoneNumber || connection.id}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="button" className="wa-session-button" onClick={() => setWaTab('connect')}>
-            <Plug size={13} /> Sessão
+              <span className="dot" id="waAcctDot" aria-hidden="true" />
+              <span id="waConnTxt">
+                {connections.find((c) => c.id === activeConnectionId)?.phoneNumber || connections[0]?.phoneNumber || '+55 21 90000-0001'}
+              </span>
+              <span className="caret" aria-hidden="true">▾</span>
+            </button>
+            {isAcctMenuOpen && (
+              <div
+                className="wa-menu"
+                id="waAcctMenu"
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  left: 0,
+                  zIndex: 100,
+                  background: '#fff',
+                  border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  padding: 4,
+                  minWidth: 200,
+                  boxShadow: 'var(--elev-raised)'
+                }}
+              >
+                {connections.map((connection) => (
+                  <button
+                    key={connection.id}
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    style={{ width: '100%', justifyContent: 'flex-start', padding: '8px 12px' }}
+                    onClick={() => {
+                      handleSwitchConnection(connection.id);
+                      setIsAcctMenuOpen(false);
+                    }}
+                  >
+                    {connection.phoneNumber || connection.id}
+                  </button>
+                ))}
+                {connections.length > 0 && <div className="wa-menu-sep" />}
+                <button type="button" onClick={openQrModal}>+ Adicionar WhatsApp</button>
+                <button type="button" onClick={() => { setIsConnectionsModalOpen(true); setIsAcctMenuOpen(false); }}>Gerenciar conexões</button>
+              </div>
+            )}
+          </div>
+
+          <div className="wa-menuwrap" style={{ position: 'relative' }}>
+            <button
+              type="button"
+              className="wa-connbtn"
+              id="waConnBtn"
+              aria-haspopup="true"
+              aria-expanded={isConnMenuOpen}
+              data-od-id="wa-session-menu"
+              onClick={() => setIsConnMenuOpen((v) => !v)}
+            >
+              Sessão
+            </button>
+            {isConnMenuOpen && (
+              <div
+                className="wa-menu"
+                id="waConnMenu"
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  left: 0,
+                  zIndex: 100,
+                  background: '#fff',
+                  border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  padding: 4,
+                  minWidth: 180,
+                  boxShadow: 'var(--elev-raised)'
+                }}
+              >
+                <button
+                  type="button"
+                  id="waReconnect"
+                  className="btn btn-sm btn-ghost"
+                  style={{ width: '100%', justifyContent: 'flex-start', padding: '8px 12px' }}
+                  onClick={() => {
+                    openQrModal();
+                  }}
+                >
+                  Trocar número (QR)
+                </button>
+                <button
+                  type="button"
+                  id="waDisconnect"
+                  className="btn btn-sm btn-ghost danger"
+                  style={{ width: '100%', justifyContent: 'flex-start', padding: '8px 12px', color: 'var(--danger)' }}
+                  onClick={() => {
+                    handleDisconnect();
+                    setIsConnMenuOpen(false);
+                  }}
+                >
+                  Desconectar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const activePhone = connections.find((connection) => connection.id === activeConnectionId)?.phoneNumber || '';
+                    setSessionProfile((profile) => ({ ...profile, phone: profile.phone || activePhone }));
+                    setIsSessionProfileOpen(true);
+                    setIsConnMenuOpen(false);
+                  }}
+                >
+                  Meu perfil
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWaTab('settings');
+                    setIsConnMenuOpen(false);
+                  }}
+                >
+                  Configurações
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWaTab('chats');
+                    setShowTriggersModal(true);
+                    setIsConnMenuOpen(false);
+                  }}
+                >
+                  Gerenciar gatilhos
+                </button>
+              </div>
+            )}
+          </div>
+          <span className="wa-sigma-sep wa-sigma-separator" aria-hidden="true" />
+          <span className="wa-sigma-tag wa-sigma-label" aria-hidden="true">Sigma</span>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            id="waSigmaCamps"
+            data-od-id="wa-sigma-campaigns"
+            onClick={() => setWaTab('campaigns')}
+          >
+            Campanhas {campaigns.length > 0 && <b id="waCampCount" style={{ marginLeft: 4 }}>{campaigns.length}</b>}
           </button>
-          <button type="button" className="wa-icon-button" aria-label="Configurações do WhatsApp" onClick={() => setWaTab('settings')}>
-            <Settings size={15} />
-          </button>
-          <span className="wa-sigma-separator" aria-hidden="true" />
-          <span className="wa-sigma-label">Sigma</span>
-          <button type="button" className="btn btn-ghost btn-compact" onClick={() => setWaTab('campaigns')}>
-            Campanhas {campaigns.length > 0 && <b>{campaigns.length}</b>}
-          </button>
-          <button type="button" className="btn btn-primary btn-compact" onClick={openCreateCampaign}>
-            <PlusCircle size={14} /> Nova campanha
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            id="waNewCamp"
+            data-od-id="wa-new-campaign"
+            onClick={openCreateCampaign}
+          >
+            + Nova campanha
           </button>
         </div>
       </header>
+
+      {isNewChatOpen && (
+        <div
+          className="overlay on"
+          id="chatOv"
+          data-od-id="modal-nova-conversa"
+          onClick={() => setIsNewChatOpen(false)}
+        >
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="chatTitle"
+            style={{ maxWidth: 440 }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-head">
+              <div className="eyebrow">Nova conversa</div>
+              <h2 id="chatTitle">Escolher contato</h2>
+            </div>
+            <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+              <div className="field">
+                <label htmlFor="chatSearch">Buscar lead com telefone</label>
+                <input
+                  id="chatSearch"
+                  placeholder="Nome ou telefone…"
+                  autoComplete="off"
+                  value={newChatSearch}
+                  onChange={(event) => setNewChatSearch(event.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="wa-newchat" id="chatList" role="listbox" aria-label="Contatos">
+                {newChatCandidates.length === 0 ? (
+                  <div className="empty">
+                    <b>Nenhum contato encontrado</b>
+                    <span>Importe leads com telefone ou sincronize o WhatsApp.</span>
+                  </div>
+                ) : newChatCandidates.map((candidate) => (
+                  <button
+                    key={candidate.jid || candidate.phone}
+                    type="button"
+                    role="option"
+                    disabled={newChatBusy}
+                    onClick={() => handleStartNewChat(candidate)}
+                  >
+                    {renderAvatar(candidate.jid, candidate.name, 40, false)}
+                    <span style={{ minWidth: 0 }}>
+                      <b>{candidate.name}</b>
+                      <span>{candidate.phone || candidate.jid}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {newChatError && <div className="field-err" style={{ display: 'block' }}>{newChatError}</div>}
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="btn btn-ghost" onClick={() => setIsNewChatOpen(false)}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isQrModalOpen && (
+        <div className="overlay on" id="qrOv" data-od-id="modal-qr" onClick={() => setIsQrModalOpen(false)}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="qrTitle" style={{ maxWidth: 360 }} onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div className="eyebrow">Parear sessão</div>
+              <h2 id="qrTitle">Ler com o celular</h2>
+            </div>
+            <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+              <div className="wa-qr" aria-hidden={!qrCodeUrl}>
+                {qrCodeUrl ? (
+                  <img src={qrCodeUrl} alt="QR Code do WhatsApp" />
+                ) : DEMO_QR_CELLS.map((isOn, index) => (
+                  <i key={index} className={isOn ? 'on' : ''} />
+                ))}
+              </div>
+              <p className="wa-hint" style={{ textAlign: 'center' }}>
+                Abra o WhatsApp no celular › Aparelhos conectados › Conectar aparelho.
+                {connectFlowStatus === 'connecting' ? ' Preparando QR…' : ''}
+              </p>
+              {qrError && <div className="field-err" role="alert" style={{ display: 'block', textAlign: 'center' }}>{qrError}</div>}
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="btn btn-ghost" onClick={() => setIsQrModalOpen(false)}>Cancelar</button>
+              <span style={{ flex: 1 }} />
+              <button type="button" className="btn btn-primary" onClick={handleConnect}>Atualizar QR</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isSessionProfileOpen && (
+        <div className="overlay on" id="profileOv" data-od-id="modal-perfil" onClick={() => setIsSessionProfileOpen(false)}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="profileTitle" style={{ maxWidth: 440 }} onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div className="eyebrow">Sessão</div>
+              <h2 id="profileTitle">Meu perfil</h2>
+            </div>
+            <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+              <div className="field"><label htmlFor="profileName">Nome</label><input id="profileName" value={sessionProfile.name} onChange={(event) => setSessionProfile((profile) => ({ ...profile, name: event.target.value }))} /></div>
+              <div className="field"><label htmlFor="profileAbout">Recado</label><input id="profileAbout" value={sessionProfile.about} onChange={(event) => setSessionProfile((profile) => ({ ...profile, about: event.target.value }))} /></div>
+              <div className="field"><label htmlFor="profilePhone">Telefone</label><input id="profilePhone" value={sessionProfile.phone} onChange={(event) => setSessionProfile((profile) => ({ ...profile, phone: event.target.value }))} /></div>
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="btn btn-ghost" onClick={() => setIsSessionProfileOpen(false)}>Cancelar</button>
+              <button type="button" className="btn btn-primary" onClick={saveSessionProfile}>Salvar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isConnectionsModalOpen && (
+        <div className="overlay on" id="connOv" data-od-id="modal-conexoes" onClick={() => setIsConnectionsModalOpen(false)}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="connTitle" style={{ maxWidth: 440 }} onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div className="eyebrow">Sessões</div>
+              <h2 id="connTitle">Conexões WhatsApp</h2>
+              <p title="Esta conexão utiliza Baileys para comunicação com o WhatsApp.">Conexão via Baileys</p>
+            </div>
+            <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+              <div className="connection-modal-list">
+                {connections.length === 0 ? (
+                  <div className="empty"><b>Nenhuma conexão</b><span>Adicione um WhatsApp para começar.</span></div>
+                ) : connections.map((connection) => (
+                  <div key={connection.id} className={`acct-row ${connection.status === 'connected' ? '' : 'off'}`}>
+                    <span className="dot" aria-hidden="true" />
+                    <b>{connection.phoneNumber || connection.id}{connection.id === activeConnectionId ? ' · ativo' : ''}</b>
+                    {connection.id !== activeConnectionId && <button type="button" onClick={() => handleSwitchConnection(connection.id)}>Ativar</button>}
+                    <button type="button" onClick={() => handleRemoveConnection(connection.id)}>Remover</button>
+                  </div>
+                ))}
+              </div>
+              <button type="button" className="btn btn-sm" onClick={() => { setIsConnectionsModalOpen(false); openQrModal(); }}>+ Adicionar WhatsApp</button>
+            </div>
+            <div className="modal-foot"><button type="button" className="btn btn-ghost" onClick={() => setIsConnectionsModalOpen(false)}>Fechar</button></div>
+          </div>
+        </div>
+      )}
+
+      {forwardMessage && (
+        <div className="overlay on" id="fwdOv" data-od-id="modal-encaminhar" onClick={() => setForwardMessage(null)}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="fwdTitle" style={{ maxWidth: 440 }} onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div className="eyebrow">Encaminhar</div>
+              <h2 id="fwdTitle">Escolher destino</h2>
+            </div>
+            <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+              <div className="field"><label htmlFor="fwdSearch">Buscar conversa</label><input id="fwdSearch" placeholder="Nome ou telefone…" value={forwardSearch} onChange={(event) => setForwardSearch(event.target.value)} autoFocus /></div>
+              <div className="wa-newchat" role="listbox" aria-label="Conversas">
+                {forwardCandidates.length === 0 ? (
+                  <div className="empty"><b>Nada por aqui</b><span>Nenhuma conversa encontrada.</span></div>
+                ) : forwardCandidates.map((candidate) => (
+                  <button key={candidate.jid} type="button" role="option" disabled={forwardBusy} onClick={() => handleForwardMessage(candidate)}>
+                    {renderAvatar(candidate.jid, candidate.name || candidate.phone, 40, !!candidate.isGroup)}
+                    <span style={{ minWidth: 0 }}><b>{candidate.name || candidate.phone}</b><span>{candidate.phone || candidate.jid}</span></span>
+                  </button>
+                ))}
+              </div>
+              {forwardError && <div className="field-err" style={{ display: 'block' }}>{forwardError}</div>}
+            </div>
+            <div className="modal-foot"><button type="button" className="btn btn-ghost" onClick={() => setForwardMessage(null)}>Cancelar</button></div>
+          </div>
+        </div>
+      )}
+
+      {viewedStatus && (
+        <div className="overlay on" id="statusOv" data-od-id="modal-status" onClick={() => setStatusViewerIndex(null)}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="statusName" style={{ maxWidth: 400 }} onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div className="eyebrow">Status</div>
+              <h2 id="statusName">{viewedStatus.name || 'Você'}</h2>
+            </div>
+            <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+              <div className="wa-viewer">
+                <div className="wa-viewerbar" aria-hidden="true">
+                  {localStatuses.map((status, index) => <i key={status.id} className={index <= statusViewerIndex ? 'on' : ''} />)}
+                </div>
+                <div className="wa-viewercard">
+                  <div className="wa-statusimg wa-statusart" aria-hidden="true"><span>{(viewedStatus.name || 'V').charAt(0).toUpperCase()}</span></div>
+                  <b>{viewedStatus.text}</b>
+                  <span>{new Date(viewedStatus.ts).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span>
+                </div>
+                <div className="wa-viewer-nav">
+                  <button type="button" className="btn btn-sm" disabled={statusViewerIndex >= localStatuses.length - 1} onClick={() => setStatusViewerIndex((index) => Math.min(localStatuses.length - 1, index + 1))}>‹ Anterior</button>
+                  <span style={{ flex: 1 }} />
+                  <button type="button" className="btn btn-sm" disabled={statusViewerIndex <= 0} onClick={() => setStatusViewerIndex((index) => Math.max(0, index - 1))}>Próximo ›</button>
+                </div>
+              </div>
+            </div>
+            <div className="modal-foot"><button type="button" className="btn btn-ghost" onClick={() => setStatusViewerIndex(null)}>Fechar</button></div>
+          </div>
+        </div>
+      )}
 
       {/* Main Panel Content */}
       <div className="wa-open-design-body">
@@ -3613,7 +4261,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
         {/* CAMPAIGNS TAB */}
         {waTab === 'campaigns' && (
-          <div className="sigma-campaign-overlay" role="presentation" onClick={() => setWaTab('chats')}>
+          <div className={`sigma-campaign-overlay${isCreatingCampaign ? ' wizard-active' : ''}`} role="presentation" onClick={() => setWaTab('chats')}>
           <section className="sigma-campaign-dialog" role="dialog" aria-modal="true" aria-labelledby="sigma-campaign-title" onClick={(event) => event.stopPropagation()}>
           <div className="camp-hub">
             <div className="camp-hub-hero camp-hub-hero-compact">
@@ -3836,43 +4484,15 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   onMouseDown={(e) => e.stopPropagation()}
                 >
                   <div className="camp-wizard-header">
-                    <div>
-                      <h3 id="camp-wizard-title" style={{ margin: 0 }}>
-                        {editingCampaignId ? 'Editar lista da campanha' : 'Nova campanha'}
-                      </h3>
-                      <p className="camp-wizard-sub">
-                        {editingCampaignId
-                          ? 'Atualize os destinatários desta campanha.'
-                          : `Passo ${campaignWizardStep + 1} de ${wizardSteps.length} — ${wizardSteps[campaignWizardStep]?.desc}`}
-                      </p>
-                    </div>
-                    <button type="button" className="camp-wizard-close" onClick={closeCampaignModal} aria-label="Fechar">
-                      <X size={18} />
-                    </button>
+                    {!editingCampaignId && <div className="eyebrow">Etapa {campaignWizardStep + 1} de {wizardSteps.length}</div>}
+                    <h3 id="camp-wizard-title" style={{ margin: 0 }}>
+                      {editingCampaignId ? 'Editar lista da campanha' : wizardSteps[campaignWizardStep]?.title}
+                    </h3>
                   </div>
 
                   {!editingCampaignId && (
-                    <div className="camp-wizard-steps">
-                      {wizardSteps.map((step, idx) => {
-                        const done = idx < campaignWizardStep;
-                        const act = idx === campaignWizardStep;
-                        return (
-                          <button
-                            key={step.id}
-                            type="button"
-                            tabIndex={-1}
-                            className={`camp-wizard-step ${act ? 'act' : ''} ${done ? 'done' : ''}`}
-                            onClick={() => {
-                              if (idx <= campaignWizardStep) setCampaignWizardStep(idx);
-                            }}
-                          >
-                            <span className="camp-wizard-step-num">
-                              {done ? <Check size={12} /> : idx + 1}
-                            </span>
-                            <span className="camp-wizard-step-label">{step.label}</span>
-                          </button>
-                        );
-                      })}
+                    <div className="camp-wizard-steps steps" aria-hidden="true">
+                      {wizardSteps.map((step, idx) => <i key={step.id} className={idx <= campaignWizardStep ? 'on' : ''} />)}
                     </div>
                   )}
 
@@ -3893,86 +4513,51 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                       </div>
                     )}
 
-                    {/* STEP 0: name + numbers */}
+                    {/* STEP 0: recipients */}
                     {!editingCampaignId && campaignWizardStep === 0 && (
                       <div className="camp-wizard-pane">
-                        <div className="camp-field">
+                        <div className="field">
                           <label htmlFor="camp-name-input">Nome da campanha</label>
                           <CampaignNameInput
                             id="camp-name-input"
                             inputRef={campaignNameInputRef}
                             initialValue={newCampaignName}
                             onChange={setNewCampaignName}
+                            placeholder="Ex.: Lançamento Setembro"
                           />
-                          <p className="camp-hint">
-                            Pode editar à vontade. Se ficar vazio, usa algo como
-                            {' '}<code>{buildDefaultCampaignName()}</code>.
-                          </p>
                         </div>
-
-                        <div className="camp-field">
-                          <span>Números que vão disparar <em>(opcional agora)</em></span>
-                          <p className="camp-hint">
-                            Selecione um ou mais WhatsApps conectados. Com vários números, os leads são divididos entre eles (round-robin). Sem conexão, a campanha é salva como rascunho.
-                          </p>
-                          {connectedSessions.length === 0 ? (
-                            <div className="camp-alert">
-                              Nenhum número conectado. Você pode criar o rascunho agora e conectar em <strong>Conexão</strong> antes de iniciar os disparos.
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-compact"
-                                onClick={() => { closeCampaignModal(); setWaTab('connect'); }}
-                              >
-                                Abrir conexão
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="camp-conn-grid">
-                              {connectedSessions.map((c) => {
-                                const selected = campaignConnectionIds.includes(c.id);
-                                return (
-                                  <button
-                                    key={c.id}
-                                    type="button"
-                                    className={`camp-conn-card ${selected ? 'selected' : ''}`}
-                                    onClick={() => toggleCampaignConnection(c.id)}
-                                  >
-                                    <span className="camp-conn-check">{selected ? <Check size={14} /> : <Phone size={14} />}</span>
-                                    <div>
-                                      <strong>{c.phoneNumber || c.id}</strong>
-                                      <div className="camp-hint" style={{ margin: 0 }}>
-                                        {c.active ? 'Ativo agora' : 'Conectado'} · {c.id.slice(0, 10)}…
-                                      </div>
-                                    </div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                          {campaignConnectionIds.length > 1 && campaignRecipients.length > 0 && (
-                            <div className="camp-split-preview">
-                              ~{Math.ceil(campaignRecipients.length / campaignConnectionIds.length)} leads por número
-                              (ajuste a lista no próximo passo)
-                            </div>
-                          )}
+                        <div className="field">
+                          <label>Grupos de leads <span className="wa-hint">(os mesmos Grupos da Base de Leads)</span></label>
+                          <div className="cmp-groups">
+                            {scoringGroups.length === 0 ? (
+                              <p className="wa-hint">Nenhum grupo ainda — crie grupos na Base de Leads ou adicione números avulsos.</p>
+                            ) : scoringGroups.map((group) => (
+                              <label key={group.id}>
+                                <input type="checkbox" checked={campaignSelectedGroupIds.has(group.id)} onChange={(event) => toggleCampaignGroup(group, event.target.checked)} />
+                                <span>{group.name}</span>
+                                <span className="cnt">{group.count || (group.leadIds || []).length || 0} leads</span>
+                              </label>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
-
-                    {/* STEP 1: recipients */}
-                    {!editingCampaignId && campaignWizardStep === 1 && (
-                      <div className="camp-wizard-pane">
-                        {campaignConnectionIds.length > 1 && (
-                          <div className="camp-split-preview">
-                            {campaignConnectionIds.length} números · lista será dividida automaticamente na criação
+                        <div className="field">
+                          <label htmlFor="campaign-manual">Números avulsos <span className="wa-hint">(um por linha: número — nome opcional)</span></label>
+                          <textarea id="campaign-manual" className="cmp-manual" value={campaignManualText} onChange={(event) => updateCampaignManualText(event.target.value)} placeholder={'+55 21 98765-0000 — João\n+55 21 97654-1111'} />
+                        </div>
+                        <div className="cmp-recsum">
+                          <b>{campaignRecipients.length} destinatário{campaignRecipients.length === 1 ? '' : 's'} único{campaignRecipients.length === 1 ? '' : 's'}</b>
+                          <span> · nenhum finalizado</span>
+                        </div>
+                        {connectedSessions.length === 0 && (
+                          <div className="camp-alert">
+                            Nenhum número conectado. A campanha será salva como rascunho até você parear um WhatsApp.
                           </div>
                         )}
-                        {renderRecipientsEditor()}
                       </div>
                     )}
 
-                    {/* STEP 2: message */}
-                    {!editingCampaignId && campaignWizardStep === 2 && (
+                    {/* STEP 1: message */}
+                    {!editingCampaignId && campaignWizardStep === 1 && (
                       <div className="camp-wizard-pane">
                         <label className="camp-field">
                           <span>Mensagem da campanha</span>
@@ -4000,8 +4585,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                       </div>
                     )}
 
-                    {/* STEP 3: schedule */}
-                    {!editingCampaignId && campaignWizardStep === 3 && (
+                    {/* STEP 2: schedule */}
+                    {!editingCampaignId && campaignWizardStep === 2 && (
                       <div className="camp-wizard-pane">
                         <div className="camp-field-row">
                           <label className="camp-field">
@@ -4055,8 +4640,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                       </div>
                     )}
 
-                    {/* STEP 4: review */}
-                    {!editingCampaignId && campaignWizardStep === 4 && (
+                    {/* STEP 3: review */}
+                    {!editingCampaignId && campaignWizardStep === 3 && (
                       <div className="camp-wizard-pane">
                         <div className="camp-review-card">
                           <h4 style={{ marginTop: 0 }}>
@@ -4112,8 +4697,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                     )}
                   </div>
 
+                  {campaignFormError && <div className="camp-alert error" role="alert">{campaignFormError}</div>}
                   <div className="camp-wizard-footer">
-                    <button type="button" className="btn btn-secondary" onClick={closeCampaignModal}>
+                    <button type="button" className="btn btn-ghost" onClick={closeCampaignModal}>
                       Cancelar
                     </button>
                     <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
@@ -4139,7 +4725,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                           )}
                           {campaignWizardStep < wizardSteps.length - 1 ? (
                             <button type="button" className="btn btn-primary" onClick={goWizardNext}>
-                              Próximo <ChevronRight size={14} />
+                              Continuar
                             </button>
                           ) : (
                             <button
@@ -4179,26 +4765,129 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           />
         ) : null}
 
+        {/* STATUS TAB */}
+        {waTab === 'status' && (
+          <div id="waPanelStatus" role="tabpanel" aria-labelledby="waTabStatus" data-od-id="wa-panel-status">
+            <div className="wa-panel">
+              <div className="wa-search"><input id="waStatusSearch" placeholder="Buscar atualização…" aria-label="Buscar atualização de status" value={statusSearch} onChange={(event) => setStatusSearch(event.target.value)} /></div>
+              <div className="wa-threads" aria-label="Atualizações de status">
+                <div className="wa-sect">Meu status</div>
+                <button type="button" className="wa-mystatus" data-od-id="wa-status-mine" onClick={() => localStatuses.length ? setStatusViewerIndex(0) : document.getElementById('waStatusPost')?.focus()}>
+                  <span className={`wa-statusring${localStatuses.length ? ' seen' : ''}`} aria-hidden="true"><span>V</span></span>
+                  <span className="tx" style={{ minWidth: 0 }}><b>Você</b><span>{localStatuses.length ? `${localStatuses.length} atualização(ões)` : 'Adicionar status'}</span></span>
+                </button>
+                <div className="wa-statuspost">
+                  <input id="waStatusPost" placeholder="Escrever atualização…" aria-label="Escrever atualização de status" value={statusDraft} onChange={(event) => setStatusDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') publishLocalStatus(); }} />
+                  <button type="button" className="btn btn-sm" onClick={publishLocalStatus}>Postar</button>
+                </div>
+                {visibleStatuses.length > 0 ? (
+                  <>
+                    <div className="wa-sect">Visualizados</div>
+                    {visibleStatuses.map((status) => (
+                      <button type="button" className="wa-statusitem" key={status.id} onClick={() => setStatusViewerIndex(status.sourceIndex)}>
+                        <span className="wa-statusring seen" aria-hidden="true"><span>{(status.name || 'V').charAt(0).toUpperCase()}</span></span>
+                        <span style={{ minWidth: 0 }}><b>{status.name || 'Você'}</b><span>{new Date(status.ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} · toque para ver</span></span>
+                      </button>
+                    ))}
+                  </>
+                ) : (
+                  <div className="empty"><b style={{ color: 'var(--fg)' }}>Nada por aqui</b><span>Nenhuma atualização encontrada.</span></div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* CHANNELS TAB */}
+        {waTab === 'channels' && (
+          <div id="waPanelChan" role="tabpanel" aria-labelledby="waTabChan" data-od-id="wa-panel-canais" style={{ flex: 1, display: 'flex', background: 'var(--bg)' }}>
+            <div className="wa-panel wa-list" data-od-id="wa-channel-list" style={{ width: 340, borderRight: '1px solid var(--border)', padding: 12 }}>
+              <div className="wa-search" style={{ marginBottom: 12 }}>
+                <input
+                  id="waChanSearch"
+                  placeholder="Buscar canal…"
+                  aria-label="Buscar canal"
+                  value={chanSearch}
+                  onChange={(e) => setChanSearch(e.target.value)}
+                />
+              </div>
+              <div className="empty" style={{ margin: '40px auto' }}>
+                <div className="e-icon">○</div>
+                <b style={{ color: 'var(--fg)' }}>Canais de transmissão</b>
+                <span>Fique por dentro das novidades dos seus temas favoritos.</span>
+              </div>
+            </div>
+            <div className="wa-panel" data-od-id="wa-channel-view" style={{ flex: 1, display: 'grid', placeItems: 'center', color: 'var(--muted)' }}>
+              <div className="empty">
+                <b style={{ color: 'var(--fg)' }}>Nenhum canal aberto</b>
+                <span>Escolha um canal para ver as novidades.</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* COMMUNITIES TAB */}
+        {waTab === 'communities' && (
+          <div id="waPanelComm" role="tabpanel" aria-labelledby="waTabComm" data-od-id="wa-panel-comunidades" style={{ flex: 1, display: 'flex', background: 'var(--bg)' }}>
+            <div className="wa-panel wa-list" data-od-id="wa-community-list" style={{ width: 340, borderRight: '1px solid var(--border)', padding: 12 }}>
+              <div className="wa-search" style={{ marginBottom: 12 }}>
+                <input
+                  id="waCommSearch"
+                  placeholder="Buscar comunidade…"
+                  aria-label="Buscar comunidade"
+                  value={commSearch}
+                  onChange={(e) => setCommSearch(e.target.value)}
+                />
+              </div>
+              <div className="empty" style={{ margin: '40px auto' }}>
+                <div className="e-icon">○</div>
+                <b style={{ color: 'var(--fg)' }}>Suas comunidades</b>
+                <span>Reúna grupos relacionados e envie avisos para todos os membros.</span>
+              </div>
+            </div>
+            <div className="wa-panel" data-od-id="wa-community-view" style={{ flex: 1, display: 'grid', placeItems: 'center', color: 'var(--muted)' }}>
+              <div className="empty">
+                <b style={{ color: 'var(--fg)' }}>Nenhuma comunidade aberta</b>
+                <span>Escolha uma comunidade para ver grupos e membros.</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* CHATS TAB */}
-        {waTab === 'chats' && (
+        {(waTab === 'chats' || waTab === 'campaigns') && (
           <div className={`chat-shell ${activeChatJid ? 'has-active-chat' : ''}`} role="tabpanel" aria-label="Conversas">
             {/* Left Chats List */}
             <aside className="chat-list">
               <div className="chat-list-header">
-                <div className="chat-search-wrap">
-                  <Search size={14} className="chat-search-icon" />
-                  <input
-                    className="chat-search-input"
-                    placeholder="Buscar nome, telefone ou mensagem..."
-                    value={chatSearch}
-                    onChange={(e) => setChatSearch(e.target.value)}
-                  />
+                <div className="chat-search-actions">
+                  <div className="chat-search-wrap">
+                    <Search size={14} className="chat-search-icon" />
+                    <input
+                      className="chat-search-input"
+                      placeholder="Buscar conversa…"
+                      aria-label="Buscar conversa"
+                      value={chatSearch}
+                      onChange={(e) => setChatSearch(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="wa-newchat-btn"
+                    title="Nova conversa"
+                    aria-label="Nova conversa"
+                    data-od-id="wa-new-chat"
+                    onClick={openNewChat}
+                  >
+                    ✎ Nova conversa
+                  </button>
                 </div>
                 <div className="chat-filter-tabs">
                   {[
                     { id: 'all', label: 'Todas', count: chatCounts.all },
                     { id: 'unread', label: 'Não lidas', count: chatCounts.unread },
                     { id: 'archived', label: 'Arquivadas', count: chatCounts.archived },
+                    { id: 'favorites', label: '★ Favoritas', count: chatCounts.favorites },
                   ].map((tab) => (
                     <button
                       key={tab.id}
@@ -4217,6 +4906,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   <div className="chat-empty-list">
                     {chatFilter === 'unread' && 'Nenhuma conversa não lida.'}
                     {chatFilter === 'archived' && 'Nenhuma conversa arquivada.'}
+                    {chatFilter === 'favorites' && 'Nenhuma conversa favorita.'}
                     {chatFilter === 'all' && 'Nenhuma conversa sincronizada.'}
                   </div>
                 ) : (
@@ -4318,16 +5008,33 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         )}
                       </div>
                     </button>
-                    <div className="chat-room-header-actions" style={{ position: 'relative' }}>
+                    <div className="chat-room-header-actions wa-menuwrap" style={{ position: 'relative' }}>
                       <button
                         type="button"
-                        className="btn btn-secondary"
-                        style={{ padding: '6px 10px', fontSize: '11px' }}
-                        title="Etiquetar este contato"
-                        onClick={() => setTagPickerOpen((v) => !v)}
+                        className="wa-iconbtn"
+                        aria-label="Opções da conversa"
+                        aria-haspopup="true"
+                        aria-expanded={isConvMenuOpen}
+                        onClick={() => setIsConvMenuOpen((open) => !open)}
                       >
-                        <Tag size={12} />
+                        ⋯
                       </button>
+                      {isConvMenuOpen && (
+                        <div className="wa-menu" id="waConvMenu">
+                          <button type="button" onClick={() => { openContactProfile(); setIsConvMenuOpen(false); }}>Ver contato</button>
+                          <button type="button" onClick={() => { addLog(`[WHATSAPP] ${activeChatName} silenciado.`); setIsConvMenuOpen(false); }}>Silenciar</button>
+                          <button type="button" onClick={() => {
+                            const selected = chats.find((chat) => chat.jid === activeChatJid);
+                            if (selected) {
+                              setArchivedChats((items) => [{ ...selected, archived: true }, ...items.filter((item) => item.jid !== selected.jid)]);
+                              setChats((items) => items.filter((item) => item.jid !== selected.jid));
+                              setActiveChatJid(null);
+                            }
+                            setIsConvMenuOpen(false);
+                          }}>Arquivar conversa</button>
+                          <button type="button" onClick={() => { setTagPickerOpen(true); setIsConvMenuOpen(false); }}>Etiquetas…</button>
+                        </div>
+                      )}
                       {tagPickerOpen && (
                         <div className="chat-tag-picker" onClick={(e) => e.stopPropagation()}>
                           <div className="chat-tag-picker-title">
@@ -4377,20 +5084,27 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                           </button>
                         </div>
                       )}
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        style={{ padding: '6px 10px', fontSize: '11px' }}
-                        title="Atualizar conversa"
-                        onClick={() => {
-                          const chat = [...chats, ...archivedChats].find((x) => x.jid === activeChatJid);
-                          if (chat) handleSelectChat(chat);
-                        }}
-                      >
-                        <RefreshCw size={12} />
-                      </button>
                     </div>
                   </div>
+
+                  {isFindBarOpen && (
+                    <div className="wa-findbar" id="waFindBar">
+                      <input
+                        id="waFindInput"
+                        placeholder="Buscar nesta conversa…"
+                        aria-label="Buscar nesta conversa"
+                        value={inChatSearchTerm}
+                        onChange={(e) => setInChatSearchTerm(e.target.value)}
+                        autoFocus
+                      />
+                      <span id="waFindCount" aria-live="polite">
+                        {inChatMatches.length > 0 ? `${inChatMatchIdx + 1}/${inChatMatches.length}` : (inChatSearchTerm ? '0' : '')}
+                      </span>
+                      <button type="button" id="waFindPrev" aria-label="Ocorrência anterior" onClick={handleFindPrev}>↑</button>
+                      <button type="button" id="waFindNext" aria-label="Próxima ocorrência" onClick={handleFindNext}>↓</button>
+                      <button type="button" id="waFindX" aria-label="Fechar busca" onClick={() => setIsFindBarOpen(false)}>×</button>
+                    </div>
+                  )}
 
                   {/* Messages Window */}
                   <div className="chat-messages">
@@ -4489,7 +5203,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   {/* Message Input Bar */}
                   <form onSubmit={handleSendMessage} className="chat-room-footer">
                     <button type="button" className="btn btn-secondary" style={{ padding: '8px' }} title="Anexar mídia ou áudio" onClick={handleAttachMedia} disabled={isRecording || sendingAudio}>
-                      <Paperclip size={16} />
+                      ＋
                     </button>
                     {isRecording ? (
                       <div className="chat-recording-bar">
@@ -4543,17 +5257,34 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                     )}
                     {!isRecording && !humanizeProgress && (
                       <button type="submit" className="btn btn-primary" style={{ padding: '8px 12px' }} disabled={!inputText.trim() || sendingAudio || sendingHumanized}>
-                        <Send size={14} />
+                        ↑
                       </button>
                     )}
                   </form>
                 </>
               ) : (
-                <div className="chat-empty-room">
-                  <MessageSquare size={48} />
-                  <p>Selecione uma conversa ao lado para enviar mensagens.</p>
-                  <span>Filtre por não lidas, grupos ou arquivadas — como no WhatsApp.</span>
-                </div>
+                <>
+                  <div className="chat-room-header wa-conv-head">
+                    <div className="chat-avatar" aria-hidden="true">?</div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <strong>Selecione uma conversa</strong>
+                      <span>—</span>
+                    </div>
+                    <button type="button" className="wa-iconbtn" disabled aria-label="Opções da conversa">⋯</button>
+                  </div>
+                  <div className="chat-messages wa-msgs">
+                    <div className="empty">
+                      <b>Nenhuma conversa aberta</b>
+                      <span>Escolha um contato ao lado para ver o histórico.</span>
+                    </div>
+                  </div>
+                  <div className="chat-room-footer wa-composer">
+                    <button type="button" className="wa-iconbtn" disabled aria-label="Anexar">＋</button>
+                    <button type="button" className="wa-iconbtn" disabled aria-label="Gravar áudio"><Mic size={18} /></button>
+                    <input type="text" placeholder="Escrever mensagem…" disabled />
+                    <button type="button" className="wa-send" disabled aria-label="Enviar mensagem">↑</button>
+                  </div>
+                </>
               )}
             </section>
 

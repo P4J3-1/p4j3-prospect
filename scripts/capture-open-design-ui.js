@@ -4,10 +4,12 @@
  */
 const { app, BrowserWindow, ipcMain } = require('electron');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
 const outputDir = path.join(__dirname, '..', 'docs', 'qa', 'open-design-lote1');
+app.setPath('userData', path.join(os.tmpdir(), `sigma-gmaps-qa-${process.pid}`));
 const errors = [];
 const now = Date.now();
 const fixtureLeads = [
@@ -52,6 +54,7 @@ const fixtureMessages = [
   { key: { id: 'msg-2', fromMe: false }, messageTimestamp: Math.floor(now / 1000) - 60, message: { conversation: 'Pode me explicar melhor?' } },
 ];
 const fixtureConnectionState = { connected: true };
+const fixtureFailureState = { connect: false, startChat: false, createCampaign: false };
 
 const mocks = {
   'update-status': { state: 'idle' },
@@ -67,7 +70,12 @@ const mocks = {
   'whatsapp-get-settings': {},
   'whatsapp-labels-get': { success: true, catalog: [], byJid: {} },
   'campaign-get-all': { campaigns: fixtureCampaigns },
-  'lead-scoring-get-all': { success: true, leads: [], total: 0, stats: { total: 0, highPriority: 0, goodOpportunity: 0, responded: 0, closed: 0, closedValue: 0 } },
+  'lead-scoring-get-all': {
+    success: true,
+    leads: fixtureLeads.slice(0, 2).map((lead) => ({ id: lead.id, company: lead, score: { value: lead.id === 'lead-1' ? 82 : 45, priority: lead.id === 'lead-1' ? 'alta' : 'media' } })),
+    total: 2,
+    stats: { total: 2, highPriority: 1, goodOpportunity: 1, responded: 0, closed: 0, closedValue: 0 },
+  },
   'lead-scoring-list-groups': { success: true, groups: [{ id: 'group-demo', name: 'Odontologia · Zona Sul', count: 2, color: '#10a37f' }] },
   'lead-scoring-get-settings': { success: true, settings: { ai: { provider: 'opencode', model: 'deepseek-v4-flash-free', hasApiKey: true } } },
 };
@@ -79,8 +87,10 @@ Object.entries(mocks).forEach(([channel, value]) => {
 ipcMain.handle('whatsapp-status', () => ({
   status: fixtureConnectionState.connected ? 'connected' : 'disconnected',
   connectionId: 'sigma-main',
+  activeConnectionId: 'sigma-main',
 }));
 ipcMain.handle('whatsapp-list-connections', () => ({
+  activeConnectionId: 'sigma-main',
   connections: [{
     id: 'sigma-main',
     phoneNumber: '+55 21 90000-0001',
@@ -89,6 +99,22 @@ ipcMain.handle('whatsapp-list-connections', () => ({
     active: true,
   }],
 }));
+ipcMain.handle('whatsapp-connect', () => ({
+  success: !fixtureFailureState.connect,
+  error: fixtureFailureState.connect ? 'Não foi possível gerar o QR de teste.' : undefined,
+  connectionId: 'sigma-main',
+  activeConnectionId: 'sigma-main',
+  connections: [{ id: 'sigma-main', phoneNumber: '+55 21 90000-0001', status: 'connected', provider: 'baileys', active: true }],
+}));
+ipcMain.handle('whatsapp-start-chat', (_event, { phone, name }) => {
+  const digits = String(phone || '').replace(/@.*$/, '').replace(/\D/g, '');
+  if (fixtureFailureState.startChat) return { success: false, error: 'Falha controlada ao abrir conversa.' };
+  return { success: Boolean(digits), jid: `${digits}@s.whatsapp.net`, phone: digits, name: name || digits };
+});
+
+ipcMain.handle('campaign-create', () => fixtureFailureState.createCampaign
+  ? { success: false, error: 'Falha controlada ao criar campanha.' }
+  : { success: true, campaign: fixtureCampaigns[0] });
 
 ipcMain.handle('campaign-update', (_event, { id, updates }) => {
   const campaign = fixtureCampaigns.find((item) => item.id === id);
@@ -133,6 +159,7 @@ app.whenReady().then(async () => {
   `);
   await win.reload();
   await pause(900);
+  await win.webContents.insertCSS('*{animation:none!important;transition:none!important;scroll-behavior:auto!important}');
 
   for (const route of ['overview', 'scraper', 'base', 'scoring', 'whatsapp', 'dashboard', 'settings']) {
     await win.webContents.executeJavaScript(`location.hash = '#${route}'; window.dispatchEvent(new HashChangeEvent('hashchange'));`);
@@ -144,14 +171,6 @@ app.whenReady().then(async () => {
       return { found: !!item, title: item?.textContent?.trim() || '' };
     })()`);
     await pause(route === 'scraper' || route === 'whatsapp' ? 1200 : 600);
-    if (route === 'overview') {
-      await win.webContents.executeJavaScript(`document.querySelector('.overview-metrics button[title^="Mensagens enviadas"]')?.click()`);
-      await pause(200);
-    }
-    if (route === 'scoring') {
-      await win.webContents.executeJavaScript(`(() => { const select = document.querySelector('.ls-open-design-step select'); if (select) { select.value = 'group:group-demo'; select.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
-      await pause(200);
-    }
     if (route === 'whatsapp') {
       await win.webContents.executeJavaScript(`document.querySelector('.chat-thread')?.click()`);
       await pause(300);
@@ -161,13 +180,142 @@ app.whenReady().then(async () => {
       const child = view?.firstElementChild;
       const rect = (node) => node ? Object.fromEntries(['x','y','width','height'].map((key) => [key, Math.round(node.getBoundingClientRect()[key])])) : null;
       const flow = document.querySelector('.ls-open-design-steps');
-      return { active: document.querySelector('.app-sidebar .nav-item.active')?.textContent?.trim(), view: rect(view), child: rect(child), flow: rect(flow), flowDisplay: flow ? getComputedStyle(flow).display : null, childClass: child?.className || '', text: (child?.innerText || '').slice(0, 80) };
+      const visibleOverlays = [...document.querySelectorAll('.overlay, .modal-overlay, [class*="backdrop"]')]
+        .filter((node) => { const style = getComputedStyle(node); const box = node.getBoundingClientRect(); return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0; })
+        .map((node) => node.id || node.className || node.tagName);
+      return { active: document.querySelector('.app-sidebar .nav-item.active')?.textContent?.trim(), view: rect(view), child: rect(child), visibleOverlays, flow: rect(flow), flowDisplay: flow ? getComputedStyle(flow).display : null, childClass: child?.className || '', text: (child?.innerText || '').slice(0, 80) };
     })()`);
     const image = await win.capturePage();
     const file = path.join(outputDir, `${route}-1440x900.png`);
     fs.writeFileSync(file, image.toPNG());
     console.log(`[capture] ${route}: ${navResult.found ? 'ok' : 'fallback'} ${JSON.stringify(diagnostic)} -> ${file}`);
   }
+
+  if (process.env.SIGMA_QA_ROUTES_ONLY === '1') {
+    console.log(JSON.stringify({ outputDir, errors, scope: 'routes-only' }, null, 2));
+    win.destroy();
+    app.exit(errors.length ? 1 : 0);
+    return;
+  }
+
+  const navigateTo = async (label, wait = 450) => {
+    const found = await win.webContents.executeJavaScript(`(() => {
+      const item = [...document.querySelectorAll('.app-sidebar .nav-item')]
+        .find((node) => (node.textContent || '').toLowerCase().includes(${JSON.stringify(label)}));
+      item?.click();
+      return Boolean(item);
+    })()`);
+    if (!found) errors.push(`Navegação de modal não encontrou: ${label}`);
+    await pause(wait);
+  };
+
+  const captureModal = async (name, openScript, selector) => {
+    await win.webContents.executeJavaScript(`(() => {
+      ${openScript}
+    })()`);
+    await pause(220);
+    const opened = await win.webContents.executeJavaScript(`Boolean(document.querySelector(${JSON.stringify(selector)}))`);
+    if (!opened) {
+      errors.push(`Modal não abriu: ${name}`);
+      return;
+    }
+    const modalRect = await win.webContents.executeJavaScript(`(() => { const node = document.querySelector(${JSON.stringify(selector)})?.querySelector('[role="dialog"], .modal, .cmdk, .camp-wizard, .sigma-campaign-dialog'); if (!node) return null; const rect = node.getBoundingClientRect(); return { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height), display: getComputedStyle(node).display }; })()`);
+    if (name === 'qr-modal') {
+      const qrDiagnostic = await win.webContents.executeJavaScript(`(() => { const node = document.querySelector('.wa-qr'); const cell = node?.querySelector('i.on'); if (!node) return null; const style = getComputedStyle(node); const cellStyle = cell ? getComputedStyle(cell) : null; const box = node.getBoundingClientRect(); const cellBox = cell?.getBoundingClientRect(); return { box: { width: Math.round(box.width), height: Math.round(box.height) }, aspectRatio: style.aspectRatio, gridRows: style.gridTemplateRows, alignItems: style.alignItems, cell: cellBox ? { width: Math.round(cellBox.width), height: Math.round(cellBox.height), background: cellStyle.backgroundColor } : null }; })()`);
+      console.log(`[capture] qr ${JSON.stringify(qrDiagnostic)}`);
+    }
+    fs.writeFileSync(path.join(outputDir, `${name}-1440x900.png`), (await win.capturePage()).toPNG());
+    console.log(`[capture] modal ${name} ${JSON.stringify(modalRect)} -> ${path.join(outputDir, `${name}-1440x900.png`)}`);
+    await win.webContents.executeJavaScript(`(() => {
+      const target = document.querySelector(${JSON.stringify(selector)});
+      target?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    })()`);
+    await pause(120);
+  };
+
+  await navigateTo('visão geral');
+  await captureModal('busca-global-modal', `document.querySelector('.header-search-wrap')?.click();`, '#cmdkOv');
+  await captureModal('nova-extracao-modal', `document.querySelector('.btn-new-extraction')?.click();`, '.modal-overlay');
+
+  await navigateTo('base de leads');
+  await captureModal('exportar-leads-modal', `([...document.querySelectorAll('button')].find((node) => (node.textContent || '').trim() === 'Exportar'))?.click();`, '.overlay.on');
+  await win.webContents.executeJavaScript(`document.querySelector('.base-leads-view tbody .rowcheck')?.click()`);
+  await pause(100);
+  await captureModal('criar-grupo-modal', `([...document.querySelectorAll('.selbar button')].find((node) => (node.textContent || '').includes('Criar grupo')))?.click();`, '.overlay.on');
+  await captureModal('adicionar-grupo-modal', `([...document.querySelectorAll('.selbar button')].find((node) => (node.textContent || '').includes('Adicionar a grupo')))?.click();`, '.overlay.on');
+  await captureModal('detalhe-lead-modal', `document.querySelector('.base-leads-view tbody td b')?.click();`, '.overlay.on');
+
+  await navigateTo('lead scoring');
+  await win.webContents.executeJavaScript(`(() => { const select = document.querySelector('#scGroupPick, .ls-open-design-step select'); const option = [...(select?.options || [])].find((item) => item.value); if (select && option) { select.value = option.value; select.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
+  await pause(180);
+  await captureModal('configurar-ia-modal', `document.querySelector('#scCfgBtn')?.click();`, '#aiCfgOv');
+  await captureModal('detalhe-scoring-modal', `document.querySelector('#scResults tbody td b')?.click();`, '.overlay.on');
+
+  await navigateTo('whatsapp', 800);
+  await captureModal('nova-conversa-modal', `document.querySelector('[data-od-id="wa-new-chat"]')?.click();`, '#chatOv');
+  await captureModal('nova-campanha-modal', `document.querySelector('[data-od-id="wa-new-campaign"]')?.click();`, '.camp-wizard-backdrop');
+  await captureModal('campanhas-modal', `document.querySelector('[data-od-id="wa-sigma-campaigns"]')?.click();`, '.sigma-campaign-overlay');
+  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-account-selector"]')?.click()`);
+  await pause(100);
+  await captureModal('conexoes-modal', `([...document.querySelectorAll('.wa-menu button')].find((node) => (node.textContent || '').includes('Gerenciar conexões')))?.click();`, '#connOv');
+  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-session-menu"]')?.click()`);
+  await pause(100);
+  await captureModal('perfil-modal', `([...document.querySelectorAll('.wa-menu button')].find((node) => (node.textContent || '').includes('Meu perfil')))?.click();`, '#profileOv');
+  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-session-menu"]')?.click()`);
+  await pause(100);
+  await captureModal('qr-modal', `([...document.querySelectorAll('.wa-menu button')].find((node) => (node.textContent || '').includes('Trocar número')))?.click();`, '#qrOv');
+  await win.webContents.executeJavaScript(`document.querySelector('.chat-thread')?.click()`);
+  await pause(250);
+  await win.webContents.executeJavaScript(`document.querySelector('.chat-bubble-action-btn[title="Mais"]')?.click()`);
+  await pause(100);
+  await captureModal('encaminhar-modal', `([...document.querySelectorAll('.chat-msg-menu button')].find((node) => (node.textContent || '').includes('Encaminhar')))?.click();`, '#fwdOv');
+  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-tab-status"]')?.click()`);
+  await pause(150);
+  await win.webContents.executeJavaScript(`(() => { const input = document.querySelector('#waStatusPost'); if (!input) return; const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, 'Fechamos 2 auditorias esta semana. Obrigado pela confiança!'); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await pause(100);
+  await win.webContents.executeJavaScript(`document.querySelector('.wa-statuspost button')?.click()`);
+  await pause(150);
+  await captureModal('status-modal', `document.querySelector('[data-od-id="wa-status-mine"]')?.click();`, '#statusOv');
+  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-tab-conversas"]')?.click()`);
+  await pause(150);
+
+  // Error handling: failures must stay inside the current flow and explain recovery.
+  fixtureFailureState.startChat = true;
+  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-new-chat"]')?.click()`);
+  await pause(150);
+  await win.webContents.executeJavaScript(`document.querySelector('#chatOv .wa-newchat button')?.click()`);
+  await pause(180);
+  const newChatError = await win.webContents.executeJavaScript(`document.querySelector('#chatOv .field-err')?.textContent || ''`);
+  if (!/Falha controlada/i.test(newChatError)) errors.push('Erro de nova conversa não ficou visível no modal');
+  fs.writeFileSync(path.join(outputDir, 'error-nova-conversa-1440x900.png'), (await win.capturePage()).toPNG());
+  await win.webContents.executeJavaScript(`document.querySelector('#chatOv')?.click()`);
+  fixtureFailureState.startChat = false;
+
+  fixtureFailureState.connect = true;
+  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-session-menu"]')?.click()`);
+  await pause(80);
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.wa-menu button')].find((node) => (node.textContent || '').includes('Trocar número')))?.click()`);
+  await pause(180);
+  const qrFailure = await win.webContents.executeJavaScript(`document.querySelector('#qrOv .field-err')?.textContent || ''`);
+  if (!/Não foi possível gerar o QR/i.test(qrFailure)) errors.push('Erro de QR não ficou visível no modal');
+  fs.writeFileSync(path.join(outputDir, 'error-qr-1440x900.png'), (await win.capturePage()).toPNG());
+  await win.webContents.executeJavaScript(`document.querySelector('#qrOv')?.click()`);
+  fixtureFailureState.connect = false;
+
+  fixtureFailureState.createCampaign = true;
+  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-new-campaign"]')?.click()`);
+  await pause(450);
+  for (let step = 0; step < 4; step += 1) {
+    await win.webContents.executeJavaScript(`document.querySelector('.camp-wizard-footer .btn-primary')?.click()`);
+    await pause(180);
+  }
+  const campaignFailure = await win.webContents.executeJavaScript(`document.querySelector('.camp-alert.error')?.textContent || ''`);
+  if (!/Falha controlada/i.test(campaignFailure)) errors.push('Erro de campanha não ficou visível no wizard');
+  fs.writeFileSync(path.join(outputDir, 'error-campanha-1440x900.png'), (await win.capturePage()).toPNG());
+  await win.webContents.executeJavaScript(`document.querySelector('.camp-wizard-backdrop')?.click()`);
+  fixtureFailureState.createCampaign = false;
+  await pause(150);
 
   await win.webContents.executeJavaScript(`([...document.querySelectorAll('.app-sidebar .nav-item')].find((node) => (node.textContent || '').toLowerCase().includes('whatsapp')))?.click()`);
   await pause(600);
@@ -231,21 +379,22 @@ app.whenReady().then(async () => {
   await win.webContents.executeJavaScript(`document.querySelector('.camp-wizard-close')?.click()`);
   await win.webContents.executeJavaScript(`document.querySelector('.sigma-campaign-head-actions .wa-icon-button')?.click()`);
 
-  await win.webContents.executeJavaScript(`document.querySelector('.btn-new-extraction')?.click()`);
-  await pause(400);
-  fs.writeFileSync(path.join(outputDir, 'nova-extracao-modal-1440x900.png'), (await win.capturePage()).toPNG());
-  await win.webContents.executeJavaScript(`document.querySelector('.modal-close-btn')?.click()`);
-
-  win.setContentSize(390, 844);
-  await pause(400);
-  for (const [route, label] of [['overview', 'visão geral'], ['scraper', 'scraper maps']]) {
-    await win.webContents.executeJavaScript(`([...document.querySelectorAll('.app-sidebar .nav-item')].find((node) => (node.textContent || '').toLowerCase().includes(${JSON.stringify(label)})))?.click()`);
-    await pause(route === 'scraper' ? 900 : 500);
-    fs.writeFileSync(path.join(outputDir, `${route}-390x844.png`), (await win.capturePage()).toPNG());
-    console.log(`[capture] ${route} mobile -> ${path.join(outputDir, `${route}-390x844.png`)}`);
-  }
-
-  console.log(JSON.stringify({ outputDir, errors }, null, 2));
+  const finalCapture = await win.capturePage();
+  const viewport = finalCapture.getSize();
+  const report = {
+    generatedAt: new Date().toISOString(),
+    version: require('../package.json').version,
+    desktopOnly: true,
+    viewport: `${viewport.width}x${viewport.height}`,
+    routes: 7,
+    modals: 16,
+    controlledErrorScenarios: 3,
+    errors,
+    passed: errors.length === 0,
+  };
+  fs.writeFileSync(path.join(outputDir, 'qa-report.json'), `${JSON.stringify(report, null, 2)}\n`);
+  console.log(JSON.stringify({ outputDir, ...report }, null, 2));
+  win.destroy();
   app.exit(errors.length ? 1 : 0);
 });
 

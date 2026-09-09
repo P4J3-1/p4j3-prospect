@@ -1,0 +1,11 @@
+{
+  "generatedAt": "2026-09-09T07:51:42.531Z",
+  "version": "1.1.5",
+  "desktopOnly": true,
+  "viewport": "1366x728",
+  "routes": 7,
+  "modals": 16,
+  "controlledErrorScenarios": 3,
+  "errors": [],
+  "passed": true
+}

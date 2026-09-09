@@ -1,0 +1,175 @@
+{
+  "generatedAt": "2026-09-09T07:53:36.436Z",
+  "desktopOnly": true,
+  "reference": "sigma-gmaps-lote1-prototype.html",
+  "expectedPairs": 23,
+  "comparedPairs": 23,
+  "routePairs": 7,
+  "modalPairs": 16,
+  "layoutContractPassed": true,
+  "note": "pixelSimilarityDiagnostic não é gate porque conteúdo e dados dos fixtures diferem; inventário e dimensões são bloqueantes.",
+  "failures": [],
+  "comparisons": [
+    {
+      "type": "route",
+      "name": "overview",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 96.33
+    },
+    {
+      "type": "route",
+      "name": "scraper",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 93.73
+    },
+    {
+      "type": "route",
+      "name": "base",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 94.13
+    },
+    {
+      "type": "route",
+      "name": "scoring",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 99.12
+    },
+    {
+      "type": "route",
+      "name": "whatsapp",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 95.17
+    },
+    {
+      "type": "route",
+      "name": "dashboard",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 99.04
+    },
+    {
+      "type": "route",
+      "name": "settings",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 99.07
+    },
+    {
+      "type": "modal",
+      "name": "busca-global-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 97.43
+    },
+    {
+      "type": "modal",
+      "name": "nova-extracao-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 91.72
+    },
+    {
+      "type": "modal",
+      "name": "exportar-leads-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 96.44
+    },
+    {
+      "type": "modal",
+      "name": "criar-grupo-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 92.24
+    },
+    {
+      "type": "modal",
+      "name": "adicionar-grupo-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 90.58
+    },
+    {
+      "type": "modal",
+      "name": "detalhe-lead-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 93
+    },
+    {
+      "type": "modal",
+      "name": "configurar-ia-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 97.5
+    },
+    {
+      "type": "modal",
+      "name": "detalhe-scoring-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 85.65
+    },
+    {
+      "type": "modal",
+      "name": "nova-conversa-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 94.07
+    },
+    {
+      "type": "modal",
+      "name": "nova-campanha-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 94.91
+    },
+    {
+      "type": "modal",
+      "name": "campanhas-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 88.14
+    },
+    {
+      "type": "modal",
+      "name": "conexoes-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 95.35
+    },
+    {
+      "type": "modal",
+      "name": "perfil-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 96.66
+    },
+    {
+      "type": "modal",
+      "name": "qr-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 92.71
+    },
+    {
+      "type": "modal",
+      "name": "encaminhar-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 94.09
+    },
+    {
+      "type": "modal",
+      "name": "status-modal",
+      "dimensions": "1366x728",
+      "sameDimensions": true,
+      "pixelSimilarityDiagnostic": 94.74
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "name": "sigma-gmaps-scraper",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Desktop Google Maps business data scraper built with Electron + Playwright",
   "main": "main.js",
   "license": "MIT",
@@ -14,6 +14,8 @@
     "build:linux": "npm run build:renderer && electron-builder --linux",
     "build:renderer": "vite build && node scripts/stamp-renderer.js",
     "qa:ui": "npm run build:renderer && electron scripts/capture-open-design-ui.js",
+    "qa:compare": "node scripts/compare-open-design-ui.js",
+    "qa:packaged": "node scripts/smoke-packaged.js",
     "dev:renderer": "vite"
   },
   "dependencies": {
@@ -35,6 +37,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^39.8.10",
     "electron-builder": "^26.15.3",
+    "pngjs": "^5.0.0",
     "vite": "^5.4.11"
   },
   "build": {
@@ -63,8 +66,18 @@
     "win": {
       "artifactName": "Sigma-GMaps-Scraper-${version}-${arch}.${ext}",
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "zip", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "assets/icon.ico"
     },
@@ -74,7 +87,11 @@
       "createDesktopShortcut": true
     },
     "publish": [
-      { "provider": "github", "owner": "olucianobotelho", "repo": "google-maps-sigma-scrapper" }
+      {
+        "provider": "github",
+        "owner": "olucianobotelho",
+        "repo": "google-maps-sigma-scrapper"
+      }
     ],
     "linux": {
       "target": [
