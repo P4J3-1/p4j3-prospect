@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { normalizeAddress } = require('../utils/address-normalizer');
+const { normalizeText } = require('../utils/text-normalizer');
 
 const VERSION = 1;
 const MAX_COLUMNS = 12;
@@ -42,12 +43,15 @@ const ALLOWED_TRIGGERS = new Set([
 
 const DEFAULT_COLUMNS = [
   { id: 'new', name: 'Novos', color: '#10a37f', position: 0, terminal: false, wipLimit: null },
-  { id: 'contacted', name: 'Em contato', color: '#3b82f6', position: 1, terminal: false, wipLimit: null },
-  { id: 'qualified', name: 'Qualificados', color: '#8b5cf6', position: 2, terminal: false, wipLimit: null },
-  { id: 'proposal', name: 'Proposta', color: '#f59e0b', position: 3, terminal: false, wipLimit: null },
-  { id: 'won', name: 'Ganhos', color: '#16a34a', position: 4, terminal: true, wipLimit: null },
-  { id: 'lost', name: 'Perdidos', color: '#ef4444', position: 5, terminal: true, wipLimit: null },
+  { id: 'sent', name: 'Enviados', color: '#0ea5e9', position: 1, terminal: false, wipLimit: null },
+  { id: 'contacted', name: 'Em contato', color: '#3b82f6', position: 2, terminal: false, wipLimit: null },
+  { id: 'qualified', name: 'Qualificados', color: '#8b5cf6', position: 3, terminal: false, wipLimit: null },
+  { id: 'proposal', name: 'Proposta', color: '#f59e0b', position: 4, terminal: false, wipLimit: null },
+  { id: 'won', name: 'Ganhos', color: '#16a34a', position: 5, terminal: true, wipLimit: null },
+  { id: 'lost', name: 'Perdidos', color: '#ef4444', position: 6, terminal: true, wipLimit: null },
 ];
+
+const LEGACY_DEFAULT_COLUMN_IDS = ['new', 'contacted', 'qualified', 'proposal', 'won', 'lost'];
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -58,7 +62,7 @@ function now() {
 }
 
 function cleanText(value, max = 160) {
-  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+  return normalizeText(value).slice(0, max);
 }
 
 function fold(value) {
@@ -158,8 +162,15 @@ function normalizeRule(rule, index, columnIds) {
 }
 
 function normalizeBoard(board) {
-  const sourceColumns = Array.isArray(board?.columns) && board.columns.length
+  const storedColumns = Array.isArray(board?.columns) && board.columns.length
     ? board.columns.slice(0, MAX_COLUMNS)
+    : null;
+  // Migrate only the exact old default. Custom pipelines stay untouched.
+  const hasLegacyDefault = Array.isArray(storedColumns)
+    && storedColumns.length === LEGACY_DEFAULT_COLUMN_IDS.length
+    && storedColumns.every((column, index) => String(column?.id || '') === LEGACY_DEFAULT_COLUMN_IDS[index]);
+  const sourceColumns = storedColumns && !hasLegacyDefault
+    ? storedColumns
     : DEFAULT_COLUMNS;
   const seen = new Set();
   const columns = sourceColumns.map((column, index) => normalizeColumn(column, index, seen));
@@ -387,7 +398,12 @@ class KanbanStore {
       .filter((rule) => rule.enabled && (rule.trigger === 'any' || rule.trigger === trigger || trigger === 'sync'))
       .sort((a, b) => a.priority - b.priority);
     const match = rules.find((rule) => ruleMatches(entity, rule));
-    return match?.action?.columnId || card.columnId || this.state.board.columns[0].id;
+    if (match?.action?.columnId) return match.action.columnId;
+    // Baseline operational flow, even when the user has not created rules.
+    // A manual move always wins (handled above).
+    if (trigger === 'campaign.sent' && this._columnById('sent')) return 'sent';
+    if (trigger === 'campaign.replied' && this._columnById('contacted')) return 'contacted';
+    return card.columnId || this.state.board.columns[0].id;
   }
 
   _nextRank(columnId) {

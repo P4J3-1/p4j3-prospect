@@ -42,6 +42,25 @@ test('Kanban reúne o mesmo lead vindo do Maps e do scoring', () => withStore((s
   assert.deepEqual(board.cards[0].entity.sourceRefs.scoringIds, ['score-1']);
 }));
 
+test('pipeline padrão inclui Enviados e move campanhas enviadas/respondidas', () => withStore((store) => {
+  const initial = store.getBoard();
+  assert.deepEqual(initial.board.columns.map((column) => column.id), [
+    'new', 'sent', 'contacted', 'qualified', 'proposal', 'won', 'lost',
+  ]);
+
+  const sent = store.syncCampaigns([{
+    id: 'campaign-1',
+    leads: [{ id: 'lead-1', name: 'Clínica Aurora', phone: '+55 11 95555-1000', status: 'sent' }],
+  }]);
+  assert.equal(sent.cards[0].columnId, 'sent');
+
+  const replied = store.syncCampaigns([{
+    id: 'campaign-1',
+    leads: [{ id: 'lead-1', name: 'Clínica Aurora', phone: '+55 11 95555-1000', status: 'replied' }],
+  }]);
+  assert.equal(replied.cards[0].columnId, 'contacted');
+}));
+
 test('reconstrói índice e mescla Maps sem cidade/UF com scoring normalizado', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sigma-kanban-index-'));
   try {

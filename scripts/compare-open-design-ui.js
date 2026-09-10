@@ -26,7 +26,6 @@ const modals = [
   'perfil-modal',
   'qr-modal',
   'encaminhar-modal',
-  'status-modal',
 ];
 
 const readPng = (file) => PNG.sync.read(fs.readFileSync(file));

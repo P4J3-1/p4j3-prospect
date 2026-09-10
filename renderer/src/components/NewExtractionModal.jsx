@@ -42,7 +42,7 @@ const ESTADOS = [
   ['Sergipe', 'SE'], ['Tocantins', 'TO'], ['Distrito Federal', 'DF']
 ].map(([n, uf]) => ({ n, uf, estado: true }));
 
-const POP_CITIES = ['São Paulo', 'Rio de Janeiro', 'Belo Horizonte', 'Brasília', 'Curitiba', 'Porto Alegre', 'Salvador', 'Recife', 'Fortaleza', 'Goiânia'];
+const POP_CITIES = ['São Paulo', 'Rio de Janeiro', 'Belo Horizonte', 'Brasília', 'Distrito Federal (DF)', 'Curitiba', 'Porto Alegre', 'Salvador', 'Recife', 'Fortaleza', 'Goiânia'];
 
 function norm(s) {
   return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -136,7 +136,8 @@ export default function NewExtractionModal({
     all.forEach((c) => {
       const nn = norm(c.n);
       let s = -1;
-      if (nn === nq) s = 0;
+      const uf = norm(c.uf);
+      if (nn === nq || uf === nq) s = 0;
       else if (nn.indexOf(nq) === 0) s = 1;
       else if (nn.indexOf(nq) >= 0) s = 2;
       if (s < 0) return;
@@ -151,7 +152,7 @@ export default function NewExtractionModal({
 
   const pickLoc = (item) => {
     setCidadeObj(item);
-    setCidadeInput(item.estado ? `${item.n} · Estado` : `${item.n} — ${item.uf}`);
+    setCidadeInput(`${item.n} — ${item.uf}${item.estado ? ' · Estado' : ''}`);
     setCidadeError(false);
     setShowLocList(false);
   };
@@ -171,7 +172,7 @@ export default function NewExtractionModal({
 
   const cidadeLabel = () => {
     if (!cidadeObj) return cidadeInput;
-    return cidadeObj.estado ? `${cidadeObj.n} · Estado` : `${cidadeObj.n} — ${cidadeObj.uf}`;
+    return `${cidadeObj.n} — ${cidadeObj.uf}${cidadeObj.estado ? ' · Estado' : ''}`;
   };
 
   const handleNext = () => {
@@ -196,7 +197,7 @@ export default function NewExtractionModal({
     }
     // Step 3 - Start extraction!
     const neigh = bairros.length > 0 ? bairros.join(', ') : '';
-    const city = cidadeObj ? (cidadeObj.estado ? cidadeObj.n : `${cidadeObj.n}, ${cidadeObj.uf}`) : cidadeInput;
+    const city = cidadeObj ? `${cidadeObj.n}, ${cidadeObj.uf}` : cidadeInput;
     onStartExtraction?.({
       niche: nicho.trim(),
       neigh,
@@ -341,7 +342,7 @@ export default function NewExtractionModal({
 
               <div className="ex-chips" style={{ marginTop: '12px' }}>
                 {POP_CITIES.map((name) => {
-                  const hit = CIDADES.find((c) => c.n === name);
+                  const hit = CIDADES.concat(ESTADOS).find((c) => c.n === name || `${c.n} (${c.uf})` === name);
                   if (!hit) return null;
                   return (
                     <button

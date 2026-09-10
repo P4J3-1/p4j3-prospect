@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage, screen } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -45,8 +45,15 @@ const { LeadScoringService } = require("./lead-scoring");
 const { saveProspectingCSV } = require("./lead-scoring/export-service");
 const { KanbanStore } = require("./kanban/kanban-store");
 const { normalizeAddress } = require("./utils/address-normalizer");
+const { normalizeText } = require("./utils/text-normalizer");
 const { geocodeAddress, isValidCoord } = require("./utils/geocode");
 const { migrateExistingData } = require("./utils/existing-data-migrator");
+const {
+  DEFAULT_WINDOW_BOUNDS,
+  readWindowState,
+  resolveBounds,
+  writeWindowState,
+} = require("./utils/window-state");
 
 const autoUpdaterMod = require("./utils/auto-updater");
 const { ensureInstallId } = require("./utils/install-id");
@@ -62,6 +69,25 @@ const resultStore = new Map();
 const allowedMediaPaths = new Set();
 const activeScrapes = new Map();
 const { LIMIT_TIERS } = require("./campaigns/daily-quota");
+let tray = null;
+let isExitInProgress = false;
+let closePromptInFlight = false;
+let trayHintShown = false;
+let windowStateSaveTimer = null;
+let displaySafetyRegistered = false;
+let desktopPreferences = null;
+
+function normalizeIncomingLead(item = {}) {
+  return {
+    ...item,
+    name: normalizeText(item?.name),
+    category: normalizeText(item?.category),
+    city: normalizeText(item?.city || item?.cidade),
+    state: normalizeText(item?.state || item?.uf),
+    neighborhood: normalizeText(item?.neighborhood || item?.bairro),
+    address: normalizeAddress(item?.address),
+  };
+}
 
 const defaultWhatsAppSettings = {
   notifications: {
@@ -113,6 +139,272 @@ const MAX_EXPORT_LEADS = 20000;
 const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 const MAX_STICKER_BYTES = 5 * 1024 * 1024;
+
+const DESKTOP_PREFERENCES_VERSION = 1;
+const DEFAULT_DESKTOP_PREFERENCES = Object.freeze({
+  version: DESKTOP_PREFERENCES_VERSION,
+  closeBehavior: "ask",
+  zoom: 1,
+});
+
+function clampUiZoom(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return Math.max(0.8, Math.min(1.5, Math.round(numeric * 100) / 100));
+}
+
+function getDesktopPreferencesPath() {
+  return path.join(app.getPath("userData"), "desktop-preferences-v1.json");
+}
+
+function loadDesktopPreferences() {
+  if (desktopPreferences) return desktopPreferences;
+  try {
+    const raw = JSON.parse(fs.readFileSync(getDesktopPreferencesPath(), "utf8"));
+    desktopPreferences = {
+      version: DESKTOP_PREFERENCES_VERSION,
+      closeBehavior: raw?.closeBehavior === "tray" || raw?.closeBehavior === "quit" ? raw.closeBehavior : "ask",
+      zoom: clampUiZoom(raw?.zoom),
+    };
+  } catch {
+    desktopPreferences = { ...DEFAULT_DESKTOP_PREFERENCES };
+  }
+  return desktopPreferences;
+}
+
+function saveDesktopPreferences(patch = {}) {
+  const current = loadDesktopPreferences();
+  desktopPreferences = {
+    ...current,
+    ...patch,
+    version: DESKTOP_PREFERENCES_VERSION,
+    closeBehavior: patch.closeBehavior === "tray" || patch.closeBehavior === "quit"
+      ? patch.closeBehavior
+      : current.closeBehavior,
+    zoom: clampUiZoom(patch.zoom ?? current.zoom),
+  };
+  try {
+    const filePath = getDesktopPreferencesPath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const tempPath = `${filePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(desktopPreferences, null, 2), { mode: 0o600 });
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    console.warn("[DESKTOP] preference save:", error.message);
+  }
+  return desktopPreferences;
+}
+
+function getWindowDisplays() {
+  try {
+    return screen.getAllDisplays();
+  } catch {
+    return [];
+  }
+}
+
+function getCapturedWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  const bounds = mainWindow.isMaximized() ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+  const display = screen.getDisplayMatching(bounds);
+  return {
+    bounds,
+    displayId: display?.id || null,
+    isMaximized: mainWindow.isMaximized(),
+  };
+}
+
+function persistWindowState() {
+  if (!app.isReady()) return null;
+  const state = getCapturedWindowState();
+  if (!state) return null;
+  try {
+    return writeWindowState(app.getPath("userData"), state, getWindowDisplays(), DEFAULT_WINDOW_BOUNDS);
+  } catch (error) {
+    console.warn("[DESKTOP] window state save:", error.message);
+    return null;
+  }
+}
+
+function scheduleWindowStateSave() {
+  if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer);
+  windowStateSaveTimer = setTimeout(() => {
+    windowStateSaveTimer = null;
+    persistWindowState();
+  }, 180);
+}
+
+function ensureWindowIsVisible() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMaximized()) return;
+  const current = mainWindow.getBounds();
+  const restored = resolveBounds(current, getWindowDisplays(), DEFAULT_WINDOW_BOUNDS);
+  const changed = ["x", "y", "width", "height"].some((key) => restored[key] !== current[key]);
+  if (changed) mainWindow.setBounds(restored);
+  scheduleWindowStateSave();
+}
+
+function getTraySnapshot() {
+  const whatsapp = getAggregateWhatsAppStatus();
+  const activeCampaigns = (campaignManager?.getAll?.() || [])
+    .filter((campaign) => ["running", "scheduled"].includes(campaign?.status));
+  return {
+    whatsapp,
+    activeCampaigns,
+    whatsappLabel: whatsapp?.connected ? "conectado" : whatsapp?.status || "desconectado",
+  };
+}
+
+function getTrayImage() {
+  for (const candidate of [
+    path.join(__dirname, "assets", "icon.ico"),
+    path.join(__dirname, "sigmalogo.ico"),
+  ]) {
+    const image = nativeImage.createFromPath(candidate);
+    if (!image.isEmpty()) return image;
+  }
+  return nativeImage.createEmpty();
+}
+
+function updateTray() {
+  if (!tray) return;
+  const snapshot = getTraySnapshot();
+  tray.setToolTip(`Sigma Scraper — WhatsApp ${snapshot.whatsappLabel}; ${snapshot.activeCampaigns.length} campanha(s) ativa(s)`);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "Abrir Sigma Scraper", click: () => restoreMainWindow() },
+    { type: "separator" },
+    { label: `WhatsApp: ${snapshot.whatsappLabel}`, enabled: false },
+    { label: `Campanhas ativas: ${snapshot.activeCampaigns.length}`, enabled: false },
+    {
+      label: "Pausar campanhas ativas",
+      enabled: snapshot.activeCampaigns.length > 0,
+      click: () => pauseActiveCampaignsFromTray(),
+    },
+    { type: "separator" },
+    { label: "Sair do Sigma Scraper", click: () => quitApplication() },
+  ]));
+}
+
+function initializeTray() {
+  if (tray) return tray;
+  tray = new Tray(getTrayImage());
+  tray.on("click", () => restoreMainWindow());
+  tray.on("double-click", () => restoreMainWindow());
+  tray.on("right-click", () => tray?.popUpContextMenu());
+  updateTray();
+  return tray;
+}
+
+function showTrayHint() {
+  if (trayHintShown || !tray) return;
+  trayHintShown = true;
+  try {
+    tray.displayBalloon({
+      title: "Sigma Scraper continua em segundo plano",
+      content: "Use o ícone da bandeja para abrir ou sair com segurança.",
+      iconType: "info",
+    });
+  } catch {
+    /* optional Windows notification */
+  }
+}
+
+function hideMainWindow(reason = "minimize") {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.hide();
+  updateTray();
+  if (reason === "minimize" || reason === "close") showTrayHint();
+  return true;
+}
+
+function restoreMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  ensureWindowIsVisible();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  updateTray();
+}
+
+function quitApplication() {
+  if (isExitInProgress) return;
+  isExitInProgress = true;
+  persistWindowState();
+  try { tray?.destroy(); } catch {}
+  tray = null;
+  app.quit();
+}
+
+function requestWindowClose() {
+  if (!mainWindow || mainWindow.isDestroyed() || isExitInProgress || closePromptInFlight) return;
+  const preferences = loadDesktopPreferences();
+  if (preferences.closeBehavior === "tray") {
+    hideMainWindow("close");
+    return;
+  }
+  if (preferences.closeBehavior === "quit") {
+    quitApplication();
+    return;
+  }
+
+  closePromptInFlight = true;
+  dialog.showMessageBox(mainWindow, {
+    type: "question",
+    title: "Fechar Sigma Scraper",
+    message: "Deseja continuar em segundo plano ou encerrar o Sigma Scraper?",
+    detail: "Campanhas interrompidas nunca serão retomadas automaticamente após um encerramento.",
+    buttons: ["Continuar em segundo plano", "Encerrar Sigma Scraper"],
+    defaultId: 0,
+    cancelId: 0,
+    checkboxLabel: "Lembrar minha escolha",
+    checkboxChecked: false,
+  }).then((result) => {
+    const behavior = result.response === 1 ? "quit" : "tray";
+    if (result.checkboxChecked) saveDesktopPreferences({ closeBehavior: behavior });
+    if (behavior === "quit") quitApplication();
+    else hideMainWindow("close");
+  }).catch((error) => {
+    console.warn("[DESKTOP] close dialog:", error.message);
+    hideMainWindow("close");
+  }).finally(() => {
+    closePromptInFlight = false;
+  });
+}
+
+function pauseActiveCampaignsFromTray() {
+  const activeCampaigns = (campaignManager?.getAll?.() || [])
+    .filter((campaign) => ["running", "scheduled"].includes(campaign?.status));
+  for (const campaign of activeCampaigns) {
+    try {
+      campaignManager.pause(campaign.id, "tray_safe_pause");
+      safeSend("campaign-progress", { campaignId: campaign.id, event: "paused", data: { reason: "tray_safe_pause" } });
+    } catch (error) {
+      console.warn("[TRAY] campaign pause:", error.message);
+    }
+  }
+  try { kanbanStore?.syncCampaigns(campaignManager?.getAll?.() || []); } catch {}
+  updateTray();
+}
+
+function registerDisplaySafety() {
+  if (displaySafetyRegistered) return;
+  displaySafetyRegistered = true;
+  const reconcile = () => setTimeout(() => ensureWindowIsVisible(), 0);
+  screen.on("display-added", reconcile);
+  screen.on("display-removed", reconcile);
+  screen.on("display-metrics-changed", reconcile);
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) app.quit();
+app.on("second-instance", () => restoreMainWindow());
+app.on("activate", () => restoreMainWindow());
+app.on("window-all-closed", () => {
+  if (!isExitInProgress) updateTray();
+});
 
 function getSessionsRoot() {
   return path.join(app.getPath("userData"), "whatsapp-sessions");
@@ -345,7 +637,7 @@ function sanitizeCampaignRecipient(raw) {
 
   if (typeof raw !== "object") return null;
 
-  const name = limitString(raw.name || raw.company || raw.notify || "", 120, "");
+  const name = limitString(normalizeText(raw.name || raw.company || raw.notify || ""), 120, "");
   const source = limitString(raw.source || "manual", 40, "manual");
   const kanbanStage = ["new", "conversation", "finished"].includes(raw.kanbanStage)
     ? raw.kanbanStage
@@ -382,8 +674,8 @@ function sanitizeCampaignRecipient(raw) {
       isGroup: true,
       source: source === "manual" ? "group" : source,
       connectionId,
-      company: limitString(raw.company || name, 120, ""),
-      category: limitString(raw.category, 80, "grupo"),
+      company: limitString(normalizeText(raw.company || name), 120, ""),
+      category: limitString(normalizeText(raw.category), 80, "grupo"),
       kanbanStage,
       kanbanOrder,
     };
@@ -414,8 +706,8 @@ function sanitizeCampaignRecipient(raw) {
     isGroup: false,
     source,
     connectionId,
-    company: limitString(raw.company || name, 120, ""),
-    category: limitString(raw.category, 80, ""),
+    company: limitString(normalizeText(raw.company || name), 120, ""),
+    category: limitString(normalizeText(raw.category), 80, ""),
     website: limitString(raw.website || raw.site, 240, ""),
     site: limitString(raw.website || raw.site, 240, ""),
     instagram: limitString(raw.instagram, 120, ""),
@@ -791,13 +1083,21 @@ async function loadAppUi(win) {
 }
 
 function createWindow() {
+  const restoredState = readWindowState(
+    app.getPath("userData"),
+    getWindowDisplays(),
+    DEFAULT_WINDOW_BOUNDS,
+  );
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
+    x: restoredState.bounds.x,
+    y: restoredState.bounds.y,
+    width: restoredState.bounds.width,
+    height: restoredState.bounds.height,
+    minWidth: DEFAULT_WINDOW_BOUNDS.minWidth,
+    minHeight: DEFAULT_WINDOW_BOUNDS.minHeight,
     frame: false,
-    show: true,
+    show: false,
+    title: "Sigma Scraper",
     icon: path.join(__dirname, "assets", "icon.ico"),
     backgroundColor: resolveWindowBgColor(),
     webPreferences: {
@@ -807,6 +1107,7 @@ function createWindow() {
       sandbox: true,
     },
   });
+  if (restoredState.isMaximized) mainWindow.maximize();
 
   const ses = mainWindow.webContents.session;
   // Bloqueia bundles mortos + qualquer index-*.js que não exista no dist atual
@@ -840,6 +1141,7 @@ function createWindow() {
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
+    applyUiZoom(mainWindow);
     const expectedStamp = getCurrentUiStamp();
     const allowed = [...getAllowedUiAssetNames()];
     mainWindow.webContents
@@ -914,19 +1216,45 @@ function createWindow() {
   );
 
   mainWindow.on("maximize", () =>
-    safeSend("win-state", true),
+    {
+      safeSend("win-state", true);
+      scheduleWindowStateSave();
+    },
   );
   mainWindow.on("unmaximize", () =>
-    safeSend("win-state", false),
+    {
+      safeSend("win-state", false);
+      scheduleWindowStateSave();
+    },
   );
+  mainWindow.on("move", scheduleWindowStateSave);
+  mainWindow.on("resize", scheduleWindowStateSave);
+  mainWindow.on("minimize", (event) => {
+    if (isExitInProgress) return;
+    event.preventDefault();
+    hideMainWindow("minimize");
+  });
+  mainWindow.on("close", (event) => {
+    if (isExitInProgress) return;
+    event.preventDefault();
+    requestWindowClose();
+  });
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+    updateTray();
+  });
 
   mainWindow.once("ready-to-show", () => {
+    ensureWindowIsVisible();
     mainWindow.show();
     mainWindow.focus();
+    updateTray();
   });
 }
 
 app.whenReady().then(() => {
+  registerDisplaySafety();
+  initializeTray();
   try {
     const migration = migrateExistingData(app.getPath("userData"));
     if (migration.changed) {
@@ -953,6 +1281,10 @@ app.whenReady().then(() => {
     const s = loadWhatsAppSettings();
     return s?.campaigns || defaultWhatsAppSettings.campaigns;
   });
+  const interruptedCampaigns = campaignManager.interruptForRestart();
+  if (interruptedCampaigns > 0) {
+    console.log(`[CAMPAIGN] Recovery confirmation required for ${interruptedCampaigns} campaign(s).`);
+  }
   leadScoringService = new LeadScoringService(app.getPath("userData"), (payload) => {
     safeSend("lead-scoring-progress", payload);
   });
@@ -964,6 +1296,7 @@ app.whenReady().then(() => {
       event,
       data,
     });
+    updateTray();
   });
 
   // Auto-reconnect saved WhatsApp sessions after renderer loads
@@ -1035,10 +1368,6 @@ async function autoReconnectSessions() {
         activeWhatsAppId = dirName;
       }
 
-      if (campaignManager) {
-        campaignManager.autoResume();
-      }
-
       console.log("[AUTO-RECONNECT] Success:", dirName, provider.getPhoneNumber());
     } catch (e) {
       console.log("[AUTO-RECONNECT] Failed:", dirName, e.message);
@@ -1091,6 +1420,11 @@ async function autoReconnectSessions() {
 }
 
 app.on("before-quit", async () => {
+  isExitInProgress = true;
+  if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer);
+  persistWindowState();
+  try { tray?.destroy(); } catch {}
+  tray = null;
   try { autoUpdaterMod.shutdown(); } catch {}
   if (campaignManager) campaignManager.shutdown();
   for (const provider of whatsappProviders.values()) {
@@ -1254,28 +1588,47 @@ ipcMain.handle("metrics-settings-set", async (_, patch = {}) => {
 });
 
 // ─── START SCRAPE ──────────────────────────
-ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId }) => {
+ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId, progressContext } = {}) => {
   const cleanQuery = limitString(query, MAX_QUERY_LENGTH).trim();
   const cleanMaxResults = clampInteger(maxResults, 1, MAX_SCRAPE_RESULTS, 30);
   const key = limitString(queryId, 80, "") || `scrape_${Date.now()}`;
+  const rawProgressContext = progressContext && typeof progressContext === "object" ? progressContext : {};
+  const totalNeighborhoods = clampInteger(rawProgressContext.totalNeighborhoods, 1, 100, 1);
+  const scrapeProgressContext = {
+    neighborhood: limitString(rawProgressContext.neighborhood, 120, ""),
+    neighborhoodIndex: clampInteger(rawProgressContext.neighborhoodIndex, 0, totalNeighborhoods - 1, 0),
+    totalNeighborhoods,
+    batchComplete: rawProgressContext.batchComplete === true,
+  };
   const cancelToken = { cancelled: false };
   activeScrapes.set(key, cancelToken);
-  const emitProgress = (payload) => sendProgress({ queryId: key, ...payload });
+  const emitProgress = (payload) => sendProgress({ queryId: key, ...scrapeProgressContext, ...payload });
   try {
-    if (!cleanQuery) throw new Error("Query is required");
+    if (!cleanQuery) throw new Error("A consulta da extração é obrigatória.");
     try { appMetrics.track("scrape_started", { maxResults: cleanMaxResults, queryLen: cleanQuery.length }); } catch {}
     emitProgress({ status: "started", current: 0, total: cleanMaxResults, message: `Iniciando extração: ${cleanQuery}` });
     const result = await scrapeGoogleMaps(
       cleanQuery,
       cleanMaxResults,
-      (message) => {
-        const text = String(message || "");
+      (event) => {
+        const rawEvent = event && typeof event === "object" ? event : { message: event };
+        const text = String(rawEvent.message || "");
         const match = text.match(/\[(\d+)\/(\d+)\]/);
+        const foundMatch = text.match(/(?:\bFound:\s*(\d+))|(?:(\d+)\s+empresas?\s+encontradas?)/i);
+        const hasCurrent = String(rawEvent.current ?? "").trim() !== "" && Number.isFinite(Number(rawEvent.current));
+        const hasTotal = String(rawEvent.total ?? "").trim() !== "" && Number.isFinite(Number(rawEvent.total));
+        const hasFound = String(rawEvent.found ?? "").trim() !== "" && Number.isFinite(Number(rawEvent.found));
+        const normalizedLiveLead = rawEvent.lead && typeof rawEvent.lead === "object"
+          ? normalizeIncomingLead(rawEvent.lead)
+          : null;
         emitProgress({
           status: "running",
-          current: match ? Number(match[1]) : null,
-          total: match ? Number(match[2]) : cleanMaxResults,
+          current: hasCurrent ? Number(rawEvent.current) : (match ? Number(match[1]) : null),
+          total: hasTotal ? Number(rawEvent.total) : (match ? Number(match[2]) : cleanMaxResults),
+          found: hasFound ? Number(rawEvent.found) : (foundMatch ? Number(foundMatch[1] || foundMatch[2]) : null),
           message: text,
+          ...(rawEvent.type ? { type: limitString(rawEvent.type, 40, "") } : {}),
+          ...(normalizedLiveLead ? { lead: normalizedLiveLead } : {}),
         });
       },
       cancelToken,
@@ -1286,7 +1639,7 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId }) => {
       throw error;
     }
     let data = Array.isArray(result.data)
-      ? result.data.map((item) => ({ ...item, address: normalizeAddress(item?.address) }))
+      ? result.data.map((item) => normalizeIncomingLead(item))
       : [];
     if (!data.length) throw new Error("Nenhum negócio foi encontrado para esta busca. Tente ajustar nicho ou localização.");
 
@@ -1592,6 +1945,19 @@ function resolveWindowBgColor() {
   return "#F8FAFC";
 }
 
+function applyUiZoom(win = mainWindow) {
+  if (!win || win.isDestroyed()) return 1;
+  const zoom = loadDesktopPreferences().zoom;
+  try { win.webContents.setZoomFactor(zoom); } catch (error) { console.warn("[DESKTOP] zoom apply:", error.message); }
+  return zoom;
+}
+
+function setUiZoom(value) {
+  const preferences = saveDesktopPreferences({ zoom: value });
+  applyUiZoom(mainWindow);
+  return preferences.zoom;
+}
+
 ipcMain.handle("theme-get", () => readSavedTheme());
 ipcMain.handle("theme-set", async (_, { theme } = {}) => {
   const next = theme === "light" || theme === "auto" ? theme : "dark";
@@ -1608,13 +1974,17 @@ ipcMain.handle("theme-set", async (_, { theme } = {}) => {
 });
 
 // ─── WINDOW CONTROLS ───────────────────────
-ipcMain.handle("win-minimize", () => mainWindow?.minimize());
+ipcMain.handle("win-minimize", () => hideMainWindow("minimize"));
 ipcMain.handle("win-maximize", () => {
   if (mainWindow?.isMaximized()) mainWindow.unmaximize();
   else mainWindow?.maximize();
+  scheduleWindowStateSave();
 });
-ipcMain.handle("win-close", () => mainWindow?.close());
+ipcMain.handle("win-close", () => requestWindowClose());
 ipcMain.handle("win-is-maximized", () => mainWindow?.isMaximized());
+ipcMain.handle("ui-zoom-get", () => loadDesktopPreferences().zoom);
+ipcMain.handle("ui-zoom-set", (_, { zoom } = {}) => setUiZoom(zoom));
+ipcMain.handle("ui-zoom-reset", () => setUiZoom(1));
 // Recarrega UI do renderer/dist (não faz location.reload na pasta TEMP velha)
 ipcMain.handle("reload-ui", async () => {
   try {
@@ -1713,16 +2083,6 @@ function getAggregateWhatsAppStatus() {
 }
 
 async function sendWaStatus(status, data) {
-  // Sempre que um número ficar online, retoma campanhas running/pausadas por cota
-  if (status === "connected" && campaignManager) {
-    try {
-      campaignManager.setProvidersMap(whatsappProviders);
-      campaignManager.autoResume();
-    } catch (e) {
-      console.log("[CAMPAIGN] autoResume on connect:", e.message);
-    }
-  }
-
   const payloadData = { ...(data || {}) };
   // Snapshot de todas as conexões em todo evento — a UI multi-session
   // precisa disso para não sobrescrever o estado global com o status
@@ -1766,6 +2126,7 @@ async function sendWaStatus(status, data) {
     }
   }
   safeSend("whatsapp-status-changed", envelope);
+  updateTray();
 }
 
 function onChatEvent(event) {
@@ -1834,10 +2195,6 @@ ipcMain.handle("whatsapp-connect", async (_, { provider: type, config }) => {
     await provider.connect();
     if (provider.getStatus && provider.getStatus() === "error") {
       throw new Error("Provider failed to connect");
-    }
-
-    if (campaignManager) {
-      campaignManager.autoResume();
     }
 
     const phoneNumber = provider.getPhoneNumber();
@@ -2663,6 +3020,15 @@ ipcMain.handle("lead-scoring-update-settings", async (_, { patch }) => {
   }
 });
 
+ipcMain.handle("lead-scoring-test-connection", async (_, { ai } = {}) => {
+  try {
+    const result = await leadScoringService.testConnection(ai && typeof ai === "object" ? ai : {});
+    return { success: true, ...result };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle("lead-scoring-get-all", async (_, { filters } = {}) => {
   try {
     return { success: true, ...leadScoringService.getAll(filters || {}) };
@@ -2990,7 +3356,7 @@ ipcMain.handle("campaign-delete", async (_, { id }) => {
   }
 });
 
-ipcMain.handle("campaign-start", async (_, { id, connectionId } = {}) => {
+ipcMain.handle("campaign-start", async (_, { id, connectionId, confirmRecovery = false } = {}) => {
   try {
     if (!campaignManager) throw new Error("Campaign manager não inicializado");
     // Garante mapa de providers atualizado
@@ -3023,7 +3389,10 @@ ipcMain.handle("campaign-start", async (_, { id, connectionId } = {}) => {
       }
     }
 
-    const result = campaignManager.start(id, { activeConnectionId: preferred });
+    const result = campaignManager.start(id, {
+      activeConnectionId: preferred,
+      confirmRecovery: confirmRecovery === true,
+    });
     if (result?.connectionId) {
       activeWhatsAppId = result.connectionId;
     }

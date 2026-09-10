@@ -32,6 +32,13 @@ const errors = [];
     await page.evaluate(() => {
       localStorage.setItem('sigma_onboarding_done', '1');
       localStorage.setItem('sigma_ls_ai_onboard_skipped', '1');
+      // Evita depender do provedor de geolocalização do Chromium no ambiente
+      // isolado; também comprova o zoom de abertura pela referência persistida.
+      localStorage.setItem('sigma_ref', JSON.stringify({
+        lat: -22.985,
+        lng: -43.205,
+        label: 'Referência QA',
+      }));
       localStorage.setItem('sigma_leads', JSON.stringify([{
         id: 'packaged-dirty-address',
         name: 'Lead com endereço antigo',
@@ -47,16 +54,18 @@ const errors = [];
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.app-layout-root', { timeout: 30000 });
 
+    // A busca global é uma ação exclusiva da Visão Geral; valide-a antes de
+    // navegar para as superfícies específicas do smoke.
+    await page.locator('.header-search-wrap').click();
+    await page.waitForSelector('#cmdkOv [role="dialog"]', { state: 'visible', timeout: 10000 });
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#cmdkOv', { state: 'detached', timeout: 10000 });
+
     const baseNav = page.locator('.app-sidebar .nav-item').filter({ hasText: 'Base de Leads' });
     await baseNav.click();
     await page.waitForSelector('.base-leads-view', { timeout: 15000 });
     const activeRoute = await page.locator('.app-sidebar .nav-item.active').innerText();
     if (!/Base de Leads/i.test(activeRoute)) errors.push(`Navegação não ativou Base de Leads: ${activeRoute}`);
-
-    await page.locator('.header-search-wrap').click();
-    await page.waitForSelector('#cmdkOv [role="dialog"]', { state: 'visible', timeout: 10000 });
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('#cmdkOv', { state: 'detached', timeout: 10000 });
 
     const mapNav = page.locator('.app-sidebar .nav-item').filter({ hasText: 'Scraper Maps' });
     await mapNav.click();

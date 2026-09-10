@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { calculateScore, classify, DEFAULT_RULES } = require("../lead-scoring/scoring-engine");
-const { defaultRules } = require("../lead-scoring/prospecting-store");
+const { defaultRules, defaultSettings } = require("../lead-scoring/prospecting-store");
 const { fallbackSalesAnalysis, resolveProviderConfig, resolveProviderChain, analyzeBatchWithSalesAI } = require("../lead-scoring/ai-sales-analyzer");
 const { buildSiteSummary } = require("../lead-scoring/site-summary-builder");
 
@@ -121,6 +121,14 @@ test("OpenCode provider uses Zen free endpoint by default", () => {
   assert.equal(config.provider, "opencode");
   assert.equal(config.chatCompletionsUrl, "https://opencode.ai/zen/v1/chat/completions");
   assert.equal(config.model, "deepseek-v4-flash-free");
+});
+
+test("fresh scoring settings use OpenCode Zen as the real default", () => {
+  const settings = defaultSettings();
+  assert.equal(settings.ai.provider, "opencode");
+  assert.equal(settings.ai.model, "deepseek-v4-flash-free");
+  assert.equal(settings.ai.baseUrl, "https://opencode.ai/zen/v1");
+  assert.equal(settings.ai.fallbackProviders, "[]");
 });
 
 test("default free providers resolve openrouter and opencode chain", () => {

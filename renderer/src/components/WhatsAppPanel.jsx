@@ -240,7 +240,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [selectedBrowseKeys, setSelectedBrowseKeys] = useState(() => new Set());
   const [recipientSourcesLoading, setRecipientSourcesLoading] = useState(false);
   const [templateText, setTemplateText] = useState('Olá {{name}}, tudo bem? Notamos que o seu site está com lentidão.');
-  const [intervalSec, setIntervalSec] = useState(30);
+  const [intervalSec, setIntervalSec] = useState(60);
   const [scheduleMode, setScheduleMode] = useState('interval');
   const [scheduleStartAt, setScheduleStartAt] = useState('');
 
@@ -296,20 +296,6 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [isFindBarOpen, setIsFindBarOpen] = useState(false);
   const [inChatSearchTerm, setInChatSearchTerm] = useState('');
   const [inChatMatchIdx, setInChatMatchIdx] = useState(0);
-  const [statusSearch, setStatusSearch] = useState('');
-  const [statusDraft, setStatusDraft] = useState('');
-  const [localStatuses, setLocalStatuses] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('sigma_wa_status_local') || '[]');
-      return Array.isArray(saved) ? saved : [];
-    } catch (_) {
-      return [];
-    }
-  });
-  const [statusViewerIndex, setStatusViewerIndex] = useState(null);
-  const [chanSearch, setChanSearch] = useState('');
-  const [commSearch, setCommSearch] = useState('');
-
   const inChatMatches = useMemo(() => {
     if (!inChatSearchTerm.trim()) return [];
     const term = inChatSearchTerm.toLowerCase();
@@ -689,7 +675,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     const off = window.campaignAPI.onProgress(({ campaignId, event, data }) => {
       loadCampaigns();
       if (event === 'daily-limit') {
-        addLog('[CAMPAIGN] Limite diário atingido — progresso salvo. Retoma amanhã ou ao reiniciar com cota livre.');
+        addLog('[CAMPAIGN] Limite diário atingido — progresso salvo. Retome manualmente quando houver nova cota.');
         loadSettings();
       } else if (event === 'waiting' && data?.reason === 'no_provider') {
         addLog('[CAMPAIGN] Aguardando WhatsApp conectado para continuar os disparos…');
@@ -2941,6 +2927,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
   const handleStartCampaign = async (id) => {
     if (!window.campaignAPI) return;
+    const campaign = campaigns.find((item) => item.id === id);
+    const confirmRecovery = campaign?.status === 'interrupted';
+    if (confirmRecovery && !confirm('Esta campanha foi interrompida ao fechar/reiniciar o app. Confirmar retomada manual?')) {
+      return;
+    }
     // Preferência: número ativo na UI (o que o user está vendo como conectado)
     const connId =
       activeConnectionId ||
@@ -2948,7 +2939,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       connectedSessions[0]?.id ||
       null;
     try {
-      const res = await window.campaignAPI.start(id, connId);
+      const res = await window.campaignAPI.start(id, connId, confirmRecovery);
       if (res && res.success === false) {
         alert('Não foi possível iniciar: ' + (res.error || 'erro desconhecido'));
         addLog(`[CAMPAIGN] Falha ao iniciar: ${res.error || 'erro'}`);
@@ -3403,25 +3394,6 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     }
   };
 
-  const publishLocalStatus = () => {
-    const text = statusDraft.trim();
-    if (!text) return;
-    const next = [{ id: `local-status-${Date.now()}`, name: 'Você', text, ts: Date.now(), mine: true, seen: true }, ...localStatuses];
-    setLocalStatuses(next);
-    localStorage.setItem('sigma_wa_status_local', JSON.stringify(next));
-    setStatusDraft('');
-    addLog('[WHATSAPP] Atualização de status salva neste app.');
-  };
-
-  const visibleStatuses = useMemo(() => {
-    const query = statusSearch.trim().toLowerCase();
-    return localStatuses
-      .map((status, index) => ({ ...status, sourceIndex: index }))
-      .filter((status) => !query || `${status.name || ''} ${status.text || ''}`.toLowerCase().includes(query));
-  }, [localStatuses, statusSearch]);
-
-  const viewedStatus = statusViewerIndex === null ? null : localStatuses[statusViewerIndex];
-
   // Lazy-load profile pics for visible chat list
   useEffect(() => {
     const slice = filteredChats.slice(0, 40);
@@ -3758,39 +3730,6 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           >
             <MessageSquare size={14} /> Conversas
           </button>
-          <button
-            type="button"
-            role="tab"
-            id="waTabStatus"
-            aria-selected={waTab === 'status'}
-            className={waTab === 'status' ? 'active' : ''}
-            data-od-id="wa-tab-status"
-            onClick={() => setWaTab('status')}
-          >
-            Status
-          </button>
-          <button
-            type="button"
-            role="tab"
-            id="waTabChan"
-            aria-selected={waTab === 'channels'}
-            className={waTab === 'channels' ? 'active' : ''}
-            data-od-id="wa-tab-canais"
-            onClick={() => setWaTab('channels')}
-          >
-            Canais
-          </button>
-          <button
-            type="button"
-            role="tab"
-            id="waTabComm"
-            aria-selected={waTab === 'communities'}
-            className={waTab === 'communities' ? 'active' : ''}
-            data-od-id="wa-tab-comunidades"
-            onClick={() => setWaTab('communities')}
-          >
-            Comunidades
-          </button>
         </nav>
         <div className="wa-top-actions wa-open-design-actions">
           <div className="wa-menuwrap" style={{ position: 'relative' }}>
@@ -4122,35 +4061,6 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         </div>
       )}
 
-      {viewedStatus && (
-        <div className="overlay on" id="statusOv" data-od-id="modal-status" onClick={() => setStatusViewerIndex(null)}>
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="statusName" style={{ maxWidth: 400 }} onClick={(event) => event.stopPropagation()}>
-            <div className="modal-head">
-              <div className="eyebrow">Status</div>
-              <h2 id="statusName">{viewedStatus.name || 'Você'}</h2>
-            </div>
-            <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
-              <div className="wa-viewer">
-                <div className="wa-viewerbar" aria-hidden="true">
-                  {localStatuses.map((status, index) => <i key={status.id} className={index <= statusViewerIndex ? 'on' : ''} />)}
-                </div>
-                <div className="wa-viewercard">
-                  <div className="wa-statusimg wa-statusart" aria-hidden="true"><span>{(viewedStatus.name || 'V').charAt(0).toUpperCase()}</span></div>
-                  <b>{viewedStatus.text}</b>
-                  <span>{new Date(viewedStatus.ts).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span>
-                </div>
-                <div className="wa-viewer-nav">
-                  <button type="button" className="btn btn-sm" disabled={statusViewerIndex >= localStatuses.length - 1} onClick={() => setStatusViewerIndex((index) => Math.min(localStatuses.length - 1, index + 1))}>‹ Anterior</button>
-                  <span style={{ flex: 1 }} />
-                  <button type="button" className="btn btn-sm" disabled={statusViewerIndex <= 0} onClick={() => setStatusViewerIndex((index) => Math.max(0, index - 1))}>Próximo ›</button>
-                </div>
-              </div>
-            </div>
-            <div className="modal-foot"><button type="button" className="btn btn-ghost" onClick={() => setStatusViewerIndex(null)}>Fechar</button></div>
-          </div>
-        </div>
-      )}
-
       {/* Main Panel Content */}
       <div className="wa-open-design-body">
         
@@ -4360,10 +4270,12 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                       const read = stats.read || 0;
                       const replied = stats.replied || 0;
                       const pct = Math.round((sent / (total || 1)) * 100);
-                      const canStart = ['ready', 'paused', 'cancelled'].includes(c.status);
+                      const canStart = ['ready', 'paused', 'interrupted'].includes(c.status);
                       const canPause = ['running', 'scheduled'].includes(c.status);
                       const startLabel =
-                        c.status === 'paused' && c.pauseReason === 'daily_limit'
+                        c.status === 'interrupted'
+                          ? 'Confirmar retomada'
+                          : c.status === 'paused' && c.pauseReason === 'daily_limit'
                           ? 'Retomar (nova cota)'
                           : c.status === 'paused'
                             ? 'Retomar'
@@ -4492,7 +4404,6 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   onMouseDown={(e) => e.stopPropagation()}
                 >
                   <div className="camp-wizard-header">
-                    {!editingCampaignId && <div className="eyebrow">Etapa {campaignWizardStep + 1} de {wizardSteps.length}</div>}
                     <h3 id="camp-wizard-title" style={{ margin: 0 }}>
                       {editingCampaignId ? 'Editar lista da campanha' : wizardSteps[campaignWizardStep]?.title}
                     </h3>
@@ -4603,7 +4514,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                               type="number"
                               min={5}
                               value={intervalSec}
-                              onChange={(e) => setIntervalSec(parseInt(e.target.value, 10) || 30)}
+                              onChange={(e) => setIntervalSec(parseInt(e.target.value, 10) || 60)}
                             />
                             <span className="camp-hint">Mínimo 5s. Intervalos maiores reduzem risco de bloqueio.</span>
                           </label>
@@ -4643,7 +4554,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                               : `${settings.campaigns?.workingHoursStart || '07:00'}–${settings.campaigns?.workingHoursEnd || '18:00'}`}
                           </strong>
                           <br />
-                          Ao bater o limite, a campanha pausa e retoma no próximo dia ou ao reiniciar o app.
+                          Ao bater o limite, a campanha permanece pausada até você retomar explicitamente.
                         </div>
                       </div>
                     )}
@@ -4772,95 +4683,6 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
             onBack={leaveMonitor}
           />
         ) : null}
-
-        {/* STATUS TAB */}
-        {waTab === 'status' && (
-          <div id="waPanelStatus" role="tabpanel" aria-labelledby="waTabStatus" data-od-id="wa-panel-status">
-            <div className="wa-panel">
-              <div className="wa-search"><input id="waStatusSearch" placeholder="Buscar atualização…" aria-label="Buscar atualização de status" value={statusSearch} onChange={(event) => setStatusSearch(event.target.value)} /></div>
-              <div className="wa-threads" aria-label="Atualizações de status">
-                <div className="wa-sect">Meu status</div>
-                <button type="button" className="wa-mystatus" data-od-id="wa-status-mine" onClick={() => localStatuses.length ? setStatusViewerIndex(0) : document.getElementById('waStatusPost')?.focus()}>
-                  <span className={`wa-statusring${localStatuses.length ? ' seen' : ''}`} aria-hidden="true"><span>V</span></span>
-                  <span className="tx" style={{ minWidth: 0 }}><b>Você</b><span>{localStatuses.length ? `${localStatuses.length} atualização(ões)` : 'Adicionar status'}</span></span>
-                </button>
-                <div className="wa-statuspost">
-                  <input id="waStatusPost" placeholder="Escrever atualização…" aria-label="Escrever atualização de status" value={statusDraft} onChange={(event) => setStatusDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') publishLocalStatus(); }} />
-                  <button type="button" className="btn btn-sm" onClick={publishLocalStatus}>Postar</button>
-                </div>
-                {visibleStatuses.length > 0 ? (
-                  <>
-                    <div className="wa-sect">Visualizados</div>
-                    {visibleStatuses.map((status) => (
-                      <button type="button" className="wa-statusitem" key={status.id} onClick={() => setStatusViewerIndex(status.sourceIndex)}>
-                        <span className="wa-statusring seen" aria-hidden="true"><span>{(status.name || 'V').charAt(0).toUpperCase()}</span></span>
-                        <span style={{ minWidth: 0 }}><b>{status.name || 'Você'}</b><span>{new Date(status.ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} · toque para ver</span></span>
-                      </button>
-                    ))}
-                  </>
-                ) : (
-                  <div className="empty"><b style={{ color: 'var(--fg)' }}>Nada por aqui</b><span>Nenhuma atualização encontrada.</span></div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* CHANNELS TAB */}
-        {waTab === 'channels' && (
-          <div id="waPanelChan" role="tabpanel" aria-labelledby="waTabChan" data-od-id="wa-panel-canais" style={{ flex: 1, display: 'flex', background: 'var(--bg)' }}>
-            <div className="wa-panel wa-list" data-od-id="wa-channel-list" style={{ width: 340, borderRight: '1px solid var(--border)', padding: 12 }}>
-              <div className="wa-search" style={{ marginBottom: 12 }}>
-                <input
-                  id="waChanSearch"
-                  placeholder="Buscar canal…"
-                  aria-label="Buscar canal"
-                  value={chanSearch}
-                  onChange={(e) => setChanSearch(e.target.value)}
-                />
-              </div>
-              <div className="empty" style={{ margin: '40px auto' }}>
-                <div className="e-icon">○</div>
-                <b style={{ color: 'var(--fg)' }}>Canais de transmissão</b>
-                <span>Fique por dentro das novidades dos seus temas favoritos.</span>
-              </div>
-            </div>
-            <div className="wa-panel" data-od-id="wa-channel-view" style={{ flex: 1, display: 'grid', placeItems: 'center', color: 'var(--muted)' }}>
-              <div className="empty">
-                <b style={{ color: 'var(--fg)' }}>Nenhum canal aberto</b>
-                <span>Escolha um canal para ver as novidades.</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* COMMUNITIES TAB */}
-        {waTab === 'communities' && (
-          <div id="waPanelComm" role="tabpanel" aria-labelledby="waTabComm" data-od-id="wa-panel-comunidades" style={{ flex: 1, display: 'flex', background: 'var(--bg)' }}>
-            <div className="wa-panel wa-list" data-od-id="wa-community-list" style={{ width: 340, borderRight: '1px solid var(--border)', padding: 12 }}>
-              <div className="wa-search" style={{ marginBottom: 12 }}>
-                <input
-                  id="waCommSearch"
-                  placeholder="Buscar comunidade…"
-                  aria-label="Buscar comunidade"
-                  value={commSearch}
-                  onChange={(e) => setCommSearch(e.target.value)}
-                />
-              </div>
-              <div className="empty" style={{ margin: '40px auto' }}>
-                <div className="e-icon">○</div>
-                <b style={{ color: 'var(--fg)' }}>Suas comunidades</b>
-                <span>Reúna grupos relacionados e envie avisos para todos os membros.</span>
-              </div>
-            </div>
-            <div className="wa-panel" data-od-id="wa-community-view" style={{ flex: 1, display: 'grid', placeItems: 'center', color: 'var(--muted)' }}>
-              <div className="empty">
-                <b style={{ color: 'var(--fg)' }}>Nenhuma comunidade aberta</b>
-                <span>Escolha uma comunidade para ver grupos e membros.</span>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* CHATS TAB */}
         {(waTab === 'chats' || waTab === 'campaigns') && (
@@ -5449,7 +5271,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                 <h3 style={{ margin: '0 0 4px' }}>Campanhas · proteção do número</h3>
                 <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)' }}>
                   Limite diário por número para aquecer a conta e reduzir risco de ban.
-                  Ao atingir o teto, a campanha pausa e continua no próximo dia (ou ao reiniciar o app com cota livre).
+                  Ao atingir o teto, a campanha permanece pausada até uma retomada explícita.
                 </p>
               </div>
 
@@ -5755,12 +5577,13 @@ function CampaignMonitorView({ campaign, onBack, connections = [] }) {
   };
   const statusLabel =
     campaign?.status === 'paused' && campaign?.pauseReason === 'daily_limit'
-      ? 'Limite diário (salva — retoma depois)'
+      ? 'Limite diário (salva — aguarda retomada)'
       : {
           ready: 'Pronta',
           running: 'Em andamento',
           scheduled: 'Agendada',
           paused: 'Pausada',
+          interrupted: 'Interrompida',
           completed: 'Concluída',
           cancelled: 'Cancelada',
         }[campaign?.status] || campaign?.status || '—';

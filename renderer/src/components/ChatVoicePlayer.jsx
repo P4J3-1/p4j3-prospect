@@ -1,17 +1,21 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pause as PauseIcon, Play as PlayIcon } from 'lucide-react';
 
-function formatTime(s) {
-  const v = Number(s);
-  if (!Number.isFinite(v) || v < 0) return '0:00';
-  const m = Math.floor(v / 60);
-  const sec = Math.floor(v % 60);
-  return `${m}:${String(sec).padStart(2, '0')}`;
+function formatTime(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+}
+
+function finiteTime(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
 }
 
 /**
- * Player de voz — NUNCA lê/escreve HTMLMediaElement.currentTime.
- * Progresso = relógio de parede (evita TypeError em elemento null no Electron).
+ * Player de voz baseado no HTMLMediaElement real. O relógio e o seek seguem
+ * currentTime/duration do arquivo, com guardas para fontes ainda indisponíveis.
  */
 export default function ChatVoicePlayer({
   msgId,
@@ -24,242 +28,204 @@ export default function ChatVoicePlayer({
   onRetry,
 }) {
   const audioRef = useRef(null);
-  const mountedRef = useRef(true);
-  const playingRef = useRef(false);
-  const startedAtRef = useRef(0);
-  const offsetRef = useRef(0);
-  const rafRef = useRef(0);
-
   const [playing, setPlaying] = useState(false);
-  const [displaySec, setDisplaySec] = useState(0);
-  const duration = Math.max(0, Number(secondsHint) || 0);
+  const [elapsed, setElapsed] = useState(0);
+  const [mediaDuration, setMediaDuration] = useState(0);
+  const [buffering, setBuffering] = useState(false);
 
-  const stopRaf = useCallback(() => {
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = 0;
-    }
+  const hintedDuration = finiteTime(secondsHint);
+  const duration = mediaDuration || hintedDuration;
+
+  const syncMediaTime = useCallback(() => {
+    const media = audioRef.current;
+    if (!media) return;
+    setElapsed(finiteTime(media.currentTime));
+    const nextDuration = finiteTime(media.duration);
+    if (nextDuration > 0) setMediaDuration(nextDuration);
   }, []);
 
-  const readElapsed = useCallback(() => {
-    if (playingRef.current && startedAtRef.current) {
-      return offsetRef.current + (Date.now() - startedAtRef.current) / 1000;
-    }
-    return offsetRef.current;
-  }, []);
-
-  const tick = useCallback(() => {
-    if (!mountedRef.current || !playingRef.current) return;
-    const elapsed = readElapsed();
-    setDisplaySec(elapsed);
-    if (duration > 0 && elapsed >= duration) {
-      // fim estimado
-      playingRef.current = false;
-      offsetRef.current = 0;
-      startedAtRef.current = 0;
-      setPlaying(false);
-      setDisplaySec(0);
-      stopRaf();
-      try {
-        audioRef.current?.pause?.();
-      } catch {
-        /* ignore */
-      }
-      return;
-    }
-    rafRef.current = requestAnimationFrame(tick);
-  }, [duration, readElapsed, stopRaf]);
-
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      stopRaf();
-      playingRef.current = false;
-      try {
-        const el = audioRef.current;
-        if (el) {
-          el.pause?.();
-          el.removeAttribute?.('src');
-          // não chama load() — em alguns Chromium gera eventos estranhos
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-  }, [stopRaf]);
-
-  // troca de mensagem / src → reseta UI
-  useEffect(() => {
-    stopRaf();
-    playingRef.current = false;
-    offsetRef.current = 0;
-    startedAtRef.current = 0;
-    setPlaying(false);
-    setDisplaySec(0);
-    const el = audioRef.current;
-    if (!el) return;
+    const media = audioRef.current;
+    if (!media) return undefined;
     try {
-      el.pause?.();
-      if (src) {
-        el.setAttribute('src', src);
-      } else {
-        el.removeAttribute('src');
-      }
+      media.pause();
+      media.currentTime = 0;
     } catch {
-      /* ignore */
+      // A fonte pode ainda não estar pronta no Chromium/Electron.
     }
-  }, [src, msgId, stopRaf]);
+    setPlaying(false);
+    setElapsed(0);
+    setMediaDuration(0);
+    setBuffering(false);
+    return undefined;
+  }, [msgId, src]);
+
+  useEffect(() => () => {
+    try {
+      audioRef.current?.pause();
+    } catch {
+      // best effort during unmount
+    }
+  }, []);
 
   const togglePlay = useCallback(async () => {
     if (!src) {
-      if (typeof onLoad === 'function') onLoad();
+      onLoad?.();
       return;
     }
-    const el = audioRef.current;
-    if (!el) return;
+
+    const media = audioRef.current;
+    if (!media) return;
 
     try {
-      if (!playingRef.current) {
-        // pausa outros players (só pause — sem currentTime)
-        try {
-          document.querySelectorAll('audio[data-sigma-voice="1"]').forEach((other) => {
-            if (other !== el) {
-              try {
-                other.pause?.();
-              } catch {
-                /* ignore */
-              }
-            }
-          });
-        } catch {
-          /* ignore */
-        }
-
-        if (el.getAttribute('src') !== src) {
-          el.setAttribute('src', src);
-        }
-        await el.play();
-        playingRef.current = true;
-        startedAtRef.current = Date.now();
-        setPlaying(true);
-        stopRaf();
-        rafRef.current = requestAnimationFrame(tick);
-      } else {
-        try {
-          el.pause?.();
-        } catch {
-          /* ignore */
-        }
-        offsetRef.current = readElapsed();
-        playingRef.current = false;
-        startedAtRef.current = 0;
-        setPlaying(false);
-        setDisplaySec(offsetRef.current);
-        stopRaf();
+      if (!media.paused) {
+        media.pause();
+        return;
       }
+
+      document.querySelectorAll('audio[data-sigma-voice="1"]').forEach((other) => {
+        if (other !== media) {
+          try {
+            other.pause();
+          } catch {
+            // One bad player cannot block this message.
+          }
+        }
+      });
+
+      setBuffering(true);
+      await media.play();
     } catch {
-      playingRef.current = false;
       setPlaying(false);
-      stopRaf();
+      setBuffering(false);
     }
-  }, [src, onLoad, tick, stopRaf, readElapsed]);
+  }, [onLoad, src]);
 
-  // seek só atualiza o relógio local — NÃO toca currentTime no DOM
-  const seek = useCallback((e) => {
-    e.stopPropagation();
-    if (!src || duration <= 0) return;
+  const seekTo = useCallback((next) => {
+    const media = audioRef.current;
+    const max = finiteTime(media?.duration) || duration;
+    if (!media || !src || max <= 0) return;
+    const target = Math.max(0, Math.min(max, Number(next) || 0));
     try {
-      const rect = e.currentTarget?.getBoundingClientRect?.();
-      if (!rect?.width) return;
-      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      const next = ratio * duration;
-      offsetRef.current = next;
-      if (playingRef.current) {
-        startedAtRef.current = Date.now();
-      }
-      setDisplaySec(next);
-      // reinicia o áudio do começo se estiver tocando (sem seek nativo)
-      const el = audioRef.current;
-      if (el && playingRef.current) {
-        try {
-          el.pause?.();
-          el.setAttribute('src', src);
-          el.play?.().catch(() => {});
-          // aproximação: não há seek real sem currentTime; aceitável para PTT curto
-        } catch {
-          /* ignore */
-        }
-      }
+      media.currentTime = target;
+      setElapsed(target);
     } catch {
-      /* ignore */
+      // Metadata can disappear while a remote media file is being retried.
     }
-  }, [src, duration]);
+  }, [duration, src]);
 
-  const showTime = playing || displaySec > 0 ? displaySec : duration;
-  const pct = duration > 0 ? Math.min(100, (Math.min(displaySec, duration) / duration) * 100) : (playing ? 8 : 0);
+  const seekFromPointer = useCallback((event) => {
+    event.stopPropagation();
+    const rect = event.currentTarget?.getBoundingClientRect?.();
+    if (!rect?.width || duration <= 0) return;
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    seekTo(ratio * duration);
+  }, [duration, seekTo]);
+
+  const handleSeekKeyDown = useCallback((event) => {
+    if (duration <= 0) return;
+    const step = event.shiftKey ? 10 : 5;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      seekTo(elapsed - step);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      seekTo(elapsed + step);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      seekTo(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      seekTo(duration);
+    }
+  }, [duration, elapsed, seekTo]);
+
+  const shownTime = playing || elapsed > 0 ? elapsed : duration;
+  const progress = duration > 0 ? Math.min(100, (Math.min(elapsed, duration) / duration) * 100) : 0;
 
   return (
-    <div className={`chat-voice ${src ? 'ready' : ''} ${isPtt ? 'ptt' : ''}`}>
+    <div className={`chat-voice ${src ? 'ready' : ''} ${isPtt ? 'ptt' : ''} ${buffering ? 'buffering' : ''}`}>
       <button
         type="button"
         className={`chat-voice-play ${playing ? 'playing' : ''}`}
-        onClick={(e) => {
-          e.stopPropagation();
+        onClick={(event) => {
+          event.stopPropagation();
           togglePlay();
         }}
         disabled={!!loading}
         title={src ? (playing ? 'Pausar' : 'Reproduzir') : 'Carregar áudio'}
+        aria-label={src ? (playing ? 'Pausar áudio' : 'Reproduzir áudio') : 'Carregar áudio'}
       >
-        {loading ? (
-          <span className="chat-voice-spinner" />
-        ) : playing ? (
-          <PauseIcon size={16} />
-        ) : (
-          <PlayIcon size={16} />
-        )}
+        {loading || buffering ? <span className="chat-voice-spinner" /> : playing ? <PauseIcon size={16} /> : <PlayIcon size={16} />}
       </button>
       <div className="chat-voice-body">
-        <div className="chat-voice-wave" onClick={seek}>
+        <div
+          className="chat-voice-wave"
+          role="slider"
+          tabIndex={0}
+          aria-label="Posição do áudio"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(duration)}
+          aria-valuenow={Math.round(elapsed)}
+          onClick={seekFromPointer}
+          onKeyDown={handleSeekKeyDown}
+        >
           <div className="chat-voice-wave-bg" />
-          <div className="chat-voice-wave-fill" style={{ width: `${pct}%` }} />
-          <div className="chat-voice-bars" aria-hidden>
-            {Array.from({ length: 24 }).map((_, i) => (
-              <span key={i} style={{ height: `${30 + ((i * 17) % 55)}%` }} />
+          <div className="chat-voice-wave-fill" style={{ width: `${progress}%` }} />
+          <div className="chat-voice-bars" aria-hidden="true">
+            {Array.from({ length: 24 }).map((_, index) => (
+              <span key={index} style={{ height: `${30 + ((index * 17) % 55)}%` }} />
             ))}
           </div>
         </div>
         <div className="chat-voice-meta">
           <span>{isPtt ? 'Mensagem de voz' : 'Áudio'}</span>
-          <span className="chat-voice-time">{formatTime(showTime)}</span>
+          <span className="chat-voice-time">{formatTime(shownTime)}</span>
         </div>
       </div>
       <audio
         ref={audioRef}
+        src={src || undefined}
         data-sigma-voice="1"
         data-msg-id={msgId || ''}
-        preload="none"
+        preload="metadata"
         style={{ display: 'none' }}
-        onEnded={() => {
-          playingRef.current = false;
-          offsetRef.current = 0;
-          startedAtRef.current = 0;
+        onLoadedMetadata={syncMediaTime}
+        onDurationChange={syncMediaTime}
+        onTimeUpdate={syncMediaTime}
+        onPlay={() => {
+          setPlaying(true);
+          setBuffering(false);
+          syncMediaTime();
+        }}
+        onPause={() => {
           setPlaying(false);
-          setDisplaySec(0);
-          stopRaf();
+          setBuffering(false);
+          syncMediaTime();
+        }}
+        onWaiting={() => setBuffering(true)}
+        onCanPlay={() => setBuffering(false)}
+        onEnded={() => {
+          setPlaying(false);
+          setBuffering(false);
+          setElapsed(0);
+          try {
+            if (audioRef.current) audioRef.current.currentTime = 0;
+          } catch {
+            // Media may already be detached.
+          }
         }}
         onError={() => {
-          playingRef.current = false;
           setPlaying(false);
-          stopRaf();
+          setBuffering(false);
         }}
       />
       {error ? (
         <button
           type="button"
           className="chat-media-retry"
-          onClick={(e) => {
-            e.stopPropagation();
+          onClick={(event) => {
+            event.stopPropagation();
             onRetry?.();
           }}
         >

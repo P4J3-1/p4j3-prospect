@@ -20,7 +20,8 @@ import {
   ChevronDown,
   FileSpreadsheet,
   X,
-  Navigation
+  Navigation,
+  Info
 } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -153,6 +154,38 @@ function norm(s) {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
+// O processo de coleta pode receber mensagens de uma versão anterior do
+// scraper. A interface nunca expõe essas mensagens técnicas em inglês.
+function formatProgressMessage(value) {
+  const message = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!message) return '';
+  if (/^Launching browser/i.test(message)) return 'Abrindo o navegador para a extração…';
+  if (/^Loading results/i.test(message)) return 'Carregando os resultados encontrados…';
+  if (/^No results found/i.test(message)) return 'Nenhum resultado foi encontrado no Google Maps.';
+  if (/^Scrape cancelled/i.test(message)) return 'Extração cancelada.';
+
+  const found = message.match(/\bFound:\s*(\d+)/i);
+  if (found) return `${found[1]} empresa${found[1] === '1' ? '' : 's'} encontrada${found[1] === '1' ? '' : 's'} na lista do Google Maps.`;
+
+  const extracting = message.match(/^Extracting\s+(\d+)\s+places/i);
+  if (extracting) return `Iniciando a extração de ${extracting[1]} empresa${extracting[1] === '1' ? '' : 's'}…`;
+
+  const skipped = message.match(/^\[(\d+)\/(\d+)\]\s+skip/i);
+  if (skipped) return `Empresa ${skipped[1]} de ${skipped[2]} ignorada por dados incompletos.`;
+
+  const legacyLead = message.match(/^\[(\d+)\/(\d+)\]\s+(.+)$/);
+  if (legacyLead) return `Empresa ${legacyLead[1]} de ${legacyLead[2]} extraída: ${legacyLead[3]}`;
+
+  const retry = message.match(/^Retry\s+(\d+)\/(\d+)\s+in\s+(\d+)ms/i);
+  if (retry) return `Nova tentativa ${retry[1]} de ${retry[2]} em ${Math.round(Number(retry[3]) / 1000)} s…`;
+
+  const done = message.match(/^Done!\s*(\d+)\s+places/i);
+  if (done) return `Extração concluída: ${done[1]} empresa${done[1] === '1' ? '' : 's'} extraída${done[1] === '1' ? '' : 's'}.`;
+
+  if (/^Error:/i.test(message)) return `Erro durante a extração: ${message.replace(/^Error:\s*/i, '')}`;
+  return message;
+}
+
 // Accessors
 function getLeadName(l) { return l.name || l.n || 'Empresa'; }
 function getLeadCat(l) { return l.category || l.cat || 'Geral'; }
@@ -176,11 +209,22 @@ export default function MapScraperView({
   const { addNotification } = useNotifications();
 
   const [leads, setLeads] = useState(() => normalizeLeadCollection(readLocalArray('sigma_leads')));
+  const [liveLeads, setLiveLeads] = useState([]);
   const [searches, setSearches] = useState(() => getExtractionSearches(readLocalArray('sigma_searches')));
 
   // Estado de processamento
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressPct, setProgressPct] = useState(0);
+  const [isProgressDetailsOpen, setIsProgressDetailsOpen] = useState(false);
+  const [progressDetails, setProgressDetails] = useState({
+    status: 'idle',
+    message: 'Aguardando extração',
+    current: 0,
+    total: 0,
+    found: 0,
+    neighborhood: '',
+  });
+  const [progressLog, setProgressLog] = useState([]);
   const [mapTileError, setMapTileError] = useState('');
 
   // Basemap
@@ -228,10 +272,13 @@ export default function MapScraperView({
   const userMarkerRef = useRef(null);
   const leadCardRefs = useRef({});
   const markersMapRef = useRef(new Map());
+  const autoLocationAttemptedRef = useRef(false);
+  const [isMapReady, setIsMapReady] = useState(false);
   const locDebounceRef = useRef(null);
   const tileErrorsRef = useRef(0);
   const repairedAddressKeysRef = useRef(new Set());
   const addressRepairInFlightRef = useRef(false);
+  const liveLeadSequenceRef = useRef(0);
 
   const repairDirtyStoredAddresses = useCallback(async (rawLeads) => {
     if (typeof window.electronAPI?.repairMapAddresses !== 'function' || addressRepairInFlightRef.current) return;
@@ -293,9 +340,24 @@ export default function MapScraperView({
   }, [addNotification]);
 
   useEffect(() => {
-    if (!activeExtraction?.id) return;
+    if (!activeExtraction?.id) {
+      setLiveLeads([]);
+      return;
+    }
+    liveLeadSequenceRef.current = 0;
+    setLiveLeads([]);
     setIsProcessing(true);
     setProgressPct(0);
+    setIsProgressDetailsOpen(false);
+    setProgressDetails({
+      status: 'started',
+      message: 'Preparando a extração…',
+      current: 0,
+      total: 0,
+      found: 0,
+      neighborhood: activeExtraction.currentNeighborhood || '',
+    });
+    setProgressLog([]);
   }, [activeExtraction?.id]);
 
   // Sincronizar contagem global
@@ -328,10 +390,37 @@ export default function MapScraperView({
           ? { message: entry, status: /error|cancel/i.test(entry) ? 'failed' : 'running' }
           : (entry || {});
         if (activeExtraction?.id && payload.queryId && payload.queryId !== activeExtraction.id) return;
-        const terminal = ['completed', 'failed', 'cancelled'].includes(payload.status);
+        const completedBatch = payload.status === 'completed' && payload.batchComplete !== false;
+        const terminal = ['failed', 'cancelled'].includes(payload.status) || completedBatch;
         if (!terminal) setIsProcessing(true);
         if (Number.isFinite(Number(payload.current)) && Number(payload.total) > 0) {
-          setProgressPct(Math.max(0, Math.min(100, Math.round((Number(payload.current) / Number(payload.total)) * 100))));
+          const targetCount = Math.max(1, Number(payload.totalNeighborhoods) || activeExtraction?.neighborhoods?.length || 1);
+          const targetIndex = Math.max(0, Math.min(targetCount - 1, Number(payload.neighborhoodIndex) || 0));
+          const targetPct = Math.max(0, Math.min(1, Number(payload.current) / Number(payload.total)));
+          setProgressPct(Math.round(((targetIndex + targetPct) / targetCount) * 100));
+        }
+        setProgressDetails((previous) => ({
+          ...previous,
+          ...payload,
+          found: Number.isFinite(Number(payload.found)) ? Number(payload.found) : previous.found,
+        }));
+        if (payload.lead && typeof payload.lead === 'object') {
+          const sequence = liveLeadSequenceRef.current += 1;
+          const [normalizedLead] = normalizeLeadCollection([{
+            ...payload.lead,
+            id: payload.lead.id || `live-${payload.queryId || activeExtraction?.id || 'scrape'}-${sequence}`,
+            searchId: payload.lead.searchId || payload.queryId || activeExtraction?.id,
+          }]);
+          if (normalizedLead?.name) {
+            setLiveLeads((previous) => dedupeLeads([...previous, normalizedLead]));
+          }
+        }
+        if (payload.message) {
+          setProgressLog((previous) => {
+            const message = formatProgressMessage(payload.message);
+            if (!message || previous.at(-1)?.message === message) return previous;
+            return [...previous, { message, status: payload.status || 'running', timestamp: Date.now() }].slice(-8);
+          });
         }
         if (terminal) {
           setIsProcessing(false);
@@ -342,11 +431,22 @@ export default function MapScraperView({
     }
   }, [activeExtraction?.id]);
 
+  // Enquanto a extração está em andamento, os leads recém-coletados ficam no
+  // mapa e no feed antes de a transação final ser gravada na base local.
+  const displayLeads = useMemo(
+    () => dedupeLeads([...liveLeads, ...leads]),
+    [leads, liveLeads],
+  );
+  const liveLeadIds = useMemo(
+    () => new Set(liveLeads.map((lead) => String(lead.id))),
+    [liveLeads],
+  );
+
   // Lista de leads visíveis filtrada
   const visibleLeads = useMemo(() => {
     const nq = norm(feedSearch.trim());
 
-    return leads.filter((lead) => {
+    return displayLeads.filter((lead) => {
       const name = getLeadName(lead);
       const cat = getLeadCat(lead);
       const tel = getLeadPhone(lead);
@@ -381,7 +481,7 @@ export default function MapScraperView({
       return 0;
     });
   }, [
-    leads,
+    displayLeads,
     feedSearch,
     filterCat,
     filterScore,
@@ -406,20 +506,20 @@ export default function MapScraperView({
 
   // Opções únicas para filtros
   const uniqueCategories = useMemo(() => {
-    return [...new Set(leads.map(getLeadCat).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  }, [leads]);
+    return [...new Set(displayLeads.map(getLeadCat).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [displayLeads]);
 
   const uniqueUfs = useMemo(() => {
-    return [...new Set(leads.map(getLeadState).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  }, [leads]);
+    return [...new Set(displayLeads.map(getLeadState).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [displayLeads]);
 
   const uniqueCities = useMemo(() => {
-    return [...new Set(leads.map(getLeadCity).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  }, [leads]);
+    return [...new Set(displayLeads.map(getLeadCity).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [displayLeads]);
 
   const uniqueBairros = useMemo(() => {
-    return [...new Set(leads.map(getLeadBairro).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  }, [leads]);
+    return [...new Set(displayLeads.map(getLeadBairro).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [displayLeads]);
 
   const attachTileDiagnostics = useCallback((tile) => {
     tileErrorsRef.current = 0;
@@ -443,8 +543,8 @@ export default function MapScraperView({
 
     if (!mapInstanceRef.current) {
       const map = L.map(mapContainerRef.current, {
-        center: userLocation ? [userLocation.lat, userLocation.lng] : DEFAULT_MAP_CENTER,
-        zoom: userLocation ? 13 : DEFAULT_MAP_ZOOM,
+        center: DEFAULT_MAP_CENTER,
+        zoom: DEFAULT_MAP_ZOOM,
         zoomControl: false,
         attributionControl: true,
       });
@@ -463,6 +563,7 @@ export default function MapScraperView({
       tileLayerRef.current = tile;
       mapInstanceRef.current = map;
       markersLayerRef.current = L.layerGroup().addTo(map);
+      setIsMapReady(true);
 
       initialInvalidateTimer = window.setTimeout(() => {
         // A rota pode ter sido trocada antes do primeiro repaint do Leaflet.
@@ -486,8 +587,57 @@ export default function MapScraperView({
       markersLayerRef.current = null;
       userMarkerRef.current = null;
       markersMapRef.current.clear();
+      setIsMapReady(false);
     };
   }, [attachTileDiagnostics]);
+
+  // Ao abrir o Scraper, o mapa parte do Brasil e aproxima a referência salva
+  // ou a localização concedida pelo navegador. Sem permissão, mantém o mapa
+  // utilizável e não cria uma notificação de erro intrusiva.
+  useEffect(() => {
+    if (!isMapReady || autoLocationAttemptedRef.current) return undefined;
+    const map = mapInstanceRef.current;
+    if (!map) return undefined;
+    autoLocationAttemptedRef.current = true;
+    let cancelled = false;
+
+    const flyToLocation = (location) => {
+      window.setTimeout(() => {
+        if (cancelled || mapInstanceRef.current !== map) return;
+        try {
+          map.invalidateSize();
+          map.flyTo([location.lat, location.lng], 13, { duration: 1.15, easeLinearity: 0.22 });
+        } catch {}
+      }, 180);
+    };
+
+    const saved = readStoredUserLocation();
+    if (saved) {
+      flyToLocation(saved);
+      return () => { cancelled = true; };
+    }
+    if (!navigator.geolocation) return () => { cancelled = true; };
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = Number(position.coords.latitude);
+        const lng = Number(position.coords.longitude);
+        if (cancelled || !isValidCoordinatePair(lat, lng)) return;
+        const location = {
+          lat,
+          lng,
+          label: 'Sua posição',
+          accuracy: Number.isFinite(Number(position.coords.accuracy)) ? Number(position.coords.accuracy) : null,
+        };
+        setUserLocation(location);
+        flyToLocation(location);
+      },
+      () => {},
+      { enableHighAccuracy: false, timeout: 7000, maximumAge: 300000 }
+    );
+
+    return () => { cancelled = true; };
+  }, [isMapReady]);
 
   // Atualizar camada de basemap quando baseKey mudar
   useEffect(() => {
@@ -893,6 +1043,20 @@ export default function MapScraperView({
     setIsFilterDrawerOpen(false);
   };
 
+  const plannedNeighborhoods = activeExtraction?.neighborhoods || [];
+  const completedNeighborhoods = activeExtraction?.completedNeighborhoods || [];
+  const failedNeighborhoods = activeExtraction?.failedNeighborhoods || [];
+  const currentProgressNeighborhood = progressDetails.neighborhood || activeExtraction?.currentNeighborhood || '';
+  const currentTargetCompleted = completedNeighborhoods.includes(currentProgressNeighborhood);
+  const liveFound = Number.isFinite(Number(progressDetails.found))
+    ? Number(progressDetails.found)
+    : (Number.isFinite(Number(progressDetails.current)) ? Number(progressDetails.current) : 0);
+  const foundSoFar = Math.max(
+    liveLeads.length,
+    Math.max(0, Number(activeExtraction?.foundCount) || 0) + (currentTargetCompleted ? 0 : liveFound),
+  );
+  const pendingNeighborhoods = plannedNeighborhoods.filter((name) => !completedNeighborhoods.includes(name) && !failedNeighborhoods.includes(name));
+
   return (
     <div className="map-full" data-od-id="scraper-map-full">
       {/* Map Wrap (Protagonista) */}
@@ -1170,17 +1334,52 @@ export default function MapScraperView({
 
         {/* Barra de Progresso de Extração */}
         <div
-          className={`map-progress ${isProcessing ? 'on' : ''}`}
+          className={`map-progress ${isProcessing ? 'on' : ''} ${isProgressDetailsOpen ? 'expanded' : ''}`}
           id="progWrap"
           data-od-id="scraper-progress"
         >
-          <div className="progress-track">
-            <div className="progress-fill" id="progFill" style={{ width: `${progressPct}%` }} />
+          <div className="map-progress-main">
+            <div className="progress-track">
+              <div className="progress-fill" id="progFill" style={{ width: `${progressPct}%` }} />
+            </div>
+            <span className="progress-txt" id="progTxt">{progressPct}%</span>
+            <button
+              type="button"
+              className="map-progress-info"
+              data-od-id="scraper-progress-info"
+              aria-label="Mostrar detalhes da extração"
+              aria-expanded={isProgressDetailsOpen}
+              title="Detalhes da extração"
+              onClick={() => setIsProgressDetailsOpen((value) => !value)}
+            >
+              <Info size={15} aria-hidden="true" />
+            </button>
+            <button type="button" className="btn btn-sm" id="cancelBtn" disabled={!activeExtraction?.id} onClick={handleCancelExtraction}>
+              Cancelar
+            </button>
           </div>
-          <span className="progress-txt" id="progTxt">{progressPct}%</span>
-          <button type="button" className="btn btn-sm" id="cancelBtn" disabled={!activeExtraction?.id} onClick={handleCancelExtraction}>
-            Cancelar
-          </button>
+          {isProgressDetailsOpen && (
+            <section className="map-progress-detail" aria-label="Detalhes da extração em andamento">
+              <div className="map-progress-stats">
+                <span><b>{foundSoFar}</b><small>empresas encontradas</small></span>
+                <span><b>{completedNeighborhoods.length}/{plannedNeighborhoods.length}</b><small>{activeExtraction?.hasNeighborhoodPlan ? 'bairros concluídos' : 'etapas concluídas'}</small></span>
+                <span><b>{pendingNeighborhoods.length}</b><small>{activeExtraction?.hasNeighborhoodPlan ? 'bairros pendentes' : 'etapas pendentes'}</small></span>
+              </div>
+              {activeExtraction?.hasNeighborhoodPlan && (
+                <div className="map-progress-neighborhoods">
+                  <div><b>Prospectados</b><span>{completedNeighborhoods.length ? completedNeighborhoods.join(' · ') : 'Nenhum bairro concluído ainda.'}</span></div>
+                  <div><b>Ainda faltam</b><span>{pendingNeighborhoods.length ? pendingNeighborhoods.join(' · ') : 'Nenhum bairro pendente.'}</span></div>
+                  {failedNeighborhoods.length > 0 && <div className="is-warning"><b>Precisam de revisão</b><span>{failedNeighborhoods.join(' · ')}</span></div>}
+                </div>
+              )}
+              <div className="map-progress-log" aria-live="polite">
+                <b>Registro da execução</b>
+                {progressLog.length ? progressLog.map((entry, index) => (
+                  <span key={`${entry.timestamp}-${index}`} className={`is-${entry.status}`}>{entry.message}</span>
+                )) : <span>Preparando os dados da extração…</span>}
+              </div>
+            </section>
+          )}
         </div>
       </div>
 
@@ -1316,6 +1515,7 @@ export default function MapScraperView({
 
         <div style={{ padding: '8px 12px 0', fontSize: 12, color: 'var(--muted)' }} id="feedCount" role="status">
           {visibleLeads.length} lead{visibleLeads.length === 1 ? '' : 's'}
+          {activeExtraction?.id && liveLeads.length > 0 && <span className="feed-live-count"> · {liveLeads.length} chegando agora</span>}
         </div>
 
         {/* Lista de Lead Cards */}
@@ -1338,6 +1538,7 @@ export default function MapScraperView({
             visibleLeads.map((lead, pos) => {
               const leadId = lead.id || `lead_${pos}`;
               const isSelected = selectedLeadId === leadId;
+              const isLiveLead = liveLeadIds.has(String(leadId));
               const name = getLeadName(lead);
               const rating = getLeadRating(lead);
               const reviews = getLeadReviews(lead);
@@ -1367,6 +1568,7 @@ export default function MapScraperView({
                 >
                   <div className="lead-top">
                     <b>{name}</b>
+                    {isLiveLead && <span className="lead-live">Ao vivo</span>}
                     <span className="rate">
                       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />

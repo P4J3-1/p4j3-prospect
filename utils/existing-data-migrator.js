@@ -1,8 +1,9 @@
 const fs = require('fs');
 const path = require('path');
-const { normalizeAddress, hasLeadingAddressNoise } = require('./address-normalizer');
+const { normalizeAddress } = require('./address-normalizer');
+const { isDisplayTextKey, normalizeText } = require('./text-normalizer');
 
-const MIGRATION_ID = 'address-normalization-v1';
+const MIGRATION_ID = 'lead-text-normalization-v2';
 const ADDRESS_KEYS = new Set(['address', 'endereco']);
 const LOCAL_STORAGE_KEYS = [
   'sigma_leads',
@@ -45,9 +46,21 @@ function normalizeAddressFields(value, stats, seen = new WeakSet(), pathLabel = 
 
   for (const [key, current] of Object.entries(value)) {
     const childPath = pathLabel ? `${pathLabel}.${key}` : key;
+    // `raw` conserva o valor originalmente recebido para auditoria e rollback.
+    if (String(key).toLowerCase() === 'raw') continue;
     if (ADDRESS_KEYS.has(String(key).toLowerCase()) && typeof current === 'string') {
       stats.fields += 1;
       const normalized = normalizeAddress(current);
+      if (normalized !== current) {
+        value[key] = normalized;
+        stats.changed += 1;
+        if (stats.examples.length < 5) stats.examples.push({ path: childPath, before: current, after: normalized });
+      }
+      continue;
+    }
+    if (isDisplayTextKey(key) && typeof current === 'string') {
+      stats.fields += 1;
+      const normalized = normalizeText(current);
       if (normalized !== current) {
         value[key] = normalized;
         stats.changed += 1;
@@ -64,9 +77,7 @@ function normalizeGeocodeCache(cache, stats) {
   if (!cache || typeof cache !== 'object' || Array.isArray(cache)) return cache;
   const next = {};
   for (const [key, entry] of Object.entries(cache)) {
-    const normalizedKey = hasLeadingAddressNoise(key)
-      ? normalizeAddress(key).toLowerCase()
-      : key;
+    const normalizedKey = normalizeAddress(key).toLowerCase();
     const targetKey = normalizedKey || key;
     if (targetKey !== key) stats.changed += 1;
     // Keep the newest entry if a dirty and clean key collapse to the same value.

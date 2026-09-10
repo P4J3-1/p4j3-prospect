@@ -151,4 +151,15 @@ describe('campaign tracking', () => {
     assert.equal(afterListEdit.leads[0].kanbanStage, 'finished');
     assert.equal(afterListEdit.leads[0].kanbanOrder, 4);
   });
+
+  it('requires explicit recovery after restart and never restarts cancelled campaigns', () => {
+    const camp = makeCampaign();
+    manager.update(camp.id, { status: 'running' });
+    assert.equal(manager.interruptForRestart(), 1);
+    assert.equal(manager.get(camp.id).status, 'interrupted');
+    assert.equal(manager.autoResume().requiresConfirmation, true);
+
+    manager.update(camp.id, { status: 'cancelled' });
+    assert.throws(() => manager.start(camp.id), /cancelada é terminal/i);
+  });
 });

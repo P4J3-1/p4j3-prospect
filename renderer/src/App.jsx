@@ -135,8 +135,12 @@ function AppInner() {
   });
   const [isNewExtractionOpen, setIsNewExtractionOpen] = useState(false);
   const [isCmdOpen, setIsCmdOpen] = useState(false);
-  const [isSidebarLocked, setIsSidebarLocked] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('sigma_sidebar_collapsed') === 'true'; } catch { return false; }
+  });
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [uiZoom, setUiZoom] = useState(1);
+  const [isClearLeadBaseOpen, setIsClearLeadBaseOpen] = useState(false);
   const [waStatus, setWaStatus] = useState('disconnected');
   const [leadsCount, setLeadsCount] = useState(() => dedupeLeads(organizeStoredLeads()).length);
   const [scoringCount, setScoringCount] = useState(0);
@@ -184,21 +188,63 @@ function AppInner() {
         const map=['overview','scraper','base','scoring','kanban','whatsapp'];
         const i=Number(e.key)-1; if(map[i]) setActiveTab(map[i]);
       }
-      if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); setIsCmdOpen(v=>!v); }
+      if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k' && activeTab === 'overview'){
+        e.preventDefault();
+        setIsCmdOpen(v=>!v);
+      }
     };
     window.addEventListener('keydown', onKey);
     return()=> window.removeEventListener('keydown', onKey);
+  }, [activeTab]);
+
+  const updateUiZoom = useCallback(async (nextZoom) => {
+    const safeZoom = Math.max(0.8, Math.min(1.5, Math.round(nextZoom * 100) / 100));
+    try {
+      const stored = await window.electronAPI?.setUiZoom?.(safeZoom);
+      setUiZoom(typeof stored === 'number' ? stored : safeZoom);
+    } catch {
+      setUiZoom(safeZoom);
+    }
   }, []);
 
   useEffect(() => {
-    document.body.classList.toggle('side-locked', isSidebarLocked);
+    let mounted = true;
+    window.electronAPI?.getUiZoom?.()
+      ?.then((zoom) => { if (mounted && typeof zoom === 'number') setUiZoom(zoom); })
+      ?.catch(() => {});
+    const onZoomKey = (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      if (['Equal', 'NumpadAdd'].includes(event.code)) {
+        event.preventDefault();
+        updateUiZoom(uiZoom + 0.1);
+      } else if (['Minus', 'NumpadSubtract'].includes(event.code)) {
+        event.preventDefault();
+        updateUiZoom(uiZoom - 0.1);
+      } else if (event.code === 'Digit0' || event.code === 'Numpad0') {
+        event.preventDefault();
+        updateUiZoom(1);
+      }
+    };
+    window.addEventListener('keydown', onZoomKey);
+    return () => {
+      mounted = false;
+      window.removeEventListener('keydown', onZoomKey);
+    };
+  }, [uiZoom, updateUiZoom]);
+
+  useEffect(() => {
+    try { localStorage.setItem('sigma_sidebar_collapsed', String(isSidebarCollapsed)); } catch {}
+  }, [isSidebarCollapsed]);
+
+  useEffect(() => {
+    document.body.classList.toggle('side-collapsed', isSidebarCollapsed);
     document.body.classList.toggle('nav-open', isMobileNavOpen);
     document.body.classList.toggle('route-whatsapp', activeTab === 'whatsapp');
     document.body.classList.toggle('route-kanban', activeTab === 'kanban');
     return () => {
-      document.body.classList.remove('side-locked', 'nav-open', 'route-whatsapp', 'route-kanban');
+      document.body.classList.remove('side-collapsed', 'nav-open', 'route-whatsapp', 'route-kanban');
     };
-  }, [isSidebarLocked, isMobileNavOpen, activeTab]);
+  }, [isSidebarCollapsed, isMobileNavOpen, activeTab]);
 
   const navigate = (tab) => {
     setActiveTab(tab);
@@ -208,6 +254,28 @@ function AppInner() {
   const handleMinimize = () => window.electronAPI?.winMinimize();
   const handleMaximize = () => window.electronAPI?.winMaximize();
   const handleClose = () => window.electronAPI?.winClose();
+
+  const clearLeadBase = () => {
+    const count = dedupeLeads(normalizeLeadCollection(readLocalArray('sigma_leads'))).length;
+    ['sigma_leads', 'sigma_searches', 'sigma_groups', 'sigma_history', 'sigma_analysis'].forEach((key) => {
+      try { localStorage.removeItem(key); } catch {}
+    });
+    // Evita que a tela de Base recrie dados de demonstração após uma limpeza explícita.
+    try { localStorage.setItem('sigma_leads_initialized', 'true'); } catch {}
+    setLeadsCount(0);
+    setScoringCount(0);
+    window.dispatchEvent(new CustomEvent('sigma:leads-updated', {
+      detail: { leads: [], searches: [] },
+    }));
+    addNotification({
+      type: 'success',
+      category: 'system',
+      title: 'Base de leads limpa',
+      message: `${count} lead${count === 1 ? '' : 's'} e seus agrupamentos locais foram removidos desta instalação.`,
+      duration: 5000,
+    });
+    setIsClearLeadBaseOpen(false);
+  };
 
   const handleStartExtraction = async ({ niche, neigh, city, limit }) => {
     if (activeExtraction) {
@@ -220,6 +288,13 @@ function AppInner() {
       return;
     }
     setActiveTab('scraper');
+    const neighborhoods = String(neigh || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .filter((item, index, items) => items.findIndex((candidate) => candidate.localeCompare(item, 'pt-BR', { sensitivity: 'accent' }) === 0) === index);
+    const hasNeighborhoodPlan = neighborhoods.length > 0;
+    const targets = hasNeighborhoodPlan ? neighborhoods : [city || 'Pesquisa regional'];
     const qstr = [niche, neigh, city].filter(Boolean).join(' ').trim();
     const searchId = `scrape_${Date.now()}`;
     addNotification({
@@ -234,24 +309,68 @@ function AppInner() {
       return;
     }
 
-    setActiveExtraction({ id: searchId, query: qstr, startedAt: Date.now() });
+    setActiveExtraction({
+      id: searchId,
+      query: qstr,
+      startedAt: Date.now(),
+      neighborhoods: targets,
+      hasNeighborhoodPlan,
+      completedNeighborhoods: [],
+      failedNeighborhoods: [],
+      currentNeighborhood: targets[0],
+      foundCount: 0,
+    });
     try {
-      const res = await window.electronAPI.startScrape(qstr, limit, searchId);
-      if (!res?.success) {
-        if (res?.cancelled) {
-          addNotification({ type: 'info', category: 'scraper', title: 'Extração cancelada', message: 'Nenhum resultado parcial foi adicionado à base.' });
-          return;
-        }
-        throw new Error(res?.error || 'O Google Maps não retornou resultados para esta busca.');
-      }
-      const resultLeads = Array.isArray(res.data) ? res.data : [];
-      if (!resultLeads.length) throw new Error('A busca foi concluída, mas não retornou leads válidos.');
+      const resultLeads = [];
+      const warnings = [];
 
-      const current = readLocalArray('sigma_leads');
-      const combined = normalizeLeadCollection([
-        ...resultLeads.map((lead) => ({ ...lead, searchId, id: lead.id || Math.random().toString(36).slice(2) })),
+      for (let index = 0; index < targets.length; index += 1) {
+        const neighborhood = targets[index];
+        const targetQuery = [niche, hasNeighborhoodPlan ? neighborhood : '', city].filter(Boolean).join(' ').trim();
+        setActiveExtraction((current) => current && current.id === searchId
+          ? { ...current, currentNeighborhood: neighborhood }
+          : current);
+
+        const res = await window.electronAPI.startScrape(targetQuery, limit, searchId, {
+          neighborhood,
+          neighborhoodIndex: index,
+          totalNeighborhoods: targets.length,
+          batchComplete: index === targets.length - 1,
+        });
+        if (!res?.success) {
+          if (res?.cancelled) {
+            addNotification({ type: 'info', category: 'scraper', title: 'Extração cancelada', message: 'Nenhum resultado parcial foi adicionado à base.' });
+            return;
+          }
+          warnings.push(`${neighborhood}: ${res?.error || 'sem resultados válidos'}`);
+          setActiveExtraction((current) => current && current.id === searchId
+            ? { ...current, failedNeighborhoods: [...new Set([...current.failedNeighborhoods, neighborhood])] }
+            : current);
+          continue;
+        }
+
+        const targetLeads = Array.isArray(res.data) ? res.data : [];
+        resultLeads.push(...targetLeads);
+        if (res.partial && Array.isArray(res.warnings)) warnings.push(...res.warnings);
+        setActiveExtraction((current) => current && current.id === searchId
+          ? {
+              ...current,
+              completedNeighborhoods: [...new Set([...current.completedNeighborhoods, neighborhood])],
+              foundCount: resultLeads.length,
+            }
+          : current);
+      }
+
+      if (!resultLeads.length) {
+        throw new Error(warnings[0] || 'A busca foi concluída, mas não retornou leads válidos.');
+      }
+
+      const current = dedupeLeads(normalizeLeadCollection(readLocalArray('sigma_leads')));
+      const combined = dedupeLeads(normalizeLeadCollection([
         ...current,
-      ]);
+        ...resultLeads.map((lead) => ({ ...lead, searchId, id: lead.id || Math.random().toString(36).slice(2) })),
+      ]));
+      const addedCount = Math.max(0, combined.length - current.length);
       const currentSearches = readLocalArray('sigma_searches');
       const nextSearches = [
         ...currentSearches.filter((search) => String(search?.id) !== searchId),
@@ -270,12 +389,13 @@ function AppInner() {
         detail: { leads: combined, searches: nextSearches },
       }));
       addNotification({
-        type: res.partial ? 'info' : 'success',
+        type: warnings.length ? 'info' : 'success',
         category: 'scraper',
-        title: res.partial ? 'Extração concluída parcialmente' : 'Extração concluída',
-        message: res.partial && res.warnings?.length
-          ? `${resultLeads.length} leads adicionados. ${res.warnings[0]}`
-          : `${resultLeads.length} leads adicionados!`,
+        title: warnings.length ? 'Extração concluída parcialmente' : 'Extração concluída',
+        message: warnings.length
+          ? `${addedCount} novos leads adicionados. ${warnings[0]}`
+          : `${addedCount} novos leads adicionados à base.`,
+        duration: 5000,
       });
     } catch (err) {
       addNotification({
@@ -337,7 +457,7 @@ function AppInner() {
       case 'dashboard':
         return (
           <section className="soon-card">
-            <div className="eyebrow">Lote 2 · especificado, não construído</div>
+            <div className="eyebrow">Em construção</div>
             <h2 style={{ fontSize:20, color:'var(--fg)' }}>Painel de análises</h2>
             <p>Metric-strip + filtros por categoria e período + exportação CSV/XLSX com progresso e toast.</p>
             <button type="button" className="btn" onClick={() => navigate('overview')}>Voltar à Visão Geral</button>
@@ -357,12 +477,45 @@ function AppInner() {
                   <option value="dark">Escuro (override futuro)</option>
                 </select>
               </div>
+              <div className="field">
+                <label htmlFor="uiZoom">Zoom de acessibilidade</label>
+                <div className="settings-zoom-controls" id="uiZoom">
+                  <button type="button" className="btn" onClick={() => updateUiZoom(uiZoom - 0.1)} disabled={uiZoom <= 0.8}>−</button>
+                  <output aria-live="polite">{Math.round(uiZoom * 100)}%</output>
+                  <button type="button" className="btn" onClick={() => updateUiZoom(uiZoom + 0.1)} disabled={uiZoom >= 1.5}>+</button>
+                  <button type="button" className="btn" onClick={() => updateUiZoom(1)} disabled={uiZoom === 1}>Redefinir</button>
+                </div>
+              </div>
               <div>
                 <button className="btn btn-primary" onClick={() => addNotification({ type: 'info', title: 'Preferências salvas', message: 'Modo de interface atualizado.' })}>
                   Salvar preferências
                 </button>
               </div>
-              <p>Contagem local por instalação. Nenhum dado pessoal sai do app sem endpoint configurado.</p>
+              <p>Use Ctrl/Cmd +, − ou 0 para ajustar o zoom. A preferência é restaurada nesta instalação.</p>
+              <section className="settings-danger-zone" aria-labelledby="clearLeadBaseTitle">
+                <div>
+                  <div className="eyebrow">Dados locais</div>
+                  <h2 id="clearLeadBaseTitle">Limpar base de leads</h2>
+                  <p>Remove leads, importações, buscas, grupos e histórico desta instalação. Arquivos CSV/XLSX exportados não são apagados.</p>
+                </div>
+                <button type="button" className="btn btn-danger" data-od-id="settings-clear-leads" onClick={() => setIsClearLeadBaseOpen(true)}>
+                  Limpar base
+                </button>
+              </section>
+              {isClearLeadBaseOpen && (
+                <div className="overlay on modal-overlay" role="presentation" onClick={() => setIsClearLeadBaseOpen(false)}>
+                  <div className="modal modal-content settings-clear-modal" role="dialog" aria-modal="true" aria-labelledby="clearLeadBaseDialog" onClick={(event) => event.stopPropagation()}>
+                    <div className="modal-head"><h2 id="clearLeadBaseDialog">Limpar a base de leads?</h2></div>
+                    <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+                      <p>Esta ação remove os dados locais da base e não pode ser desfeita pelo aplicativo. Seus arquivos exportados permanecem intactos.</p>
+                    </div>
+                    <div className="modal-foot">
+                      <button type="button" className="btn btn-ghost" onClick={() => setIsClearLeadBaseOpen(false)}>Cancelar</button>
+                      <button type="button" className="btn btn-danger" onClick={clearLeadBase}>Limpar definitivamente</button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         );
@@ -386,16 +539,16 @@ function AppInner() {
         <button
           type="button"
           className="sidebar-brand"
-          onClick={() => setIsSidebarLocked((value) => !value)}
-          aria-pressed={isSidebarLocked}
-          title="Fixar ou soltar o menu"
+          onClick={() => setIsSidebarCollapsed((value) => !value)}
+          aria-expanded={!isSidebarCollapsed}
+          title={isSidebarCollapsed ? 'Expandir menu' : 'Recolher menu'}
         >
           <div className="brand-icon-box">
             Σ
           </div>
           <div className="brand-text-col">
-            <span className="brand-name">Sigma GMaps</span>
-            <span className="brand-tag">COMMUNITY</span>
+            <span className="brand-name">Sigma Scraper</span>
+            <span className="brand-tag">GMaps</span>
           </div>
         </button>
 
@@ -466,7 +619,7 @@ function AppInner() {
             onClick={() => navigate('dashboard')}
           >
             <span className="ico" aria-hidden="true">▭</span>
-            <span className="nav-label-text">Dashboard</span><span className="nav-lote">Lote 2</span>
+            <span className="nav-label-text">Análises</span>
           </button>
         </nav>
 
@@ -476,7 +629,6 @@ function AppInner() {
             <span className="ico" aria-hidden="true">⚙</span>
             <span className="nav-label-text">Configurações</span>
           </button>
-          <div className="sidebar-release">Lote 1 · Teal · Light</div>
         </div>
       </aside>
       <button type="button" className="app-nav-scrim" aria-label="Fechar navegação" onClick={() => setIsMobileNavOpen(false)} />
@@ -484,12 +636,16 @@ function AppInner() {
       {/* Main Container (Header + Main Screen Area) */}
       <div className="app-main-viewport">
         {/* Top Header Bar — 48px, light, blur */}
-        <header className="app-header-bar" onDoubleClick={handleMaximize}>
+        <header className="app-header-bar" onDoubleClick={(event) => {
+          if (event.target === event.currentTarget || event.target.closest('.header-drag-spacer')) handleMaximize();
+        }}>
           <button type="button" className="mobile-menu-btn" onClick={() => setIsMobileNavOpen(true)} aria-label="Abrir navegação"><Menu size={18} /></button>
-          <button type="button" className="header-search-wrap" onClick={() => setIsCmdOpen(true)} title="Abrir busca global (⌘K)">
-            <Search size={14} className="header-search-icon" />
-            <span>Buscar leads, campanhas, ações…</span>
-          </button>
+          {activeTab === 'overview' ? (
+            <button type="button" className="header-search-wrap" onClick={() => setIsCmdOpen(true)} title="Abrir busca global (Ctrl/Cmd+K)">
+              <Search size={14} className="header-search-icon" />
+              <span>Buscar leads, campanhas, ações…</span>
+            </button>
+          ) : <div className="header-drag-spacer" aria-hidden="true" />}
 
           {/* Right Header Actions */}
           <div className="header-right-actions">
@@ -500,9 +656,9 @@ function AppInner() {
 
             {/* Window Controls (Frameless Drag/Close) */}
             <div className="window-control-buttons">
-              <button onClick={handleMinimize} title="Minimizar" className="win-btn"><Minus size={13} /></button>
-              <button onClick={handleMaximize} title="Maximizar" className="win-btn"><Square size={11} /></button>
-              <button onClick={handleClose} title="Fechar" className="win-btn win-close"><X size={13} /></button>
+              <button type="button" onClick={handleMinimize} title="Minimizar para a bandeja" className="win-btn"><Minus size={13} /></button>
+              <button type="button" onClick={handleMaximize} title="Maximizar ou restaurar" className="win-btn"><Square size={11} /></button>
+              <button type="button" onClick={handleClose} title="Fechar" className="win-btn win-close"><X size={13} /></button>
             </div>
           </div>
         </header>
@@ -514,7 +670,7 @@ function AppInner() {
             {renderContent()}
           </div>
         </main>
-        <CommandPalette open={isCmdOpen} onClose={setIsCmdOpen} onNavigate={setActiveTab} onNewExtraction={() => setIsNewExtractionOpen(true)} />
+        {activeTab === 'overview' && <CommandPalette open={isCmdOpen} onClose={setIsCmdOpen} onNavigate={setActiveTab} onNewExtraction={() => setIsNewExtractionOpen(true)} />}
         <OnboardingTour onNavigate={setActiveTab} />
       </div>
 

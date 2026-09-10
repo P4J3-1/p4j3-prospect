@@ -18,7 +18,7 @@ import {
   SlidersHorizontal,
   X,
 } from 'lucide-react';
-import { readLocalArray } from '../leadData';
+import { normalizeLeadCollection, readLocalArray } from '../leadData';
 
 const FIELD_OPTIONS = [
   { value: 'score', label: 'Score' },
@@ -313,7 +313,7 @@ export default function KanbanBoard({ onNavigate, addLog }) {
     }
     if (!quiet) setLoading(true);
     try {
-      const mapsLeads = readLocalArray('sigma_leads');
+      const mapsLeads = normalizeLeadCollection(readLocalArray('sigma_leads'));
       if (mapsLeads.length) applyBoard(await window.kanbanAPI.syncMapsLeads(mapsLeads));
       applyBoard(await window.kanbanAPI.getBoard());
       setError('');

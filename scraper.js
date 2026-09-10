@@ -3,6 +3,18 @@ const CONFIG = require('./config');
 const { extractBusinessData } = require('./utils/businessData');
 const { geocodeAddress, isValidCoord } = require('./utils/geocode');
 const { normalizeAddress } = require('./utils/address-normalizer');
+const { normalizeText } = require('./utils/text-normalizer');
+
+function normalizePlaceText(place = {}) {
+  return {
+    ...place,
+    name: normalizeText(place.name),
+    category: normalizeText(place.category),
+    description: normalizeText(place.description),
+    openingHours: normalizeText(place.openingHours),
+    address: normalizeAddress(place.address),
+  };
+}
 
 function checkCancelled(cancelToken) {
   if (cancelToken?.cancelled) {
@@ -12,8 +24,22 @@ function checkCancelled(cancelToken) {
   }
 }
 
+function describeExtractedPlace(place, current, total) {
+  const details = [];
+  if (place.phone) details.push('telefone');
+  if (place.website) details.push('site');
+  if (place.instagram) details.push('Instagram');
+  if (place.email) details.push('e-mail');
+  const rating = Number(place.rating);
+  const ratingText = Number.isFinite(rating) && rating > 0
+    ? ` · nota ${String(place.rating).replace('.', ',')}`
+    : '';
+  const detailsText = details.length ? ` · ${details.join(', ')} encontrado${details.length > 1 ? 's' : ''}` : '';
+  return `Empresa ${current} de ${total} extraída: ${place.name}${ratingText}${detailsText}.`;
+}
+
 async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = console.log, cancelToken = null) {
-  onProgress('Launching browser...');
+  onProgress('Abrindo o navegador para a extração…');
   let browser;
   const launchAttempts = [
     { headless: CONFIG.HEADLESS, channel: 'chrome' },
@@ -26,7 +52,7 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
       break;
     } catch (e) {
       launchError = e;
-      onProgress(`Browser launch attempt failed (${opts.channel || 'bundled'}): ${e.message}`);
+      onProgress(`Não foi possível abrir o navegador (${opts.channel || 'integrado'}): ${e.message}`);
     }
   }
   if (!browser) {
@@ -68,16 +94,20 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
     } catch (e) {}
 
     try { await page.waitForSelector('div[role="feed"]', { timeout: 15000 }); }
-    catch (e) { onProgress('No results found'); await browser.close(); return { success: false, error: 'No results', data: [], count: 0, statistics }; }
+    catch (e) { onProgress('Nenhum resultado foi encontrado no Google Maps.'); await browser.close(); return { success: false, error: 'Nenhum resultado encontrado.', data: [], count: 0, statistics }; }
 
-    onProgress('Loading results...');
+    onProgress('Carregando os resultados encontrados…');
     let prev = 0, stuck = 0;
     while (stuck < CONFIG.SEARCH_DEPTH) {
       checkCancelled(cancelToken);
       await page.evaluate(() => { const f = document.querySelector('div[role="feed"]'); if (f) f.scrollTop = f.scrollHeight; });
       await page.waitForTimeout(CONFIG.SCROLL_DELAY);
       const count = await page.locator('a[href*="/maps/place/"]').count();
-      onProgress(`  Found: ${count}`);
+      onProgress({
+        type: 'listing-count',
+        found: count,
+        message: `${count} empresa${count === 1 ? '' : 's'} encontrada${count === 1 ? '' : 's'} na lista do Google Maps.`,
+      });
       if (count === prev) stuck++; else stuck = 0;
       prev = count;
       if (count >= maxResults) break;
@@ -85,7 +115,7 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
 
     const listings = await page.locator('a[href*="/maps/place/"]').all();
     const total = Math.min(listings.length, maxResults);
-    onProgress(`\nExtracting ${total} places...`);
+    onProgress(`Iniciando a extração de ${total} empresa${total === 1 ? '' : 's'}…`);
 
     for (let i = 0; i < total; i++) {
       try {
@@ -100,12 +130,10 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
         }
         checkCancelled(cancelToken);
 
-        let place = await extractBusinessData(page);
-        place.address = normalizeAddress(place.address);
+        let place = normalizePlaceText(await extractBusinessData(page));
         if (!place.latitude || place.coordSource === 'none') {
           await page.waitForTimeout(700);
-          const retry = await extractBusinessData(page);
-          retry.address = normalizeAddress(retry.address);
+          const retry = normalizePlaceText(await extractBusinessData(page));
           if (retry.latitude && retry.coordSource !== 'none') place = retry;
         }
 
@@ -160,24 +188,34 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
           if (place.rating) statistics.withRating++;
           if (place.photos?.count > 0) statistics.withPhotos++;
 
-          const web = place.website ? '🌐' : '';
-          const ig = place.instagram ? '📷' : '';
-          const em = place.email ? '✉️' : '';
-          onProgress(`  [${i + 1}/${total}] ${place.name} ${place.rating}★${web}${ig}${em}`);
+          onProgress({
+            type: 'lead',
+            current: i + 1,
+            total,
+            found: places.length,
+            lead: place,
+            message: describeExtractedPlace(place, i + 1, total),
+          });
         }
       } catch (err) {
         if (err.code === 'SCRAPE_CANCELLED') throw err;
-        onProgress(`  [${i + 1}/${total}] skip`);
+        onProgress({
+          type: 'skipped',
+          current: i + 1,
+          total,
+          found: places.length,
+          message: `Empresa ${i + 1} de ${total} ignorada por dados incompletos.`,
+        });
       }
     }
     await page.close();
     await context.close();
   } catch (e) {
     if (e.code === 'SCRAPE_CANCELLED') {
-      onProgress('Scrape cancelled.');
+      onProgress('Extração cancelada.');
       throw e;
     }
-    onProgress(`Error: ${e.message}`);
+    onProgress(`Erro durante a extração: ${e.message}`);
     if (places.length === 0) {
       return { success: false, error: e.message, data: [], count: 0, statistics };
     }
@@ -189,7 +227,7 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
     await browser.close().catch(() => {});
   }
 
-  onProgress(`\nDone! ${places.length} places.`);
+  onProgress(`Extração concluída: ${places.length} empresa${places.length === 1 ? '' : 's'} extraída${places.length === 1 ? '' : 's'}.`);
   statistics.total = places.length;
   return { success: true, data: places, count: places.length, statistics };
 }
@@ -202,7 +240,7 @@ async function gotoWithRetry(page, url, onProgress) {
     } catch (e) {
       if (attempt === CONFIG.MAX_RETRIES) throw e;
       const delay = 2000 * Math.pow(2, attempt - 1);
-      onProgress(`  Retry ${attempt}/${CONFIG.MAX_RETRIES - 1} in ${delay}ms...`);
+      onProgress(`Nova tentativa ${attempt} de ${CONFIG.MAX_RETRIES - 1} em ${Math.round(delay / 1000)} s…`);
       await page.waitForTimeout(delay);
     }
   }

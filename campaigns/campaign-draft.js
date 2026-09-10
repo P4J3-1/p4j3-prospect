@@ -8,7 +8,7 @@ function createCampaignDraft(input = {}) {
     connectionIds: Array.isArray(input.connectionIds) ? [...input.connectionIds] : [],
     recipients: Array.isArray(input.recipients) ? input.recipients.map(normalizeRecipient) : [],
     template: { text: input.template?.text || '', media: input.template?.media || null },
-    schedule: { mode: input.schedule?.mode || 'interval', intervalMs: Number(input.schedule?.intervalMs || 30000), startAt: input.schedule?.startAt || null },
+    schedule: { mode: input.schedule?.mode || 'interval', intervalMs: Number(input.schedule?.intervalMs || 60000), startAt: input.schedule?.startAt || null },
     dirty: false,
     source: input.source || 'manual',
   };

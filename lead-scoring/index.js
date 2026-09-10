@@ -2,7 +2,7 @@ const { ProspectingStore } = require("./prospecting-store");
 const { normalizeLead } = require("./normalizer");
 const { analyzeWebsite } = require("./site-crawler");
 const { calculateScore, classify, buildReasons } = require("./scoring-engine");
-const { analyzeWithSalesAI, analyzeBatchWithSalesAI } = require("./ai-sales-analyzer");
+const { analyzeWithSalesAI, analyzeBatchWithSalesAI, testProviderConnection } = require("./ai-sales-analyzer");
 
 class LeadScoringService {
   constructor(userDataPath, onProgress = () => {}) {
@@ -31,6 +31,14 @@ class LeadScoringService {
       );
     }
     return maskSettings(this.store.updateSettings(nextPatch));
+  }
+
+  async testConnection(aiPatch = {}) {
+    const current = this.store.getSettings().ai || {};
+    const patch = { ...(aiPatch || {}) };
+    if (patch.apiKey === "********") delete patch.apiKey;
+    const ai = { ...current, ...patch };
+    return testProviderConnection(ai);
   }
 
   getAll(filters) {

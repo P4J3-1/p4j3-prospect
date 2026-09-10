@@ -28,7 +28,11 @@ const AUDITS = {
 };
 
 const PROVIDERS = {
-  opencode: { name: 'OpenCode', base: '', models: ['padrão local'] },
+  opencode: {
+    name: 'OpenCode',
+    base: 'https://opencode.ai/zen/v1',
+    models: ['deepseek-v4-flash-free']
+  },
   openrouter: {
     name: 'OpenRouter',
     base: 'https://openrouter.ai/api/v1',
@@ -42,39 +46,54 @@ const PROVIDERS = {
   custom: { name: 'Custom API', base: '', models: [] }
 };
 
-function readAiConfig() {
-  try {
-    const a = JSON.parse(localStorage.getItem('sigma_ai') || 'null');
-    if (a && a.provider) return a;
-  } catch {}
+function defaultAiConfig() {
   return {
-    provider: 'openrouter',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    key: 'sk-demo-0000-ficticia',
-    model: 'anthropic/claude-3.5-sonnet',
+    provider: 'opencode',
+    baseUrl: 'https://opencode.ai/zen/v1',
+    key: '',
+    hasApiKey: false,
+    model: 'deepseek-v4-flash-free',
     preset: 'sites',
     objective: ''
   };
 }
 
+function readAiConfig() {
+  try {
+    const a = JSON.parse(localStorage.getItem('sigma_ai') || 'null');
+    if (a && a.provider) {
+      const fallback = defaultAiConfig();
+      const isLegacyDemo = a.provider === 'openrouter' && a.key === 'sk-demo-0000-ficticia';
+      return {
+        ...fallback,
+        ...a,
+        provider: isLegacyDemo ? fallback.provider : a.provider,
+        baseUrl: isLegacyDemo ? fallback.baseUrl : (a.baseUrl || PROVIDERS[a.provider]?.base || fallback.baseUrl),
+        key: isLegacyDemo ? '' : (a.key || ''),
+      };
+    }
+  } catch {}
+  return defaultAiConfig();
+}
+
 function saveAiConfig(cfg) {
   try {
-    localStorage.setItem('sigma_ai', JSON.stringify(cfg));
+    const { key, ...safeConfig } = cfg || {};
+    localStorage.setItem('sigma_ai', JSON.stringify(safeConfig));
   } catch {}
 }
 
-function readStoredAnalysis() {
-  try {
-    const a = localStorage.getItem('sigma_analysis');
-    if (a) return JSON.parse(a);
-  } catch {}
-  return {};
-}
-
-function saveStoredAnalysis(data) {
-  try {
-    localStorage.setItem('sigma_analysis', JSON.stringify(data));
-  } catch {}
+function toUiAiConfig(settings, current = defaultAiConfig()) {
+  const ai = settings?.ai || {};
+  const provider = ai.provider || current.provider || 'opencode';
+  return {
+    ...current,
+    provider,
+    baseUrl: ai.baseUrl || PROVIDERS[provider]?.base || current.baseUrl,
+    key: '',
+    hasApiKey: Boolean(ai.hasApiKey || (ai.apiKey && ai.apiKey !== '')),
+    model: ai.model || current.model || 'deepseek-v4-flash-free',
+  };
 }
 
 function scBand(score) {
@@ -88,124 +107,54 @@ function fmtShort(ts) {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-// Heurística de Auditoria do Protótipo OpenDesign
-function auditLead(lead, preset = 'sites') {
-  const pos = [];
-  const neg = [];
-  const opp = [];
-  const sec = [];
-  const F = [];
-
-  let sc = 0;
-  const add = (ok, txt, pts) => {
-    F.push({ txt, pts: ok ? pts : 0, hit: ok });
-    if (ok) sc += pts;
-  };
-
-  const hasPhone = Boolean(lead.phone || lead.tel);
-  const hasSite = Boolean(lead.website || lead.site);
-  const hasIg = Boolean(lead.instagram || lead.ig);
-  const hasMail = Boolean(lead.email || lead.mail);
-  const rating = Number(lead.rating || lead.rn || 0);
-  const reviews = Number(lead.reviews || lead.reviewCount || lead.rc || 0);
-
-  add(hasPhone, 'Tem WhatsApp / Telefone', 12);
-
-  if (hasSite) {
-    add(true, 'Site ativo', 15);
-  } else if (preset === 'sites') {
-    add(true, 'Sem site — janela para venda de desenvolvimento', 14);
-  } else {
-    add(false, 'Sem site', 0);
-  }
-
-  add(hasIg, 'Tem Instagram', 8);
-  add(hasMail, 'Tem e-mail', 5);
-  add(rating >= 4.5, `Avaliação ${rating}${rating >= 4.5 ? '' : ' (abaixo de 4,5)'}`, 15);
-  add(reviews >= 100, `${reviews} avaliações${reviews >= 100 ? '' : ' (abaixo de 100)'}`, 12);
-
-  const isMobileFriendly = lead.mobile !== false;
-  const hasHttps = lead.https !== false && (hasSite ? !lead.website?.startsWith('http://') : true);
-
-  add(isMobileFriendly, 'Layout adaptável (Mobile)', 5);
-  add(hasHttps, 'HTTPS ativo', 5);
-
-  if (sc > 100) sc = 100;
-
-  F.forEach((f) => {
-    (f.hit ? pos : neg).push(f.txt + (f.hit ? ` (+${f.pts})` : ''));
-  });
-
-  const S = (t, items) => {
-    if (items.length) sec.push({ t, items });
-  };
-
-  if (hasSite) {
-    S('SEO', [hasHttps ? 'HTTPS ativo' : 'Site sem HTTPS — sinal negativo para buscadores']);
-    S('Performance', [lead.fast !== false ? 'Carregamento dentro do esperado' : 'Carregamento lento detectado']);
-    S('Responsivo', [isMobileFriendly ? 'Layout adaptável para celular' : 'Layout não adaptável']);
-    const conv = [];
-    if (hasPhone) conv.push('Botão de WhatsApp evidente');
-    else conv.push('Sem CTA de WhatsApp visível');
-    S('Conversão', conv);
-    S('Hero e CTA', [hasPhone ? 'Proposta e contato identificáveis' : 'Hero sem contato evidente']);
-  } else {
-    S('Presença', ['Sem site oficial — presença baseada exclusivamente em mapas e redes']);
-  }
-
-  const conf = [];
-  if (rating >= 4.5) conf.push(`Boa reputação (${rating})`);
-  else conf.push(`Reputação ${rating} — abaixo de 4,5`);
-  if (reviews >= 100) conf.push(`${reviews} avaliações consolidadas`);
-  else conf.push(`Poucas avaliações (${reviews})`);
-  S('Confiança', conf);
-
-  S('AEO', [
-    reviews >= 50
-      ? 'Volume de avaliações alimenta respostas de IA locais'
-      : 'Pouco conteúdo indexável para motores de busca e IA'
-  ]);
-
-  if (!hasPhone) opp.push('Adicionar CTA de WhatsApp');
-  if (hasSite) {
-    if (!hasHttps) opp.push('Ativar HTTPS');
-    if (lead.fast === false) opp.push('Otimizar velocidade do site');
-    if (!isMobileFriendly) opp.push('Adaptar para dispositivos móveis');
-  } else if (preset === 'sites') {
-    opp.push('Propor criação de site moderno e responsivo');
-  }
-
-  if (rating < 4.5) opp.push('Trabalhar gestão de reputação e avaliações');
-  if (reviews < 50) opp.push('Estratégia de captação de avaliações');
-
+function analysisFromService(savedLead, preset = 'sites') {
+  const company = savedLead?.company || savedLead || {};
+  const site = savedLead?.siteAnalysis || {};
+  const ai = savedLead?.aiAnalysis || {};
+  const score = Number(savedLead?.score?.value ?? savedLead?.score ?? 0);
+  const positive = [
+    site.hasHttps ? 'HTTPS ativo' : '',
+    site.mobile?.isResponsive ? 'Layout responsivo identificado' : '',
+    site.conversion?.hasWhatsappButton ? 'Canal de WhatsApp identificado' : '',
+    site.conversion?.hasForm ? 'Formulário de contato identificado' : '',
+  ].filter(Boolean);
+  const negative = [
+    ...(Array.isArray(ai.principais_dores) ? ai.principais_dores : []),
+    ...(Array.isArray(savedLead?.score?.sitePains) ? savedLead.score.sitePains : []),
+  ].filter(Boolean);
+  const opportunities = [
+    ...(Array.isArray(ai.principais_oportunidades) ? ai.principais_oportunidades : []),
+    ...(Array.isArray(site.siteSummary?.conversion?.likelyLeaks) ? site.siteSummary.conversion.likelyLeaks : []),
+  ].filter(Boolean);
+  const noSite = !site.finalUrl && !company.website;
+  const sections = [
+    {
+      t: 'Diagnóstico técnico',
+      items: [
+        noSite ? 'Nenhum site próprio foi localizado na análise.' : `Site analisado: ${site.finalUrl || company.website}`,
+        site.performance?.loadTimeMs ? `Carregamento medido: ${Math.round(site.performance.loadTimeMs)} ms` : '',
+      ].filter(Boolean),
+    },
+    ai.resumo ? { t: 'Resumo comercial', items: [ai.resumo] } : null,
+  ].filter(Boolean);
   return {
-    score: sc,
-    band: scBand(sc),
-    pos,
-    neg,
-    opp: opp.slice(0, 5),
-    sections: sec,
-    factors: F,
-    noSite: !hasSite,
-    ts: Date.now(),
+    score,
+    band: scBand(score),
+    pos: positive,
+    neg: negative.length ? negative : (Array.isArray(savedLead?.score?.reasons) ? savedLead.score.reasons : []),
+    opp: opportunities,
+    sections,
+    noSite,
+    provider: ai.rawProvider || (ai.providerModel ? 'IA' : 'regras locais'),
+    model: ai.providerModel || '',
+    preset,
+    ts: savedLead?.updatedAt || savedLead?.createdAt || Date.now(),
   };
 }
 
 export default function LeadScoring({ onUpdateScoringCount, addLog }) {
   const [leads, setLeads] = useState(() => normalizeLeadCollection(readLocalArray('sigma_leads')));
-  const [groups, setGroups] = useState(() => {
-    const g = readLocalArray('sigma_groups');
-    if (g.length > 0) return g;
-    // Seed default demo groups if empty
-    const rawLeads = readLocalArray('sigma_leads');
-    const ids = rawLeads.map((l, i) => l.id || `lead-${i + 1}`);
-    const demo = [
-      { id: 'g1', name: 'Odontologia · Zona Sul', members: ids.slice(0, 2), color: '#10a37f' },
-      { id: 'g2', name: 'Academias e Fitness', members: ids.slice(2, 3), color: '#6366f1' }
-    ];
-    try { localStorage.setItem('sigma_groups', JSON.stringify(demo)); } catch {}
-    return demo;
-  });
+  const [groups, setGroups] = useState(() => readLocalArray('sigma_groups'));
 
   // Grupo ativo
   const [selectedGroupId, setSelectedGroupId] = useState(() => {
@@ -223,38 +172,7 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
   const [showKey, setShowKey] = useState(false);
   const [testStatusMsg, setTestStatusMsg] = useState('');
 
-  // Banco de análises com seed inicial se vazio
-  const [analysisMap, setAnalysisMap] = useState(() => {
-    const current = readStoredAnalysis();
-    if (Object.keys(current).length > 0) return current;
-    // Seed demo analysis
-    const rawLeads = readLocalArray('sigma_leads');
-    const initial = {};
-    if (rawLeads.length > 0) {
-      const firstId = rawLeads[0].id || 'lead-1';
-      initial[firstId] = {
-        ...auditLead(rawLeads[0], 'sites'),
-        score: 82,
-        provider: 'openrouter',
-        model: 'anthropic/claude-3.5-sonnet',
-        preset: 'sites',
-        ts: Date.now() - 3600000 * 2,
-      };
-      if (rawLeads.length > 1) {
-        const secondId = rawLeads[1].id || 'lead-2';
-        initial[secondId] = {
-          ...auditLead(rawLeads[1], 'sites'),
-          score: 45,
-          provider: 'openrouter',
-          model: 'anthropic/claude-3.5-sonnet',
-          preset: 'sites',
-          ts: Date.now() - 3600000 * 4,
-        };
-      }
-    }
-    saveStoredAnalysis(initial);
-    return initial;
-  });
+  const [analysisMap, setAnalysisMap] = useState({});
 
   // Estado de execução do scoring
   const [isRunning, setIsRunning] = useState(false);
@@ -269,14 +187,58 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
   const [detailLead, setDetailLead] = useState(null);
   const [openAccSections, setOpenAccSections] = useState({});
 
-  const runTimerRef = useRef(null);
+  const activeJobRef = useRef(null);
+
+  useEffect(() => {
+    let disposed = false;
+    window.leadScoringAPI?.getSettings?.().then((response) => {
+      if (disposed || !response?.success) return;
+      setAiConfig((current) => {
+        const next = toUiAiConfig(response.settings, current);
+        saveAiConfig(next);
+        return next;
+      });
+      setAiDraft((current) => toUiAiConfig(response.settings, current));
+    }).catch(() => {});
+    return () => { disposed = true; };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadCanonicalScoring = async () => {
+      if (!window.leadScoringAPI?.getAll) return;
+      try {
+        const [analysisResponse, groupsResponse] = await Promise.all([
+          window.leadScoringAPI.getAll({}),
+          window.leadScoringAPI.listGroups?.() || Promise.resolve(null),
+        ]);
+        if (disposed) return;
+        if (analysisResponse?.success) {
+          const next = {};
+          for (const savedLead of analysisResponse.leads || []) {
+            if (savedLead?.id) next[savedLead.id] = analysisFromService(savedLead);
+          }
+          setAnalysisMap(next);
+        }
+        if (groupsResponse?.success && Array.isArray(groupsResponse.groups) && groupsResponse.groups.length) {
+          setGroups(groupsResponse.groups.map((group) => ({
+            ...group,
+            members: Array.isArray(group.members) ? group.members : (group.leadIds || []),
+          })));
+        }
+      } catch {
+        // The empty state remains truthful until the canonical store is available.
+      }
+    };
+    loadCanonicalScoring();
+    return () => { disposed = true; };
+  }, []);
 
   // Sincronizar dados do localStorage
   useEffect(() => {
     const refreshData = () => {
       setLeads(normalizeLeadCollection(readLocalArray('sigma_leads')));
       setGroups(readLocalArray('sigma_groups'));
-      setAnalysisMap(readStoredAnalysis());
     };
     window.addEventListener('storage', refreshData);
     window.addEventListener('sigma:leads-updated', refreshData);
@@ -302,17 +264,15 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
   // Lista de leads do grupo ativo
   const groupLeads = useMemo(() => {
     if (!currentGroup) return [];
-    const members = currentGroup.members || [];
-    if (!members.length) {
-      return leads.slice(0, 4);
-    }
+    const members = currentGroup.members || currentGroup.leadIds || [];
+    if (!members.length) return [];
     const filtered = leads.filter((l, idx) =>
       members.includes(l.id) ||
       members.includes(idx) ||
       members.includes(String(idx)) ||
       members.includes(String(l.id))
     );
-    return filtered.length > 0 ? filtered : leads.slice(0, 4);
+    return filtered;
   }, [currentGroup, leads]);
 
   // Salvar grupo selecionado
@@ -333,108 +293,154 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
   };
 
   // Salvar modal de IA
-  const handleSaveAiModal = () => {
-    setAiConfig(aiDraft);
-    saveAiConfig(aiDraft);
+  const handleSaveAiModal = async () => {
+    const ai = {
+      enabled: Boolean(aiDraft.key || aiDraft.hasApiKey),
+      provider: aiDraft.provider,
+      apiKey: aiDraft.key || (aiDraft.hasApiKey ? '********' : ''),
+      model: aiDraft.model,
+      baseUrl: aiDraft.baseUrl,
+    };
+    if (window.leadScoringAPI?.updateSettings) {
+      const response = await window.leadScoringAPI.updateSettings({ ai });
+      if (!response?.success) {
+        setTestStatusMsg(response?.error || 'Não foi possível salvar a configuração.');
+        return;
+      }
+      const next = toUiAiConfig(response.settings, aiDraft);
+      setAiConfig(next);
+      setAiDraft(next);
+      saveAiConfig(next);
+      setIsAiModalOpen(false);
+      return;
+    }
+    const next = { ...aiDraft, key: '' };
+    setAiConfig(next);
+    saveAiConfig(next);
     setIsAiModalOpen(false);
   };
 
-  // Testar conexão de IA
-  const handleTestAi = () => {
+  // Testa a rota do provedor de verdade; não aceita validação apenas visual.
+  const handleTestAi = async () => {
     setTestStatusMsg('Testando conexão…');
-    setTimeout(() => {
-      if (!aiDraft.key) {
-        setTestStatusMsg('Informe a API Key.');
-        return;
-      }
-      if (aiDraft.baseUrl && !/^https?:\/\/.+\..+/.test(aiDraft.baseUrl)) {
-        setTestStatusMsg('Base URL inválida.');
-        return;
-      }
-      setTestStatusMsg('Conexão realizada com sucesso.');
-    }, 800);
+    if (!window.leadScoringAPI?.testConnection) {
+      setTestStatusMsg('Teste real indisponível nesta versão do aplicativo.');
+      return;
+    }
+    try {
+      const response = await window.leadScoringAPI.testConnection({
+        provider: aiDraft.provider,
+        apiKey: aiDraft.key || (aiDraft.hasApiKey ? '********' : ''),
+        model: aiDraft.model,
+        baseUrl: aiDraft.baseUrl,
+      });
+      if (!response?.success) throw new Error(response?.error || 'A conexão foi recusada.');
+      setTestStatusMsg(`Conexão confirmada: ${response.provider} · ${response.model}.`);
+    } catch (error) {
+      setTestStatusMsg(error?.message || 'Não foi possível testar a conexão.');
+    }
   };
 
-  // Executar análise em lote
-  const handleRunScoring = () => {
+  const saveServiceAnalysis = (uiLeadId, savedLead) => {
+    if (!uiLeadId || !savedLead) return;
+    const analysis = analysisFromService(savedLead, aiConfig.preset);
+    setAnalysisMap((previous) => ({ ...previous, [uiLeadId]: analysis }));
+    return analysis;
+  };
+
+  // O processamento é delegado ao serviço persistido; não há timer ou resultado local simulado.
+  const handleRunScoring = async () => {
     if (isRunning) {
-      clearTimeout(runTimerRef.current);
+      if (activeJobRef.current) await window.leadScoringAPI?.cancel?.(activeJobRef.current);
+      activeJobRef.current = null;
       setIsRunning(false);
-      setProgressText('Análise pausada');
+      setProgressText('Cancelamento solicitado. Resultados já salvos foram preservados.');
+      return;
+    }
+    if (!groupLeads.length) return;
+    if (!window.leadScoringAPI?.analyzeBatch) {
+      setProgressText('Serviço de scoring indisponível. Nenhuma análise foi simulada.');
       return;
     }
 
-    if (!groupLeads.length) return;
-
-    setIsRunning(true);
+    const jobId = `ui_batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    activeJobRef.current = jobId;
     const total = groupLeads.length;
-    setProgressCount({ current: 0, total });
-    setProgressText(`Analisando 1 de ${total}…`);
-
-    const initialStates = {};
-    groupLeads.forEach((l) => {
-      initialStates[l.id] = 'wait';
-    });
+    const initialStates = Object.fromEntries(groupLeads.map((lead) => [lead.id, 'wait']));
     setRunStates(initialStates);
+    setProgressCount({ current: 0, total });
+    setProgressText(`Enviando ${total} lead${total === 1 ? '' : 's'} para análise…`);
+    setIsRunning(true);
 
-    let idx = 0;
-    const processNext = () => {
-      if (idx >= total) {
-        setIsRunning(false);
-        setProgressText('Análise concluída!');
-        return;
+    try {
+      const response = await window.leadScoringAPI.analyzeBatch(groupLeads, { jobId });
+      if (!response?.success) throw new Error(response?.error || 'A análise em lote falhou.');
+
+      const nextStates = { ...initialStates };
+      const nextAnalyses = {};
+      for (const row of response.results || []) {
+        const savedLead = row?.lead;
+        const matchingLead = groupLeads.find((lead) => String(lead.id) === String(savedLead?.id));
+        const uiLeadId = matchingLead?.id || savedLead?.id;
+        if (row?.success && uiLeadId && savedLead) {
+          const analysis = analysisFromService(savedLead, aiConfig.preset);
+          nextAnalyses[uiLeadId] = analysis;
+          nextStates[uiLeadId] = analysis.noSite ? 'nosite' : 'done';
+        } else if (uiLeadId) {
+          nextStates[uiLeadId] = 'fail';
+        }
       }
-
-      const lead = groupLeads[idx];
-      const leadId = lead.id;
-
-      setRunStates((prev) => ({ ...prev, [leadId]: 'run' }));
-      setProgressCount({ current: idx + 1, total });
-      setProgressText(`Analisando ${idx + 1} de ${total} — ${lead.name || 'Empresa'}`);
-
-      runTimerRef.current = setTimeout(() => {
-        const auditResult = auditLead(lead, aiConfig.preset);
-        auditResult.provider = aiConfig.provider;
-        auditResult.model = aiConfig.model || 'padrão';
-        auditResult.preset = aiConfig.preset;
-
-        const nextState = auditResult.noSite ? 'nosite' : 'done';
-
-        setRunStates((prev) => ({ ...prev, [leadId]: nextState }));
-        setAnalysisMap((prev) => {
-          const updated = { ...prev, [leadId]: auditResult };
-          saveStoredAnalysis(updated);
-          return updated;
-        });
-
-        idx++;
-        processNext();
-      }, 500);
-    };
-
-    processNext();
+      setAnalysisMap((previous) => ({ ...previous, ...nextAnalyses }));
+      setRunStates(nextStates);
+      const completed = Object.values(nextStates).filter((state) => state === 'done' || state === 'nosite').length;
+      setProgressCount({ current: completed, total });
+      setProgressText(response.failures ? `Concluída com ${response.failures} falha(s).` : 'Análise concluída.');
+      addLog?.(`[SCORING] ${completed}/${total} análises persistidas no serviço.`);
+    } catch (error) {
+      setRunStates((previous) => Object.fromEntries(groupLeads.map((lead) => [lead.id, previous[lead.id] === 'done' ? 'done' : 'fail'])));
+      setProgressText(error?.message || 'Não foi possível concluir a análise.');
+      addLog?.(`[SCORING] Falha: ${error?.message || 'erro desconhecido'}`);
+    } finally {
+      if (activeJobRef.current === jobId) activeJobRef.current = null;
+      setIsRunning(false);
+    }
   };
 
-  // Reanalisar lead único
-  const handleRetrySingle = (lead) => {
-    const leadId = lead.id;
-    setRunStates((prev) => ({ ...prev, [leadId]: 'run' }));
-
-    setTimeout(() => {
-      const auditResult = auditLead(lead, aiConfig.preset);
-      auditResult.provider = aiConfig.provider;
-      auditResult.model = aiConfig.model || 'padrão';
-      auditResult.preset = aiConfig.preset;
-
-      const nextState = auditResult.noSite ? 'nosite' : 'done';
-      setRunStates((prev) => ({ ...prev, [leadId]: nextState }));
-      setAnalysisMap((prev) => {
-        const updated = { ...prev, [leadId]: auditResult };
-        saveStoredAnalysis(updated);
-        return updated;
-      });
-    }, 700);
+  const handleRetrySingle = async (lead) => {
+    if (!window.leadScoringAPI?.analyzeLead) return;
+    const jobId = `ui_single_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    setRunStates((previous) => ({ ...previous, [lead.id]: 'run' }));
+    try {
+      const response = await window.leadScoringAPI.analyzeLead(lead, { jobId });
+      if (!response?.success || !response.lead) throw new Error(response?.error || 'A reanálise falhou.');
+      const analysis = saveServiceAnalysis(lead.id, response.lead);
+      setRunStates((previous) => ({ ...previous, [lead.id]: analysis?.noSite ? 'nosite' : 'done' }));
+    } catch (error) {
+      setRunStates((previous) => ({ ...previous, [lead.id]: 'fail' }));
+      setProgressText(error?.message || 'A reanálise falhou.');
+    }
   };
+
+  useEffect(() => {
+    if (!window.leadScoringAPI?.onProgress) return undefined;
+    return window.leadScoringAPI.onProgress((payload) => {
+      if (!payload || (activeJobRef.current && payload.jobId !== activeJobRef.current)) return;
+      const uiLeadId = payload.leadId || payload.lead?.id;
+      if (payload.event === 'started' && uiLeadId) {
+        setRunStates((previous) => ({ ...previous, [uiLeadId]: 'run' }));
+      } else if (payload.event === 'saved' && payload.lead && uiLeadId) {
+        const analysis = analysisFromService(payload.lead, aiConfig.preset);
+        setAnalysisMap((previous) => ({ ...previous, [uiLeadId]: analysis }));
+        setRunStates((previous) => ({ ...previous, [uiLeadId]: analysis.noSite ? 'nosite' : 'done' }));
+      } else if (payload.event === 'failed' && uiLeadId) {
+        setRunStates((previous) => ({ ...previous, [uiLeadId]: 'fail' }));
+      }
+      if (Number.isFinite(payload.index) && Number.isFinite(payload.total)) {
+        setProgressCount({ current: payload.index, total: payload.total });
+      }
+      if (payload.message) setProgressText(payload.message);
+    });
+  }, [aiConfig.preset]);
 
   // Alternar seleção de linha
   const toggleRowSelect = (id) => {
@@ -827,8 +833,9 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                     autoComplete="new-password"
                     spellCheck="false"
                     style={{ flex: 1 }}
+                    placeholder={aiDraft.hasApiKey ? 'Chave salva — informe outra para substituir' : 'Informe a API key do provedor'}
                     value={aiDraft.key || ''}
-                    onChange={(e) => setAiDraft({ ...aiDraft, key: e.target.value })}
+                    onChange={(e) => setAiDraft({ ...aiDraft, key: e.target.value, hasApiKey: Boolean(e.target.value) || aiDraft.hasApiKey })}
                   />
                   <button
                     type="button"

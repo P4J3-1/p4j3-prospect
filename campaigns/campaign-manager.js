@@ -114,10 +114,11 @@ class CampaignManager {
     return result;
   }
 
-  autoResume() {
-    // Auto-resume is connection-aware: a campaign only resumes if its own
-    // provider (connectionId) is currently connected. No global guard.
-    // Também retoma campanhas pausadas por limite diário (novo dia / cota livre).
+  autoResume({ confirmed = false } = {}) {
+    // A restart/reconnect must never send messages by itself. This method is
+    // intentionally gated so only an explicit, confirmed recovery can resume.
+    if (!confirmed) return { resumedCount: 0, requiresConfirmation: true };
+
     const campaigns = this.store.getAll();
     let resumedCount = 0;
     for (const c of campaigns) {
@@ -133,9 +134,30 @@ class CampaignManager {
         console.error(`Failed to auto-resume campaign ${c.id}:`, e.message);
       }
     }
-    if (resumedCount > 0) {
-      console.log(`[CAMPAIGN] Auto-resumed ${resumedCount} campaign(s).`);
+    if (resumedCount > 0) console.log(`[CAMPAIGN] Confirmed recovery resumed ${resumedCount} campaign(s).`);
+    return { resumedCount, requiresConfirmation: false };
+  }
+
+  interruptForRestart() {
+    let interruptedCount = 0;
+    for (const campaign of this.store.getAll()) {
+      const resumable =
+        campaign.status === 'running' ||
+        campaign.status === 'scheduled' ||
+        (campaign.status === 'paused' && campaign.pauseReason === 'daily_limit');
+      if (!resumable) continue;
+      this.store.update(campaign.id, {
+        status: 'interrupted',
+        pauseReason: 'restart_confirmation_required',
+        waitReason: null,
+        interruptedAt: Date.now(),
+      });
+      interruptedCount += 1;
     }
+    if (interruptedCount > 0) {
+      console.log(`[CAMPAIGN] ${interruptedCount} campaign(s) require explicit recovery after restart.`);
+    }
+    return interruptedCount;
   }
 
   getAll() {
@@ -227,6 +249,12 @@ class CampaignManager {
   start(campaignId, opts = {}) {
     const campaign = this.store.get(campaignId);
     if (!campaign) throw new Error('Campaign not found');
+    if (campaign.status === 'cancelled') {
+      throw new Error('Campanha cancelada é terminal e não pode ser retomada. Crie uma nova campanha.');
+    }
+    if (campaign.status === 'interrupted' && opts.confirmRecovery !== true) {
+      throw new Error('Campanha interrompida exige confirmação explícita antes da retomada.');
+    }
 
     // Ainda há leads pendentes?
     const hasPending = (campaign.leads || []).some((l) => l.status === 'pending');

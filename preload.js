@@ -1,12 +1,8 @@
-const { contextBridge, ipcRenderer, webFrame } = require("electron");
-
-// O layout do Open Design usa escala CSS 1:1; zoom global menor distorcia tipografia,
-// alvos de clique e proporções do protótipo.
-webFrame.setZoomFactor(1);
+const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
-  startScrape: (query, maxResults, queryId) =>
-    ipcRenderer.invoke("start-scrape", { query, maxResults, queryId }),
+  startScrape: (query, maxResults, queryId, progressContext = {}) =>
+    ipcRenderer.invoke("start-scrape", { query, maxResults, queryId, progressContext }),
   cancelScrape: (queryId) =>
     ipcRenderer.invoke("cancel-scrape", { queryId }),
   repairMapAddresses: (leads) =>
@@ -25,6 +21,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   winMaximize: () => ipcRenderer.invoke("win-maximize"),
   winClose: () => ipcRenderer.invoke("win-close"),
   winIsMaximized: () => ipcRenderer.invoke("win-is-maximized"),
+  getUiZoom: () => ipcRenderer.invoke("ui-zoom-get"),
+  setUiZoom: (zoom) => ipcRenderer.invoke("ui-zoom-set", { zoom }),
+  resetUiZoom: () => ipcRenderer.invoke("ui-zoom-reset"),
   reloadUI: () => ipcRenderer.invoke("reload-ui"),
   getTheme: () => ipcRenderer.invoke("theme-get"),
   setTheme: (theme) => ipcRenderer.invoke("theme-set", { theme }),
@@ -70,8 +69,8 @@ contextBridge.exposeInMainWorld("campaignAPI", {
   update: (id, updates) =>
     ipcRenderer.invoke("campaign-update", { id, updates }),
   delete: (id) => ipcRenderer.invoke("campaign-delete", { id }),
-  start: (id, connectionId) =>
-    ipcRenderer.invoke("campaign-start", { id, connectionId }),
+  start: (id, connectionId, confirmRecovery = false) =>
+    ipcRenderer.invoke("campaign-start", { id, connectionId, confirmRecovery }),
   pause: (id) => ipcRenderer.invoke("campaign-pause", { id }),
   resume: (id, connectionId) =>
     ipcRenderer.invoke("campaign-resume", { id, connectionId }),
@@ -117,6 +116,8 @@ contextBridge.exposeInMainWorld("leadScoringAPI", {
   getSettings: () => ipcRenderer.invoke("lead-scoring-get-settings"),
   updateSettings: (patch) =>
     ipcRenderer.invoke("lead-scoring-update-settings", { patch }),
+  testConnection: (ai) =>
+    ipcRenderer.invoke("lead-scoring-test-connection", { ai: ai || {} }),
   openScreenshot: (filePath) =>
     ipcRenderer.invoke("lead-scoring-open-screenshot", { filePath }),
   createCampaign: (ids, name, connectionId) =>

@@ -73,6 +73,41 @@ async function requestChatCompletion(providerConfig, payload) {
   return await res.json();
 }
 
+async function testProviderConnection(ai = {}) {
+  const providerConfig = resolveProviderConfig(ai);
+  if (!providerConfig.apiKey) {
+    throw new Error("Informe a API key antes de testar a conexão.");
+  }
+
+  const response = await fetch(providerConfig.chatCompletionsUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${providerConfig.apiKey}`,
+      ...providerConfig.headers,
+    },
+    body: JSON.stringify({
+      model: providerConfig.model || providerConfig.defaultModel,
+      max_tokens: 1,
+      temperature: 0,
+      messages: [{ role: "user", content: "Responda apenas OK." }],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = (await response.text()).replace(/\s+/g, " ").slice(0, 240);
+    const error = new Error(`Conexão recusada: HTTP ${response.status}${body ? ` — ${body}` : ""}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  return {
+    provider: providerConfig.provider,
+    model: providerConfig.model || providerConfig.defaultModel,
+    endpoint: providerConfig.chatCompletionsUrl,
+  };
+}
+
 function resolveProviderConfig(ai = {}) {
   const provider = String(ai.provider || "openrouter").toLowerCase();
   const appName = ai.appName || "Sigma GMaps Scraper";
@@ -418,4 +453,4 @@ function clamp(value) {
   return Math.max(0, Math.min(100, Math.round(Number(value || 0))));
 }
 
-module.exports = { analyzeWithSalesAI, analyzeBatchWithSalesAI, fallbackSalesAnalysis, resolveProviderConfig, resolveProviderChain };
+module.exports = { analyzeWithSalesAI, analyzeBatchWithSalesAI, fallbackSalesAnalysis, resolveProviderConfig, resolveProviderChain, testProviderConnection };

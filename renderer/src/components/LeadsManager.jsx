@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import {
   Phone,
@@ -15,9 +15,12 @@ import {
   Columns,
   X,
   Check,
-  Tag
+  Tag,
+  Upload,
+  FileSpreadsheet
 } from 'lucide-react';
 import { dedupeLeads, normalizeLeadCategory, normalizeLeadCollection, readLocalArray } from '../leadData';
+import { useNotifications } from './NotificationCenter';
 
 const DEFAULT_COLS = [
   { id: 'nome', label: 'Empresa' },
@@ -55,11 +58,74 @@ function fmtDate(ts) {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} · ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+const IMPORT_FIELDS = {
+  name: ['nome', 'empresa', 'razao social', 'razao', 'business', 'company', 'name'],
+  category: ['nicho', 'categoria', 'segmento', 'category', 'ramo'],
+  phone: ['telefone', 'telefone principal', 'phone', 'celular', 'tel', 'whatsapp'],
+  email: ['email', 'e-mail', 'mail'],
+  website: ['site', 'website', 'url', 'pagina'],
+  instagram: ['instagram', 'insta', 'ig'],
+  address: ['endereco', 'endereço', 'logradouro', 'address'],
+  neighborhood: ['bairro', 'neighborhood', 'distrito'],
+  city: ['cidade', 'city', 'municipio', 'município'],
+  state: ['estado', 'uf', 'state'],
+  rating: ['avaliacao', 'avaliação', 'rating', 'nota'],
+  reviews: ['avaliacoes', 'avaliações', 'reviews', 'qtd avaliacoes', 'qtd avaliações'],
+};
+
+function importHeader(value) {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function readImportValue(row, aliases) {
+  const source = row && typeof row === 'object' ? row : {};
+  const entries = Object.entries(source);
+  for (const alias of aliases) {
+    const hit = entries.find(([key]) => importHeader(key) === importHeader(alias));
+    if (hit && hit[1] != null && String(hit[1]).trim()) return String(hit[1]).trim();
+  }
+  return '';
+}
+
+function makeImportedLead(row, index, batchId, fileName) {
+  const name = readImportValue(row, IMPORT_FIELDS.name);
+  if (!name) return null;
+  const safeRaw = Object.fromEntries(Object.entries(row || {}).slice(0, 80));
+  return {
+    id: `import_${batchId}_${index}`,
+    name,
+    category: readImportValue(row, IMPORT_FIELDS.category) || 'Sem categoria',
+    phone: readImportValue(row, IMPORT_FIELDS.phone),
+    email: readImportValue(row, IMPORT_FIELDS.email),
+    website: readImportValue(row, IMPORT_FIELDS.website),
+    instagram: readImportValue(row, IMPORT_FIELDS.instagram),
+    address: readImportValue(row, IMPORT_FIELDS.address),
+    neighborhood: readImportValue(row, IMPORT_FIELDS.neighborhood),
+    city: readImportValue(row, IMPORT_FIELDS.city),
+    state: readImportValue(row, IMPORT_FIELDS.state),
+    rating: readImportValue(row, IMPORT_FIELDS.rating),
+    reviews: readImportValue(row, IMPORT_FIELDS.reviews),
+    searchId: batchId,
+    source: 'import',
+    importedAt: Date.now(),
+    raw: { importFile: fileName, row: safeRaw },
+  };
+}
+
 export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
+  const { addNotification } = useNotifications();
+  const importInputRef = useRef(null);
   // Load data from localStorage
   const [leads, setLeads] = useState(() => {
     const raw = readLocalArray('sigma_leads');
-    if (raw.length > 0) return normalizeLeadCollection(raw);
+    const initialized = localStorage.getItem('sigma_leads_initialized') === 'true';
+    if (raw.length > 0 || initialized) return normalizeLeadCollection(raw);
     return [
       { id: 'lead-1', name: 'Odonto Lume', category: 'Odontologia', neighborhood: 'Copacabana', city: 'Rio de Janeiro', state: 'RJ', rating: '4,8', reviews: 126, phone: '+55 21 98765-0142', website: 'odonto-lume.com.br', email: 'contato@odonto-lume.com.br', searchQuery: 'dentistas · Copacabana' },
       { id: 'lead-2', name: 'Café Aurora', category: 'Cafeteria', neighborhood: 'Ipanema', city: 'Rio de Janeiro', state: 'RJ', rating: '4,6', reviews: 89, instagram: '@cafe.aurora', website: 'cafeaurora.com', searchQuery: 'cafés · Ipanema' },
@@ -73,6 +139,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
       const g = JSON.parse(localStorage.getItem('sigma_groups') || 'null');
       if (Array.isArray(g) && g.length > 0) return g;
     } catch {}
+    if (localStorage.getItem('sigma_leads_initialized') === 'true') return [];
     return [
       { id: 'g1', name: 'Com WhatsApp', members: ['lead-1', 'lead-4'], created: new Date(2026, 8, 1, 9, 0).getTime() },
       { id: 'g-demo', name: 'Teste Scoring — RJ', members: ['lead-1', 'lead-2', 'lead-3'], created: new Date(2026, 8, 2, 10, 0).getTime() }
@@ -158,6 +225,8 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   const [expFmt, setExpFmt] = useState('xlsx');
   const [expScope, setExpScope] = useState('filtered');
   const [expColsScope, setExpColsScope] = useState('vis');
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importPreview, setImportPreview] = useState(null);
 
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
@@ -171,8 +240,19 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   // Persist state
   useEffect(() => {
     localStorage.setItem('sigma_leads', JSON.stringify(leads));
+    localStorage.setItem('sigma_leads_initialized', 'true');
     onUpdateLeadsCount?.(dedupeLeads(leads).length);
   }, [leads, onUpdateLeadsCount]);
+
+  useEffect(() => {
+    const syncStoredLeads = () => setLeads(normalizeLeadCollection(readLocalArray('sigma_leads')));
+    window.addEventListener('sigma:leads-updated', syncStoredLeads);
+    window.addEventListener('storage', syncStoredLeads);
+    return () => {
+      window.removeEventListener('sigma:leads-updated', syncStoredLeads);
+      window.removeEventListener('storage', syncStoredLeads);
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('sigma_groups', JSON.stringify(groups));
@@ -564,14 +644,115 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
     setIsExportOpen(false);
   };
 
+  const handleImportFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    if (!/\.(csv|xlsx)$/i.test(file.name)) {
+      addNotification({ type: 'warning', category: 'system', title: 'Formato não suportado', message: 'Escolha um arquivo .csv ou .xlsx.' });
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      addNotification({ type: 'warning', category: 'system', title: 'Arquivo muito grande', message: 'A importação aceita arquivos de até 25 MB.' });
+      return;
+    }
+
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', raw: false });
+      const firstSheetName = workbook.SheetNames[0];
+      const sheet = firstSheetName ? workbook.Sheets[firstSheetName] : null;
+      if (!sheet) throw new Error('A planilha não contém uma aba utilizável.');
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
+      if (!rows.length) throw new Error('Não há linhas de dados na primeira aba.');
+      if (rows.length > 10000) throw new Error('O limite por importação é de 10.000 linhas.');
+
+      const batchId = `import_${Date.now()}`;
+      const valid = normalizeLeadCollection(rows
+        .map((row, index) => makeImportedLead(row, index + 1, batchId, file.name))
+        .filter(Boolean));
+      if (!valid.length) {
+        throw new Error('Não encontrei uma coluna de empresa/nome preenchida. Use “Empresa”, “Nome” ou “Company”.');
+      }
+
+      const current = dedupeLeads(normalizeLeadCollection(leads));
+      const merged = dedupeLeads([...current, ...valid]);
+      const added = Math.max(0, merged.length - current.length);
+      setImportPreview({
+        batchId,
+        fileName: file.name,
+        sheetName: firstSheetName,
+        totalRows: rows.length,
+        invalidRows: rows.length - valid.length,
+        duplicateRows: Math.max(0, valid.length - added),
+        added,
+        valid,
+      });
+      setIsImportOpen(true);
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        category: 'system',
+        title: 'Não foi possível ler o arquivo',
+        message: error?.message || 'Revise o CSV/XLSX e tente novamente.',
+      });
+    }
+  };
+
+  const handleConfirmImport = () => {
+    if (!importPreview) return;
+    const current = dedupeLeads(normalizeLeadCollection(leads));
+    const combined = dedupeLeads([...current, ...importPreview.valid]);
+    const added = Math.max(0, combined.length - current.length);
+    const searches = readLocalArray('sigma_searches');
+    const nextSearches = [
+      ...searches.filter((item) => String(item?.id) !== importPreview.batchId),
+      {
+        id: importPreview.batchId,
+        label: `Importação · ${importPreview.fileName}`,
+        source: 'spreadsheet',
+        timestamp: Date.now(),
+      },
+    ];
+
+    localStorage.setItem('sigma_leads', JSON.stringify(combined));
+    localStorage.setItem('sigma_leads_initialized', 'true');
+    localStorage.setItem('sigma_searches', JSON.stringify(nextSearches));
+    setLeads(combined);
+    window.dispatchEvent(new CustomEvent('sigma:leads-updated', {
+      detail: { leads: combined, searches: nextSearches },
+    }));
+    addLog?.(`Importação concluída: ${added} leads adicionados de ${importPreview.fileName}.`);
+    addNotification({
+      type: 'success',
+      category: 'system',
+      title: 'Importação concluída',
+      message: added
+        ? `${added} lead${added === 1 ? '' : 's'} tratado${added === 1 ? '' : 's'} e adicionado${added === 1 ? '' : 's'} à base.`
+        : 'Não houve novos leads: os registros já estavam na base.',
+      duration: 5000,
+    });
+    setIsImportOpen(false);
+    setImportPreview(null);
+  };
+
+  const displayChartGroups = useMemo(() => {
+    const limit = 12;
+    if (chartGroups.length <= limit) return chartGroups;
+    const ranked = [...chartGroups].sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label, 'pt-BR'));
+    const visible = ranked.slice(0, limit - 1);
+    const hidden = ranked.slice(limit - 1);
+    return [...visible, { label: `Outros (${hidden.length})`, items: hidden.flatMap(({ items }) => items) }];
+  }, [chartGroups]);
+
   const maxMetricVal = useMemo(() => {
     let max = 1;
-    chartGroups.forEach(({ items }) => {
+    displayChartGroups.forEach(({ items }) => {
       const v = getMetricValue(items, bMet);
       if (v > max) max = v;
     });
     return max;
-  }, [chartGroups, bMet]);
+  }, [displayChartGroups, bMet]);
 
   return (
     <div className="base-leads-view" style={{ display: 'flex', flexDirection: 'column', gap: '20px', width: '100%' }}>
@@ -724,14 +905,14 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
         </div>
 
         <div className="scrollbox" style={{ maxHeight: '264px', overflowY: 'auto' }}>
-          {chartGroups.length === 0 ? (
+          {displayChartGroups.length === 0 ? (
             <div className="empty">
               <b>Nada por aqui</b>
               <span>Ajuste os filtros para explorar a base.</span>
             </div>
           ) : bMode === 'cols' ? (
-            <div className="cols" style={{ display: 'flex', alignItems: 'flex-end', gap: '12px', height: '196px', padding: '12px 4px 0' }}>
-              {chartGroups.map(({ label, items }) => {
+            <div className="cols base-chart-columns" style={{ display: 'flex', alignItems: 'flex-end', gap: '12px', height: '196px', padding: '12px 4px 0' }}>
+              {displayChartGroups.map(({ label, items }) => {
                 const val = getMetricValue(items, bMet);
                 const height = Math.max(6, Math.round((val / maxMetricVal) * 120));
                 return (
@@ -747,7 +928,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
             </div>
           ) : bMode === 'list' ? (
             <div className="lrows">
-              {chartGroups.map(({ label, items }) => {
+              {displayChartGroups.map(({ label, items }) => {
                 const val = getMetricValue(items, bMet);
                 return (
                   <div key={label} className="lr" style={{ display: 'flex', alignItems: 'center', padding: '9px 2px', borderBottom: '1px solid var(--border)', fontSize: '13px' }}>
@@ -759,7 +940,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
             </div>
           ) : (
             <div>
-              {chartGroups.map(({ label, items }) => {
+              {displayChartGroups.map(({ label, items }) => {
                 const val = getMetricValue(items, bMet);
                 const pct = Math.round((val / maxMetricVal) * 100);
                 return (
@@ -831,6 +1012,24 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
             </div>
           )}
         </div>
+
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          onChange={handleImportFile}
+          style={{ display: 'none' }}
+          aria-hidden="true"
+          tabIndex={-1}
+        />
+        <button
+          type="button"
+          className="btn"
+          data-od-id="base-import"
+          onClick={() => importInputRef.current?.click()}
+        >
+          <Upload size={14} /> Importar CSV/XLSX
+        </button>
 
         <button
           type="button"
@@ -1110,6 +1309,44 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
           </button>
         </div>
       </div>
+
+      {/* MODAL IMPORTAR */}
+      {isImportOpen && importPreview && (
+        <div className="overlay on modal-overlay" onClick={() => { setIsImportOpen(false); setImportPreview(null); }}>
+          <div className="modal modal-content" onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, 94vw)' }}>
+            <div className="modal-head">
+              <div>
+                <div className="eyebrow">Prévia da importação</div>
+                <h2 style={{ marginTop: 4 }}>Revisar leads</h2>
+              </div>
+              <button type="button" className="icon-btn" aria-label="Fechar importação" onClick={() => { setIsImportOpen(false); setImportPreview(null); }}><X size={16} /></button>
+            </div>
+            <div className="modal-body" style={{ gridTemplateColumns: '1fr', gap: 14 }}>
+              <div className="import-file-summary">
+                <FileSpreadsheet size={18} aria-hidden="true" />
+                <span><b>{importPreview.fileName}</b><small>Aba: {importPreview.sheetName}</small></span>
+              </div>
+              <div className="import-preview-grid" aria-label="Resumo da importação">
+                <span><b>{importPreview.totalRows}</b><small>linhas lidas</small></span>
+                <span><b>{importPreview.added}</b><small>novos leads</small></span>
+                <span><b>{importPreview.duplicateRows}</b><small>duplicados</small></span>
+                <span><b>{importPreview.invalidRows}</b><small>sem empresa</small></span>
+              </div>
+              <p className="import-helper">Os campos conhecidos são tratados, o texto é normalizado e duplicados por empresa/endereço não são inseridos. Os valores originais permanecem no registro para auditoria.</p>
+              <div className="import-preview-list" aria-label="Primeiros leads válidos">
+                {importPreview.valid.slice(0, 5).map((lead) => (
+                  <div key={lead.id}><b>{lead.name}</b><span>{[lead.category, lead.city, lead.state].filter(Boolean).join(' · ') || 'Sem localização'}</span></div>
+                ))}
+                {importPreview.valid.length > 5 && <small>+ {importPreview.valid.length - 5} registros na prévia</small>}
+              </div>
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="btn btn-ghost" onClick={() => { setIsImportOpen(false); setImportPreview(null); }}>Cancelar</button>
+              <button type="button" className="btn btn-primary" onClick={handleConfirmImport}><Check size={15} /> Inserir {importPreview.added} lead{importPreview.added === 1 ? '' : 's'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL EXPORTAR */}
       {isExportOpen && (

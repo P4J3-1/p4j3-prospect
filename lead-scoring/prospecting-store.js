@@ -52,7 +52,7 @@ class ProspectingStore {
       };
       dirty = true;
     }
-    // v2: alta prioridade = site COM falhas; IA padrão OpenRouter + OpenCode grátis
+    // v2: alta prioridade = site COM falhas; preserva preferências existentes.
     if (!this.settings.analysis?.priorityV2Applied) {
       const preset = defaultRules();
       this.settings.rules = {
@@ -68,15 +68,9 @@ class ProspectingStore {
       if (!hasKey) {
         this.settings.ai = {
           ...(this.settings.ai || {}),
-          provider: this.settings.ai?.provider === "opencode" ? "opencode" : "openrouter",
-          model:
-            this.settings.ai?.provider === "opencode"
-              ? this.settings.ai?.model || "deepseek-v4-flash-free"
-              : this.settings.ai?.model || "openrouter/free",
-          baseUrl:
-            this.settings.ai?.provider === "opencode"
-              ? this.settings.ai?.baseUrl || "https://opencode.ai/zen/v1"
-              : this.settings.ai?.baseUrl || "",
+          provider: this.settings.ai?.provider || "opencode",
+          model: this.settings.ai?.model || "deepseek-v4-flash-free",
+          baseUrl: this.settings.ai?.baseUrl || "https://opencode.ai/zen/v1",
           siteUrl: this.settings.ai?.siteUrl || "https://sigma-gmaps.local",
           fallbackProviders:
             this.settings.ai?.fallbackProviders ||
@@ -90,6 +84,25 @@ class ProspectingStore {
       dirty = true;
     }
     if (dirty) this.saveSettings();
+
+    // v3: novas instalações usam OpenCode Zen. Só migra o antigo preset
+    // OpenRouter sem chave; uma escolha ou chave do usuário nunca é substituída.
+    if (!this.settings.analysis?.openCodeDefaultApplied) {
+      const ai = this.settings.ai || {};
+      const isLegacyOpenRouterDefault = ai.provider === "openrouter" && (!ai.model || ai.model === "openrouter/free");
+      const hasKey = !!(ai.apiKey && ai.apiKey !== "********");
+      if (!hasKey && (isLegacyOpenRouterDefault || !ai.provider)) {
+        this.settings.ai = {
+          ...ai,
+          provider: "opencode",
+          model: "deepseek-v4-flash-free",
+          baseUrl: "https://opencode.ai/zen/v1",
+          fallbackProviders: "[]",
+        };
+      }
+      this.settings.analysis = { ...(this.settings.analysis || {}), openCodeDefaultApplied: true };
+      this.saveSettings();
+    }
   }
 
   _loadJson(filePath, fallback) {
@@ -455,23 +468,14 @@ function defaultSettings() {
     },
     ai: {
       enabled: false,
-      provider: "openrouter",
+      provider: "opencode",
       apiKey: "",
-      model: "openrouter/free",
-      baseUrl: "",
-      siteUrl: "https://sigma-gmaps.local",
-      appName: "Sigma GMaps Scraper",
+      model: "deepseek-v4-flash-free",
+      baseUrl: "https://opencode.ai/zen/v1",
+      siteUrl: "https://sigma-scraper.local",
+      appName: "Sigma Scraper",
       extraHeaders: "",
-      // Fallback gratuito (OpenCode Zen) se o principal falhar
-      fallbackProviders: JSON.stringify([
-        {
-          provider: "opencode",
-          enabled: true,
-          apiKey: "",
-          model: "deepseek-v4-flash-free",
-          baseUrl: "https://opencode.ai/zen/v1",
-        },
-      ], null, 2),
+      fallbackProviders: "[]",
       batchSize: 8,
       useScreenshots: false,
       dailyLimit: 100,

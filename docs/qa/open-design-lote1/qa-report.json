@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-09-09T16:34:27.307Z",
-  "version": "1.1.7",
+  "generatedAt": "2026-09-09T23:02:22.065Z",
+  "version": "1.1.8",
   "desktopOnly": true,
   "viewport": "2880x1620",
   "routes": 8,
-  "modals": 17,
+  "modals": 18,
   "controlledErrorScenarios": 4,
-  "functionalScenarios": 4,
+  "functionalScenarios": 6,
   "desktopViewports": [
     {
       "requested": "1024x768",
@@ -17,7 +17,7 @@
       "windowControls": 3,
       "windowControlDetails": [
         {
-          "x": 917,
+          "x": 901,
           "y": 14,
           "width": 28,
           "height": 28,
@@ -27,7 +27,7 @@
           "iconHeight": 13
         },
         {
-          "x": 945,
+          "x": 929,
           "y": 14,
           "width": 28,
           "height": 28,
@@ -37,7 +37,7 @@
           "iconHeight": 11
         },
         {
-          "x": 973,
+          "x": 957,
           "y": 14,
           "width": 28,
           "height": 28,
@@ -47,7 +47,7 @@
           "iconHeight": 13
         }
       ],
-      "kanbanColumns": 6,
+      "kanbanColumns": 7,
       "map": null,
       "mapMarkers": 0,
       "chatShell": null,
@@ -63,7 +63,7 @@
       "windowControls": 3,
       "windowControlDetails": [
         {
-          "x": 1333,
+          "x": 1317,
           "y": 14,
           "width": 28,
           "height": 28,
@@ -73,7 +73,7 @@
           "iconHeight": 13
         },
         {
-          "x": 1361,
+          "x": 1345,
           "y": 14,
           "width": 28,
           "height": 28,
@@ -83,7 +83,7 @@
           "iconHeight": 11
         },
         {
-          "x": 1389,
+          "x": 1373,
           "y": 14,
           "width": 28,
           "height": 28,
@@ -95,7 +95,7 @@
       ],
       "kanbanColumns": 0,
       "map": {
-        "width": 831,
+        "width": 832,
         "height": 795
       },
       "mapMarkers": 3,
@@ -112,7 +112,7 @@
       "windowControls": 3,
       "windowControlDetails": [
         {
-          "x": 1813,
+          "x": 1801,
           "y": 14,
           "width": 28,
           "height": 28,
@@ -122,7 +122,7 @@
           "iconHeight": 13
         },
         {
-          "x": 1841,
+          "x": 1829,
           "y": 14,
           "width": 28,
           "height": 28,
@@ -132,7 +132,7 @@
           "iconHeight": 11
         },
         {
-          "x": 1869,
+          "x": 1857,
           "y": 14,
           "width": 28,
           "height": 28,
@@ -146,16 +146,16 @@
       "map": null,
       "mapMarkers": 0,
       "chatShell": {
-        "width": 1837,
-        "height": 1019
+        "width": 1681,
+        "height": 963
       },
       "chatList": {
-        "width": 588,
-        "height": 1019
+        "width": 538,
+        "height": 963
       },
       "chatRoom": {
-        "width": 1249,
-        "height": 1019
+        "width": 1143,
+        "height": 963
       }
     }
   ],

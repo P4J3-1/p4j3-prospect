@@ -10,7 +10,7 @@ export function readLocalArray(key) {
 // Espelha o normalizador do processo principal para recuperar registros já
 // persistidos no navegador antes da correção do scraper.
 export function normalizeLeadAddress(value) {
-  return String(value ?? '')
+  return repairMojibake(value)
     .normalize('NFC')
     .replace(/[\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]/gu, ' ')
     .replace(/\s+/gu, ' ')
@@ -33,18 +33,36 @@ function hasUsableLeadCoordinates(lead) {
   return /!3d-?\d+(?:\.\d+)?!4d-?\d+(?:\.\d+)?/.test(mapsUrl);
 }
 
-function repairMojibake(value) {
-  const text = String(value ?? '');
-  if (!/[\u00c2\u00c3]/.test(text)) return text;
+const MOJIBAKE_SEQUENCE = /(?:[\u00c2\u00c3][\u0080-\u00bf]|\u00e2[\u0080-\u00bf]{1,2}|\u00f0[\u0080-\u00bf]{1,3})/u;
+const MOJIBAKE_SEQUENCE_GLOBAL = /(?:[\u00c2\u00c3][\u0080-\u00bf]|\u00e2[\u0080-\u00bf]{1,2}|\u00f0[\u0080-\u00bf]{1,3})/gu;
 
-  try {
-    const codePoints = Array.from(text, (char) => char.codePointAt(0));
-    if (codePoints.some((point) => point > 255)) return text;
-    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(codePoints));
-    return decoded && !decoded.includes('\ufffd') ? decoded : text;
-  } catch {
-    return text;
+function mojibakeScore(value) {
+  const text = String(value ?? '');
+  return (text.match(MOJIBAKE_SEQUENCE_GLOBAL) || []).length * 10
+    + (text.match(/[\u0080-\u009f]/gu) || []).length * 3
+    + (text.match(/\ufffd/gu) || []).length * 20;
+}
+
+// Só converte sequências inequívocas de UTF-8 lido como Latin-1/Windows-1252.
+// Ex.: "ClÃ­nica" vira "Clínica"; "Ângela" não é alterado.
+export function repairMojibake(value) {
+  let current = String(value ?? '');
+  for (let pass = 0; pass < 3 && MOJIBAKE_SEQUENCE.test(current); pass += 1) {
+    try {
+      const codePoints = Array.from(current, (char) => char.codePointAt(0));
+      if (codePoints.some((point) => point > 255)) break;
+      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(codePoints));
+      if (!decoded || decoded === current || mojibakeScore(decoded) >= mojibakeScore(current)) break;
+      current = decoded;
+    } catch {
+      break;
+    }
   }
+  return current.normalize('NFC');
+}
+
+function normalizeOptionalText(value) {
+  return typeof value === 'string' ? repairMojibake(value).replace(/\s+/gu, ' ').trim() : value;
 }
 
 function foldText(value) {
@@ -80,12 +98,35 @@ export function normalizeLeadCategory(value) {
 
 export function normalizeLeadRecord(lead) {
   if (!lead || typeof lead !== 'object') return lead;
+  const name = normalizeOptionalText(lead.name);
   const category = normalizeLeadCategory(lead.category);
   const address = normalizeLeadAddress(lead.address);
+  const city = normalizeOptionalText(lead.city ?? lead.cidade);
+  const state = normalizeOptionalText(lead.state ?? lead.uf);
+  const neighborhood = normalizeOptionalText(lead.neighborhood ?? lead.bairro);
+  const company = lead.company && typeof lead.company === 'object'
+    ? {
+        ...lead.company,
+        name: normalizeOptionalText(lead.company.name),
+        category: normalizeOptionalText(lead.company.category),
+        address: normalizeLeadAddress(lead.company.address),
+        city: normalizeOptionalText(lead.company.city),
+        state: normalizeOptionalText(lead.company.state),
+        neighborhood: normalizeOptionalText(lead.company.neighborhood ?? lead.company.bairro),
+      }
+    : normalizeOptionalText(lead.company);
   const needsMapAddressRepair = !hasUsableLeadCoordinates(lead) && address.length >= 4;
-  return category === lead.category && address === lead.address && needsMapAddressRepair === Boolean(lead.needsMapAddressRepair)
+  const companyChanged = JSON.stringify(company) !== JSON.stringify(lead.company);
+  return name === lead.name
+    && category === lead.category
+    && address === lead.address
+    && city === (lead.city ?? lead.cidade)
+    && state === (lead.state ?? lead.uf)
+    && neighborhood === (lead.neighborhood ?? lead.bairro)
+    && !companyChanged
+    && needsMapAddressRepair === Boolean(lead.needsMapAddressRepair)
     ? lead
-    : { ...lead, category, address, needsMapAddressRepair };
+    : { ...lead, name, category, address, city, state, neighborhood, company, needsMapAddressRepair };
 }
 
 export function normalizeLeadCollection(leads = []) {

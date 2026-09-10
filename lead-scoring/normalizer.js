@@ -1,6 +1,7 @@
 const { createLeadId } = require("./prospecting-store");
 const { classifyUrl, VERSION: CLASSIFIER_VERSION } = require("./url-classifier");
 const { normalizeAddress } = require("../utils/address-normalizer");
+const { normalizeText } = require("../utils/text-normalizer");
 
 function normalizeLead(raw, options = {}) {
   const lead = raw || {};
@@ -51,7 +52,7 @@ function normalizeLead(raw, options = {}) {
 }
 
 function clean(value) {
-  return String(value || "").trim();
+  return normalizeText(value);
 }
 
 function onlyDigits(value) {

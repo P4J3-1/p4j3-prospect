@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const XLSX = require('xlsx');
 const { KanbanStore } = require('../kanban/kanban-store');
 
 const outputDir = path.join(__dirname, '..', 'docs', 'qa', 'open-design-lote1');
@@ -14,6 +15,11 @@ const qaUserDataPath = path.join(os.tmpdir(), `sigma-gmaps-qa-${process.pid}`);
 app.setPath('userData', qaUserDataPath);
 const errors = [];
 const now = Date.now();
+const qaXlsxWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(qaXlsxWorkbook, XLSX.utils.json_to_sheet([
+  { Empresa: 'Consultório QA', Nicho: 'Odontologia', Cidade: 'Brasília', Estado: 'DF', Telefone: '+55 61 98888-0000' },
+]), 'Leads');
+const qaXlsxBase64 = XLSX.write(qaXlsxWorkbook, { type: 'base64', bookType: 'xlsx' });
 const fixtureLeads = [
   { id: 'lead-1', searchId: 'search-odonto', name: 'Odonto Lume', category: 'Dentista', phone: '+55 21 98765-0142', email: 'contato@odontolume.com.br', website: 'https://odontolume.com.br', address: 'Av. Atlântica, 1000, Copacabana', city: 'Rio de Janeiro', state: 'RJ', latitude: -22.9711, longitude: -43.1822, coordSource: 'poi' },
   { id: 'lead-2', searchId: 'search-odonto', name: 'Clínica Sorriso', category: 'Clínica odontológica', phone: '+55 21 97654-8890', website: 'https://clinicasorriso.com.br', address: 'Rua Visconde de Pirajá, 420, Ipanema', city: 'Rio de Janeiro', state: 'RJ', latitude: -22.9833, longitude: -43.2096, coordSource: 'meta' },
@@ -24,6 +30,9 @@ const fixtureSearches = [
   { id: 'search-odonto', label: 'Dentistas · Rio de Janeiro', query: 'dentistas rio de janeiro', source: 'maps', timestamp: now - 120000 },
   { id: 'search-academia', label: 'Academias · São Paulo', query: 'academias são paulo', source: 'maps', timestamp: now - 3600000 },
   { id: 'importados', label: 'Planilhas importadas', source: 'spreadsheet', timestamp: now },
+];
+const fixtureGroups = [
+  { id: 'group-demo', name: 'Odontologia · Zona Sul', members: ['lead-1', 'lead-2'], count: 2, color: '#10a37f' },
 ];
 const fixtureCampaigns = [
   {
@@ -75,6 +84,9 @@ const mocks = {
   'update-status': { state: 'idle' },
   'metrics-get': {},
   'metrics-settings-get': { enabled: false },
+  'ui-zoom-get': 1,
+  'ui-zoom-set': 1,
+  'ui-zoom-reset': 1,
   'whatsapp-get-chats': { chats: fixtureChats },
   'whatsapp-get-archived-chats': { chats: [] },
   'whatsapp-get-contacts': { contacts: fixtureChats },
@@ -91,12 +103,70 @@ const mocks = {
     total: 2,
     stats: { total: 2, highPriority: 1, goodOpportunity: 1, responded: 0, closed: 0, closedValue: 0 },
   },
-  'lead-scoring-list-groups': { success: true, groups: [{ id: 'group-demo', name: 'Odontologia · Zona Sul', count: 2, color: '#10a37f' }] },
+  'lead-scoring-list-groups': { success: true, groups: [{ id: 'group-demo', name: 'Odontologia · Zona Sul', leadIds: ['lead-1', 'lead-2'], count: 2, color: '#10a37f' }] },
+  'lead-scoring-analyze-batch': {
+    success: true,
+    failures: 0,
+    results: fixtureLeads.slice(0, 2).map((lead) => ({
+      success: true,
+      lead: { id: lead.id, company: lead, score: { value: lead.id === 'lead-1' ? 82 : 45, reasons: ['Análise persistida no fixture de QA'] }, updatedAt: now },
+    })),
+  },
+  'lead-scoring-analyze-lead': {
+    success: true,
+    lead: { id: 'lead-1', company: fixtureLeads[0], score: { value: 82, reasons: ['Análise persistida no fixture de QA'] }, updatedAt: now },
+  },
   'lead-scoring-get-settings': { success: true, settings: { ai: { provider: 'opencode', model: 'deepseek-v4-flash-free', hasApiKey: true } } },
+  'lead-scoring-test-connection': { success: true, provider: 'opencode', model: 'deepseek-v4-flash-free' },
 };
 
 Object.entries(mocks).forEach(([channel, value]) => {
   ipcMain.handle(channel, () => value);
+});
+
+// Fluxo determinístico para exercitar o painel expansível da extração sem
+// abrir navegador, Maps ou uma sessão real durante a QA visual.
+ipcMain.handle('start-scrape', async (event, { queryId, progressContext = {} } = {}) => {
+  const neighborhood = String(progressContext.neighborhood || 'Pesquisa regional');
+  const liveLead = {
+    id: `qa-${neighborhood.replace(/\W+/g, '-').toLowerCase()}`,
+    name: `Lead ao vivo ${neighborhood}`,
+    category: 'Dentista',
+    address: `${neighborhood}, Brasília, DF`,
+    city: 'Brasília',
+    state: 'DF',
+    latitude: -15.793889,
+    longitude: -47.882778,
+    coordSource: 'poi',
+  };
+  const baseProgress = {
+    queryId,
+    neighborhood,
+    neighborhoodIndex: Number(progressContext.neighborhoodIndex) || 0,
+    totalNeighborhoods: Number(progressContext.totalNeighborhoods) || 1,
+    batchComplete: progressContext.batchComplete === true,
+  };
+  await new Promise((resolve) => setTimeout(resolve, 240));
+  event.sender.send('progress', { ...baseProgress, status: 'started', current: 0, total: 8, found: 0, message: `Iniciando: ${neighborhood}` });
+  await new Promise((resolve) => setTimeout(resolve, 240));
+  event.sender.send('progress', { ...baseProgress, status: 'running', current: 3, total: 8, found: 6, message: '6 empresas encontradas na lista do Google Maps.' });
+  event.sender.send('progress', {
+    ...baseProgress,
+    status: 'running',
+    type: 'lead',
+    current: 3,
+    total: 8,
+    found: 1,
+    lead: liveLead,
+    message: `Empresa 1 de 8 extraída: ${liveLead.name} · nota 4,8 · telefone encontrado.`,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 640));
+  event.sender.send('progress', { ...baseProgress, status: 'completed', current: 8, total: 8, found: 8, message: `Extração concluída: ${neighborhood}` });
+  return {
+    success: true,
+    data: [liveLead],
+    warnings: [],
+  };
 });
 
 ipcMain.handle('whatsapp-status', () => ({
@@ -230,6 +300,7 @@ app.whenReady().then(async () => {
     localStorage.setItem('sigma_ls_ai_onboard_skipped', '1');
     localStorage.setItem('sigma_leads', ${JSON.stringify(JSON.stringify(fixtureLeads))});
     localStorage.setItem('sigma_searches', ${JSON.stringify(JSON.stringify(fixtureSearches))});
+    localStorage.setItem('sigma_groups', ${JSON.stringify(JSON.stringify(fixtureGroups))});
     localStorage.setItem('sigma_ref', ${JSON.stringify(JSON.stringify({ lat: -22.975, lng: -43.19, accuracy: 12, timestamp: now }))});
     document.documentElement.setAttribute('data-theme', 'light');
   `);
@@ -314,7 +385,88 @@ app.whenReady().then(async () => {
   await captureModal('busca-global-modal', `document.querySelector('.header-search-wrap')?.click();`, '#cmdkOv');
   await captureModal('nova-extracao-modal', `document.querySelector('.btn-new-extraction')?.click();`, '.modal-overlay');
 
+  // Distrito Federal precisa aparecer como opção explícita e o detalhamento
+  // da extração deve refletir bairros reais, não um texto estático.
+  await win.webContents.executeJavaScript(`document.querySelector('.btn-new-extraction')?.click()`);
+  await pause(140);
+  await win.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector('#wzNicho');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, 'Dentistas');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    [...document.querySelectorAll('.ac-item')].find((node) => (node.textContent || '').includes('Dentistas'))?.click();
+  })()`);
+  await pause(140);
+  await win.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector('#wzCidade');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, 'DF');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await pause(140);
+  const dfSuggestion = await win.webContents.executeJavaScript(`(() => [...document.querySelectorAll('.ac-item')].map((node) => node.textContent || '').some((text) => text.includes('Distrito Federal') && text.includes('DF')))()`);
+  if (!dfSuggestion) errors.push('Nova extração: Distrito Federal (DF) não apareceu nas sugestões');
+  fs.writeFileSync(path.join(outputDir, 'nova-extracao-df-1440x900.png'), (await win.capturePage()).toPNG());
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.ac-item')].find((node) => (node.textContent || '').includes('Distrito Federal') && (node.textContent || '').includes('DF')))?.click()`);
+  await pause(120);
+  for (const neighborhood of ['Asa Sul', 'Asa Norte']) {
+    await win.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('#wzBairro');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(neighborhood)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      [...document.querySelectorAll('.hood-add button')].find((node) => (node.textContent || '').includes('Adicionar'))?.click();
+    })()`);
+    await pause(80);
+  }
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.modal-foot button')].find((node) => (node.textContent || '').includes('Iniciar extração')))?.click()`);
+  await pause(560);
+  const progressDetailAvailable = await win.webContents.executeJavaScript(`Boolean(document.querySelector('[data-od-id="scraper-progress-info"]'))`);
+  if (!progressDetailAvailable) errors.push('Scraper: ícone de detalhes da extração não apareceu');
+  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="scraper-progress-info"]')?.click()`);
+  await pause(120);
+  const progressDetail = await win.webContents.executeJavaScript(`(() => ({
+    open: Boolean(document.querySelector('.map-progress-detail')),
+    found: document.querySelector('.map-progress-stats b')?.textContent || '',
+    text: document.querySelector('.map-progress-detail')?.textContent || '',
+    liveFeed: document.querySelector('#feedCount')?.textContent || '',
+    liveCard: document.querySelector('.lead-live')?.textContent || '',
+  }))()`);
+  if (!progressDetail.open || !/Asa Sul|Asa Norte/.test(progressDetail.text)) errors.push(`Scraper: detalhe por bairro inválido ${JSON.stringify(progressDetail)}`);
+  if (!/chegando agora/i.test(progressDetail.liveFeed) || !/ao vivo/i.test(progressDetail.liveCard) || /\bFound\b|\bExtracting\b/i.test(progressDetail.text)) {
+    errors.push(`Scraper: lead ao vivo ou logs em português inválidos ${JSON.stringify(progressDetail)}`);
+  }
+  fs.writeFileSync(path.join(outputDir, 'scraper-progresso-detalhado-1440x900.png'), (await win.capturePage()).toPNG());
+  await pause(2200);
+
   await navigateTo('base de leads');
+  await captureModal('importar-leads-modal', `(() => {
+    const input = document.querySelector('[data-od-id="base-import"]')?.previousElementSibling;
+    if (!input || input.type !== 'file') return;
+    const csv = new File(['Empresa;Nicho;Cidade;Estado;Telefone\\nClÃ­nica QA;Dermatologia;BrasÃ­lia;DF;+55 61 99999-0000'], 'leads-qa.csv', { type: 'text/csv;charset=utf-8' });
+    const transfer = new DataTransfer();
+    transfer.items.add(csv);
+    Object.defineProperty(input, 'files', { configurable: true, value: transfer.files });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`, '.modal-overlay');
+  await win.webContents.executeJavaScript(`(() => {
+    const input = document.querySelector('[data-od-id="base-import"]')?.previousElementSibling;
+    if (!input || input.type !== 'file') return;
+    const binary = atob(${JSON.stringify(qaXlsxBase64)});
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], 'leads-qa.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    Object.defineProperty(input, 'files', { configurable: true, value: transfer.files });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await pause(320);
+  const xlsxPreview = await win.webContents.executeJavaScript(`(() => ({
+    open: Boolean(document.querySelector('.import-file-summary')),
+    text: document.querySelector('.import-preview-list')?.textContent || '',
+  }))()`);
+  if (!xlsxPreview.open || !/Consultório QA/.test(xlsxPreview.text)) errors.push(`Base: prévia XLSX inválida ${JSON.stringify(xlsxPreview)}`);
+  await win.webContents.executeJavaScript(`document.querySelector('.modal-overlay')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+  await pause(100);
   await captureModal('exportar-leads-modal', `([...document.querySelectorAll('button')].find((node) => (node.textContent || '').trim() === 'Exportar'))?.click();`, '.overlay.on');
   await win.webContents.executeJavaScript(`document.querySelector('.base-leads-view tbody .rowcheck')?.click()`);
   await pause(100);
@@ -387,16 +539,6 @@ app.whenReady().then(async () => {
   await win.webContents.executeJavaScript(`document.querySelector('.chat-bubble-action-btn[title="Mais"]')?.click()`);
   await pause(100);
   await captureModal('encaminhar-modal', `([...document.querySelectorAll('.chat-msg-menu button')].find((node) => (node.textContent || '').includes('Encaminhar')))?.click();`, '#fwdOv');
-  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-tab-status"]')?.click()`);
-  await pause(150);
-  await win.webContents.executeJavaScript(`(() => { const input = document.querySelector('#waStatusPost'); if (!input) return; const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, 'Fechamos 2 auditorias esta semana. Obrigado pela confiança!'); input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
-  await pause(100);
-  await win.webContents.executeJavaScript(`document.querySelector('.wa-statuspost button')?.click()`);
-  await pause(150);
-  await captureModal('status-modal', `document.querySelector('[data-od-id="wa-status-mine"]')?.click();`, '#statusOv');
-  await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-tab-conversas"]')?.click()`);
-  await pause(150);
-
   // Error handling: failures must stay inside the current flow and explain recovery.
   fixtureFailureState.startChat = true;
   await win.webContents.executeJavaScript(`document.querySelector('[data-od-id="wa-new-chat"]')?.click()`);
@@ -566,6 +708,9 @@ app.whenReady().then(async () => {
     errors.push('Mapa: callback do Leaflet falhou ao trocar de rota rapidamente');
   }
 
+  await navigateTo('configurações', 420);
+  await captureModal('limpar-base-modal', `document.querySelector('[data-od-id="settings-clear-leads"]')?.click();`, '.modal-overlay');
+
   const desktopViewports = [];
   const inspectDesktop = async ({ width, height, label, route, file }) => {
     win.setSize(width, height);
@@ -636,9 +781,9 @@ app.whenReady().then(async () => {
     desktopOnly: true,
     viewport: `${viewport.width}x${viewport.height}`,
     routes: 8,
-    modals: 17,
+    modals: 18,
     controlledErrorScenarios: 4,
-    functionalScenarios: 4,
+    functionalScenarios: 6,
     desktopViewports,
     errors,
     passed: errors.length === 0,

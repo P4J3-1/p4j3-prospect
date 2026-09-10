@@ -82,7 +82,6 @@ app.whenReady().then(async () => {
     { route: 'whatsapp', id: 'connOv', name: 'conexoes-modal', open: `openConn();` },
     { route: 'whatsapp', id: 'qrOv', name: 'qr-modal', open: `waDrawQr(); document.getElementById('qrOv').classList.add('on');` },
     { route: 'whatsapp', id: 'profileOv', name: 'perfil-modal', open: `document.getElementById('profileName').value='Sigma Comercial'; document.getElementById('profileAbout').value='Prospecção B2B no automático'; document.getElementById('profilePhone').value='+55 21 90000-0001'; document.getElementById('profileOv').classList.add('on');` },
-    { route: 'whatsapp', id: 'statusOv', name: 'status-modal', open: `openStatus(WA_STATUS[0].id);` },
     { route: 'whatsapp', id: 'fwdOv', name: 'encaminhar-modal', open: `openFwd({ text:'Mensagem de demonstração' });` },
   ];
   for (const overlay of overlays) await captureOverlay(win, overlay);

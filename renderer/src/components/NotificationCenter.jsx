@@ -177,7 +177,7 @@ export function NotificationProvider({ children }) {
     }}>
       {children}
 
-      {/* Floating Toast Area (Top-Right) */}
+      {/* Floating Toast Area (Bottom-Right) */}
       <div className="toast-container" aria-live="polite">
         {toasts.map(toast => {
           const Icon = toast.type === 'success' ? CheckCircle2
