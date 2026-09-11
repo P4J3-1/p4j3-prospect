@@ -74,7 +74,7 @@ Na release `v1.1.9`, os arquivos são:
 
 Após instalar, abra o Sigma e comece por **Nova Extração**. Para campanhas, conecte um número em **WhatsApp → Sessão** ou salve primeiro um rascunho e conecte depois.
 
-> O atualizador automático funciona na versão instalada pelo NSIS. Quem ainda estiver em uma versão anterior precisa instalar a `v1.1.9` uma vez; depois, as próximas releases podem ser aplicadas pelo próprio app. `win-unpacked` é uma saída de teste local e não deve ser usada para validar atualização in-place.
+> O atualizador automático funciona na versão instalada pelo NSIS. Com o updater ativo, instalações anteriores podem detectar a `v1.1.9` e baixá-la pelo próprio app; instalações `win-unpacked`, portáteis ou com o updater indisponível precisam do download manual. `win-unpacked` é uma saída de teste local e não deve ser usada para validar atualização in-place.
 
 ## Desenvolvimento
 
