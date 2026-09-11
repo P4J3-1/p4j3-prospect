@@ -174,6 +174,34 @@ function AppInner() {
   const { addNotification } = useNotifications();
   const mapScraperRef = useRef(null);
 
+  // O indicador global vive no shell do app, portanto não pode depender da
+  // tela WhatsApp estar aberta para receber o snapshot das conexões.
+  useEffect(() => {
+    if (!window.whatsappAPI) return undefined;
+    let mounted = true;
+    const applyStatus = (payload) => {
+      const data = payload?.data || payload || {};
+      const aggregate = payload?.aggregateStatus || data.aggregateStatus;
+      const anyConnected = payload?.anyConnected ?? data.anyConnected ?? data.connected;
+      const next = aggregate || (anyConnected ? 'connected' : payload?.status || data.status || 'disconnected');
+      if (mounted && next) setWaStatus(next);
+    };
+    const off = typeof window.whatsappAPI.onStatus === 'function'
+      ? window.whatsappAPI.onStatus(applyStatus)
+      : null;
+    const refresh = async () => {
+      try {
+        const snapshot = await window.whatsappAPI.getStatus?.();
+        if (mounted && snapshot) applyStatus(snapshot);
+      } catch { /* status indisponível durante o boot; o evento seguinte atualiza */ }
+    };
+    refresh();
+    return () => {
+      mounted = false;
+      if (typeof off === 'function') off();
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const migrate = async () => {
