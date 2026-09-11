@@ -109,6 +109,7 @@ class CampaignManager {
         if (lead.messageId) this._messageIndex.delete(lead.messageId);
       }
     }
+    if (this.scheduler?.removeCampaign) this.scheduler.removeCampaign(id);
     const result = this.store.delete(id);
     this._rebuildPhoneIndex();
     return result;

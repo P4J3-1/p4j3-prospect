@@ -5,6 +5,10 @@ let sendToRenderer = null;
 let checkTimer = null;
 let isInit = false;
 let checkInFlight = null;
+// Último estado conhecido. O renderer monta depois do primeiro check, então sem
+// este cache um "nova versão disponível" podia ser emitido para o vazio.
+let lastState = { status: "idle", ts: Date.now() };
+let downloadInFlight = false;
 
 function getUpdateAvailabilityError() {
   if (!app.isPackaged) {
@@ -45,14 +49,21 @@ function init(sendFn) {
   });
 
   autoUpdater.on("download-progress", (p) => {
-    emit("progress", { percent: Math.round(p.percent || 0), bytesPerSecond: p.bytesPerSecond || 0 });
+    emit("progress", {
+      percent: Math.round(p.percent || 0),
+      bytesPerSecond: Math.round(p.bytesPerSecond || 0),
+      transferred: Number(p.transferred) || 0,
+      total: Number(p.total) || 0,
+    });
   });
 
   autoUpdater.on("update-downloaded", (info) => {
+    downloadInFlight = false;
     emit("downloaded", { version: info.version });
   });
 
   autoUpdater.on("error", (err) => {
+    downloadInFlight = false;
     emit("error", { message: err?.message || String(err) });
   });
 
@@ -64,12 +75,14 @@ function init(sendFn) {
     return;
   }
 
-  setTimeout(() => checkForUpdates(), 5000);
+  // A checagem roda em toda abertura do app e depois a cada 6 h.
+  setTimeout(() => checkForUpdates(), 4000);
   checkTimer = setInterval(() => checkForUpdates(), 6 * 60 * 60 * 1000);
 }
 
 function emit(status, data) {
   const payload = { status, ...(data || {}), ts: Date.now() };
+  lastState = payload;
   try {
     if (sendToRenderer) sendToRenderer("update-status", payload);
   } catch {}
@@ -104,10 +117,14 @@ async function downloadUpdate() {
       error: unavailableReason,
     };
   }
+  if (downloadInFlight) return { success: true, alreadyRunning: true };
+  downloadInFlight = true;
+  emit("progress", { percent: 0, bytesPerSecond: 0, transferred: 0, total: 0 });
   try {
     await autoUpdater.downloadUpdate();
     return { success: true };
   } catch (e) {
+    downloadInFlight = false;
     return { success: false, error: e.message };
   }
 }
@@ -125,12 +142,14 @@ function quitAndInstall() {
   }
 }
 
+/** Capacidade + último evento. O renderer usa isto para se sincronizar ao abrir. */
 function getStatus() {
   return {
     isPackaged: app.isPackaged,
     version: app.getVersion(),
     hasUpdater: !!autoUpdater,
     unavailableReason: getUpdateAvailabilityError(),
+    last: lastState,
   };
 }
 

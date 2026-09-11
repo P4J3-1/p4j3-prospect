@@ -46,6 +46,7 @@ const { saveProspectingCSV } = require("./lead-scoring/export-service");
 const { KanbanStore } = require("./kanban/kanban-store");
 const { normalizeAddress } = require("./utils/address-normalizer");
 const { normalizeText } = require("./utils/text-normalizer");
+const { normalizeLeadLinks, normalizePhoneDisplay } = require("./utils/lead-links");
 const { geocodeAddress, isValidCoord } = require("./utils/geocode");
 const { migrateExistingData } = require("./utils/existing-data-migrator");
 const {
@@ -78,6 +79,7 @@ let displaySafetyRegistered = false;
 let desktopPreferences = null;
 
 function normalizeIncomingLead(item = {}) {
+  const links = normalizeLeadLinks(item);
   return {
     ...item,
     name: normalizeText(item?.name),
@@ -86,6 +88,9 @@ function normalizeIncomingLead(item = {}) {
     state: normalizeText(item?.state || item?.uf),
     neighborhood: normalizeText(item?.neighborhood || item?.bairro),
     address: normalizeAddress(item?.address),
+    phone: normalizePhoneDisplay(item?.phone || item?.tel) || normalizeText(item?.phone),
+    website: links.website,
+    instagram: links.instagram,
   };
 }
 
@@ -137,7 +142,7 @@ const MAX_SCRAPE_RESULTS = 1000;
 const MAX_QUERY_LENGTH = 200;
 const MAX_EXPORT_LEADS = 20000;
 const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
-const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 const MAX_STICKER_BYTES = 5 * 1024 * 1024;
 
 const DESKTOP_PREFERENCES_VERSION = 1;
@@ -385,7 +390,7 @@ function pauseActiveCampaignsFromTray() {
       console.warn("[TRAY] campaign pause:", error.message);
     }
   }
-  try { kanbanStore?.syncCampaigns(campaignManager?.getAll?.() || []); } catch {}
+      try { kanbanStore?.syncCampaigns(campaignManager?.getAll?.() || [], { replace: true, existingOnly: true }); } catch {}
   updateTray();
 }
 
@@ -1290,7 +1295,7 @@ app.whenReady().then(() => {
   });
   kanbanStore = new KanbanStore(app.getPath("userData"));
   campaignManager.setProgressCallback((campaignId, event, data) => {
-    try { kanbanStore?.syncCampaigns(campaignManager.getAll()); } catch (error) { console.warn("[KANBAN] campaign sync:", error.message); }
+  try { kanbanStore?.syncCampaigns(campaignManager.getAll(), { replace: true, existingOnly: true }); } catch (error) { console.warn("[KANBAN] campaign sync:", error.message); }
     safeSend("campaign-progress", {
       campaignId,
       event,
@@ -1478,15 +1483,68 @@ function requireKanbanStore() {
 
 function syncKanbanServiceSources() {
   const store = requireKanbanStore();
+  // `replace: true` faz o quadro espelhar as fontes: lead que saiu da base ou
+  // da campanha desaparece do Kanban em vez de ficar preso para sempre.
   if (leadScoringService) {
     const scoringLeads = leadScoringService.getAll({}).leads || [];
-    if (scoringLeads.length) store.syncLeads(scoringLeads, "scoring");
+    store.syncLeads(scoringLeads, "scoring", { replace: true, existingOnly: true });
   }
   if (campaignManager) {
     const campaigns = campaignManager.getAll() || [];
-    if (campaigns.length) store.syncCampaigns(campaigns);
+    store.syncCampaigns(campaigns, { replace: true, existingOnly: true });
   }
   return store.getBoard();
+}
+
+/** Faixas de prioridade do scoring viram fonte única também no Kanban. */
+function scoringThresholds() {
+  try {
+    return leadScoringService?.getSettings?.()?.rules?.thresholds || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Analisa sozinho o que acabou de ser extraído, quando o usuário liga a
+ * opção em Configurar análise. Roda em segundo plano para não segurar a
+ * extração e mantém o renderer informado pelo canal de progresso.
+ */
+function maybeAutoAnalyzeScrapedLeads(leads, query) {
+  if (!Array.isArray(leads) || !leads.length) return;
+  let enabled = false;
+  try {
+    enabled = leadScoringService?.getSettings?.()?.analysis?.autoAnalyzeAfterScrape === true;
+  } catch (error) {
+    enabled = false;
+  }
+  if (!enabled) return;
+  const total = leads.length;
+  safeSend("lead-scoring-progress", {
+    event: "auto-started",
+    total,
+    message: `Analisando ${total} lead(s) extraído(s) automaticamente…`,
+  });
+  leadScoringService
+    .analyzeBatch(leads, { query, searchLabel: query })
+    .then((result) => {
+      console.log(`[SCORING] automático: ${result.analyzedCount}/${result.count}`);
+      safeSend("lead-scoring-progress", {
+        event: "auto-completed",
+        analyzed: result.analyzedCount,
+        failures: result.failures,
+        total: result.count,
+        query,
+        message: `Scoring automático concluído: ${result.analyzedCount} de ${result.count} lead(s).`,
+      });
+    })
+    .catch((error) => {
+      console.warn("[SCORING] automático:", error.message);
+      safeSend("lead-scoring-progress", {
+        event: "auto-failed",
+        message: `Scoring automático falhou: ${error.message}`,
+      });
+    });
 }
 
 ipcMain.handle("migrate-existing-data", async (_, { localStorage } = {}) => {
@@ -1503,7 +1561,7 @@ ipcMain.handle("migrate-existing-data", async (_, { localStorage } = {}) => {
 // persistência ficam no processo principal para não depender do localStorage.
 ipcMain.handle("kanban-get-board", async () => {
   try {
-    return { success: true, board: syncKanbanServiceSources() };
+    return { success: true, board: syncKanbanServiceSources(), thresholds: scoringThresholds() };
   } catch (error) {
     return { success: false, error: error.message, board: null };
   }
@@ -1512,8 +1570,35 @@ ipcMain.handle("kanban-get-board", async () => {
 ipcMain.handle("kanban-sync-maps", async (_, { leads } = {}) => {
   try {
     const store = requireKanbanStore();
-    const board = store.syncLeads(Array.isArray(leads) ? leads : [], "maps");
+    const board = store.syncLeads(Array.isArray(leads) ? leads : [], "maps", {
+      replace: true,
+      authoritative: true,
+    });
     return { success: true, board };
+  } catch (error) {
+    return { success: false, error: error.message, board: null };
+  }
+});
+
+ipcMain.handle("kanban-record-deal", async (_, payload = {}) => {
+  try {
+    const board = requireKanbanStore().recordDeal({
+      entityKey: limitString(payload?.entityKey, 180, ""),
+      outcome: ["won", "lost", "open"].includes(payload?.outcome) ? payload.outcome : "open",
+      value: Number(payload?.value) || 0,
+      note: limitString(payload?.note, 200, ""),
+      reminderAt: limitString(payload?.reminderAt, 80, ""),
+      reminderNote: limitString(payload?.reminderNote, 200, ""),
+    });
+    return { success: true, board };
+  } catch (error) {
+    return { success: false, error: error.message, board: null };
+  }
+});
+
+ipcMain.handle("kanban-reset", async () => {
+  try {
+    return { success: true, board: requireKanbanStore().reset() };
   } catch (error) {
     return { success: false, error: error.message, board: null };
   }
@@ -1682,6 +1767,7 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId, progressC
 
     emitProgress({ status: "completed", current: data.length, total: data.length, message: `Extração concluída: ${data.length} resultado(s).` });
     try { appMetrics.track("scrape_completed", { count: data.length, queryLen: cleanQuery.length }); } catch {}
+    maybeAutoAnalyzeScrapedLeads(data, cleanQuery);
 
     return {
       success: true,
@@ -2005,6 +2091,34 @@ ipcMain.handle("open-external", async (_, { url } = {}) => {
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("open-site-window", async (_, { url } = {}) => {
+  const target = String(url || '').trim();
+  if (!isHttpUrl(target)) return { success: false, error: "URL inválida" };
+  try {
+    const siteWindow = new BrowserWindow({
+      width: 1180,
+      height: 780,
+      minWidth: 720,
+      minHeight: 480,
+      parent: mainWindow || undefined,
+      title: target,
+      autoHideMenuBar: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    siteWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    siteWindow.webContents.on("will-navigate", (event, nextUrl) => {
+      if (!isHttpUrl(nextUrl)) event.preventDefault();
+    });
+    siteWindow.webContents.once("did-finish-load", () => {
+      if (!siteWindow.isDestroyed()) siteWindow.show();
+    });
+    await siteWindow.loadURL(target);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 });
 
@@ -2392,6 +2506,19 @@ ipcMain.handle("whatsapp-chat-action", async (_, { jid, action, connectionId } =
   return await provider.chatAction(jid, action);
 });
 
+ipcMain.handle("whatsapp-clear-history", async () => {
+  const results = [];
+  for (const [connectionId, provider] of whatsappProviders.entries()) {
+    if (typeof provider.clearHistory !== "function") continue;
+    try {
+      results.push({ connectionId, ...(await provider.clearHistory()) });
+    } catch (error) {
+      results.push({ connectionId, success: false, error: error.message });
+    }
+  }
+  return { success: results.every((item) => item.success !== false), results };
+});
+
 ipcMain.handle("whatsapp-delete-message", async (_, { jid, key, forEveryone, connectionId } = {}) => {
   const provider = resolveChatProvider(connectionId);
   if (!provider || !provider.deleteMessage)
@@ -2488,7 +2615,10 @@ ipcMain.handle("whatsapp-send-media", async (_, { to, filePath, caption, connect
       ".gif": "image/gif",
       ".webp": "image/webp",
       ".mp4": "video/mp4",
+      ".m4v": "video/x-m4v",
       ".mov": "video/quicktime",
+      ".avi": "video/x-msvideo",
+      ".mkv": "video/x-matroska",
       ".mp3": "audio/mpeg",
       ".wav": "audio/wav",
       ".ogg": "audio/ogg",
@@ -2498,6 +2628,17 @@ ipcMain.handle("whatsapp-send-media", async (_, { to, filePath, caption, connect
       ".doc": "application/msword",
       ".docx":
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ".xls": "application/vnd.ms-excel",
+      ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ".ppt": "application/vnd.ms-powerpoint",
+      ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      ".txt": "text/plain",
+      ".csv": "text/csv",
+      ".zip": "application/zip",
+      ".rar": "application/vnd.rar",
+      ".7z": "application/x-7z-compressed",
+      ".tar": "application/x-tar",
+      ".gz": "application/gzip",
     };
     const mimetype = mimeMap[ext] || "application/octet-stream";
     const isImage = mimetype.startsWith("image/");
@@ -3081,6 +3222,26 @@ ipcMain.handle("lead-scoring-clear", async (_, { ids, all } = {}) => {
 ipcMain.handle("lead-scoring-list-groups", async () => {
   try {
     return { success: true, groups: leadScoringService.listGroups() };
+  } catch (err) {
+    return { success: false, error: err.message, groups: [] };
+  }
+});
+
+ipcMain.handle("lead-scoring-sync-groups", async (_, { groups } = {}) => {
+  try {
+    const safeGroups = (Array.isArray(groups) ? groups : []).slice(0, 500).map((group) => ({
+      id: limitString(group?.id, 80, ""),
+      name: limitString(group?.name, 80, ""),
+      description: limitString(group?.description, 240, ""),
+      color: limitString(group?.color, 20, ""),
+      leadIds: Array.isArray(group?.leadIds)
+        ? group.leadIds.map((id) => limitString(id, 140, "")).filter(Boolean).slice(0, 5000)
+        : [],
+      segment: group?.segment && typeof group.segment === "object" ? group.segment : null,
+      createdAt: Number(group?.createdAt) || Date.now(),
+      updatedAt: Number(group?.updatedAt) || Date.now(),
+    })).filter((group) => group.id && group.name);
+    return { success: true, groups: leadScoringService.syncGroups(safeGroups) };
   } catch (err) {
     return { success: false, error: err.message, groups: [] };
   }

@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onWinState: (callback) =>
     ipcRenderer.on("win-state", (_, state) => callback(state)),
   openExternal: (url) => ipcRenderer.invoke("open-external", { url }),
+  openSite: (url) => ipcRenderer.invoke("open-site-window", { url }),
   checkUpdate: () => ipcRenderer.invoke("update-check"),
   downloadUpdate: () => ipcRenderer.invoke("update-download"),
   installUpdate: () => ipcRenderer.invoke("update-install"),
@@ -96,6 +97,8 @@ contextBridge.exposeInMainWorld("kanbanAPI", {
   saveConfig: (board, expectedRevision) =>
     ipcRenderer.invoke("kanban-save-config", { board, expectedRevision }),
   moveCard: (payload) => ipcRenderer.invoke("kanban-move-card", payload || {}),
+  recordDeal: (payload) => ipcRenderer.invoke("kanban-record-deal", payload || {}),
+  reset: () => ipcRenderer.invoke("kanban-reset"),
   applyRules: (force = false) => ipcRenderer.invoke("kanban-apply-rules", { force }),
   resumeAutomation: (entityKey) => ipcRenderer.invoke("kanban-resume-automation", { entityKey }),
 });
@@ -123,6 +126,7 @@ contextBridge.exposeInMainWorld("leadScoringAPI", {
   createCampaign: (ids, name, connectionId) =>
     ipcRenderer.invoke("lead-scoring-create-campaign", { ids, name, connectionId }),
   listGroups: () => ipcRenderer.invoke("lead-scoring-list-groups"),
+  syncGroups: (groups) => ipcRenderer.invoke("lead-scoring-sync-groups", { groups: groups || [] }),
   createGroup: (data) => ipcRenderer.invoke("lead-scoring-create-group", data || {}),
   updateGroup: (id, patch) => ipcRenderer.invoke("lead-scoring-update-group", { id, patch }),
   deleteGroup: (id, opts) => ipcRenderer.invoke("lead-scoring-delete-group", { id, ...(opts || {}) }),
@@ -169,6 +173,7 @@ contextBridge.exposeInMainWorld("chatAPI", {
     ipcRenderer.invoke("whatsapp-mark-read", { jid, connectionId }),
   chatAction: (jid, action, connectionId) =>
     ipcRenderer.invoke("whatsapp-chat-action", { jid, action, connectionId }),
+  clearHistory: () => ipcRenderer.invoke("whatsapp-clear-history"),
   sendMessage: (to, content, connectionId) =>
     ipcRenderer.invoke("whatsapp-send-message", { to, content, connectionId }),
   deleteMessage: (jid, key, connectionId, forEveryone = true) =>

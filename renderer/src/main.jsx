@@ -17,6 +17,10 @@ try {
   }
 } catch { try { document.documentElement.setAttribute('data-theme','light'); } catch{} }
 
+try {
+  document.documentElement.setAttribute('data-streaming-mode', localStorage.getItem('sigma_streaming_mode') === 'true' ? 'true' : 'false');
+} catch { try { document.documentElement.setAttribute('data-streaming-mode', 'false'); } catch {} }
+
 const BUILD_STAMP = '2026-09-08-open-design-lote1-teal';
 
 // Descarta erro antigo em localStorage (ex.: stack de index-7F4QwPd2 / ui-mrfg9u99)

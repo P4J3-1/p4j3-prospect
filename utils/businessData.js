@@ -7,6 +7,23 @@ async function extractBusinessData(page) {
       .replace(/^[\s\p{Cc}\p{Cf}\p{Co}\u{1F4CD}\u{FE0E}\u{FE0F}]+/u, '')
       .replace(/\s+/gu, ' ')
       .trim();
+    const cleanText = (value) => String(value ?? '')
+      .normalize('NFC')
+      .replace(/[\p{Cc}\p{Cf}\p{Co}\u{FE0E}\u{FE0F}]/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim();
+    const hostOf = (href) => {
+      try { return new URL(href, window.location.origin).hostname.toLowerCase().replace(/^www\./, ''); }
+      catch { return ''; }
+    };
+    // Links do Google (Maps, shortlinks, CDN de fotos) nunca são o site da empresa.
+    const isGoogleHost = (host) => /(^|\.)(google\.[a-z.]+|goo\.gl|g\.co|googleusercontent\.com|gstatic\.com|withgoogle\.com)$/.test(host);
+    const isSocialHost = (host) => /(^|\.)(instagram\.com|instagr\.am|facebook\.com|fb\.com|fb\.me|whatsapp\.com|wa\.me|tiktok\.com|twitter\.com|x\.com|linkedin\.com)$/.test(host);
+    const isInstagramHost = (host) => /(^|\.)(instagram\.com|instagr\.am)$/.test(host);
+    // O painel do lugar é o único escopo confiável: o feed lateral mantém
+    // resultados anteriores no DOM e contaminava site/Instagram do lead atual.
+    const panel = document.querySelector('div[role="main"]') || document.body;
+
     const data = {
       name: document.querySelector('h1.DUwDvf')?.textContent.trim() || '',
       rating: 0,
@@ -16,6 +33,7 @@ async function extractBusinessData(page) {
       address: '',
       phone: null,
       website: null,
+      instagram: '',
       priceRange: null,
       plusCode: null,
       description: '',
@@ -43,13 +61,35 @@ async function extractBusinessData(page) {
     // --- PHONE ---
     const phoneEl = document.querySelector('button[data-item-id*="phone:tel:"] div.fontBodyMedium') ||
                     document.querySelector('a[href^="tel:"]');
-    if (phoneEl) data.phone = phoneEl.textContent.trim();
+    if (phoneEl) data.phone = cleanText(phoneEl.textContent) || null;
 
     // --- WEBSITE ---
-    const webEl = document.querySelector('a[data-item-id*="authority"]') ||
-                  Array.from(document.querySelectorAll('a[href^="http"]'))
-                    .find(a => !a.href.includes('google.com'));
-    if (webEl) data.website = webEl.href;
+    // 1) Link oficial da ficha (authority). 2) Qualquer link do painel que não
+    // seja Google, rede social ou o próprio Maps.
+    const authority = document.querySelector('a[data-item-id*="authority"]');
+    let website = authority?.href || '';
+    if (!website) {
+      const candidate = Array.from(panel.querySelectorAll('a[href^="http"]')).find((anchor) => {
+        const host = hostOf(anchor.href);
+        if (!host || isGoogleHost(host) || isSocialHost(host)) return false;
+        return !anchor.closest('button[aria-label*="photo"], div[data-review-id]');
+      });
+      website = candidate?.href || '';
+    }
+    if (website && !isGoogleHost(hostOf(website))) data.website = website;
+
+    // --- INSTAGRAM ---
+    const igAnchor = Array.from(panel.querySelectorAll('a[href*="instagram.com"], a[href*="instagr.am"]')).find((anchor) => {
+      const host = hostOf(anchor.href);
+      if (!isInstagramHost(host)) return false;
+      try {
+        const first = new URL(anchor.href).pathname.split('/').filter(Boolean)[0] || '';
+        return Boolean(first) && !['p', 'reel', 'reels', 'tv', 'stories', 'explore', 'accounts', 'direct'].includes(first.toLowerCase());
+      } catch {
+        return false;
+      }
+    });
+    if (igAnchor) data.instagram = igAnchor.href;
 
     // --- PLUS CODE ---
     const plusEl = document.querySelector('button[data-item-id*="oloc"] div.fontBodyMedium');
@@ -70,13 +110,26 @@ async function extractBusinessData(page) {
     const ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"]');
     if (ratingEl) data.rating = parseFloat(ratingEl.textContent.replace(',', '.')) || 0;
 
-    const reviewBtn = document.querySelector('div.F7nice button[aria-label*="review"]');
-    const reviewText = reviewBtn?.getAttribute('aria-label') || 
-                       document.querySelector('div.F7nice span[aria-label*="review"]')?.textContent || '';
-    const match = reviewText.match(/([\d.,]+)/);
-    if (match) {
-      data.totalReviews = match[1];
-      data.reviewCount = parseInt(match[1].replace(/[.,]/g,'')) || 0;
+    // O texto varia por idioma ("reviews", "avaliações", "reseñas") e o
+    // Maps pode trocar o botão por um span. Priorize o número colado ao termo
+    // de avaliação; o primeiro número do bloco quase sempre é a nota.
+    const reviewCandidates = Array.from(document.querySelectorAll(
+      'div.F7nice [aria-label], div.F7nice button, div.F7nice span, div.F7nice'
+    )).map((el) => `${el.getAttribute?.('aria-label') || ''} ${el.textContent || ''}`.replace(/\s+/g, ' ').trim());
+    const reviewText = reviewCandidates.find((text) => /review|avaliaç|reseñ|avis/i.test(text)) || '';
+    const reviewTerm = '(?:reviews?|avalia(?:ções|ção)?|reseñas?|avis)';
+    const reviewMatch = reviewText.match(new RegExp(`([\\d.,]+)\\s*(mil|k)?\\s*${reviewTerm}`, 'i'))
+      || reviewText.match(new RegExp(`${reviewTerm}[^\\d]*([\\d.,]+)\\s*(mil|k)?`, 'i'))
+      || (document.querySelector('div.F7nice')?.textContent || '').match(/\(([\d.,]+)\)/);
+    if (reviewMatch) {
+      const rawCount = String(reviewMatch[1] || '').trim();
+      const compact = rawCount.replace(/[.,]/g, '');
+      const multiplier = /^(mil|k)$/i.test(reviewMatch[2] || '') ? 1000 : 1;
+      const count = Number(compact) * multiplier;
+      if (Number.isFinite(count)) {
+        data.totalReviews = rawCount;
+        data.reviewCount = Math.round(count);
+      }
     }
 
    // --- DESCRIPTION ---

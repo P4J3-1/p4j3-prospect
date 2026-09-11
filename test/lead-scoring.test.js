@@ -2,7 +2,14 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { calculateScore, classify, DEFAULT_RULES } = require("../lead-scoring/scoring-engine");
 const { defaultRules, defaultSettings } = require("../lead-scoring/prospecting-store");
-const { fallbackSalesAnalysis, resolveProviderConfig, resolveProviderChain, analyzeBatchWithSalesAI } = require("../lead-scoring/ai-sales-analyzer");
+const {
+  fallbackSalesAnalysis,
+  resolveProviderConfig,
+  resolveProviderChain,
+  analyzeBatchWithSalesAI,
+  extractProviderText,
+  testProviderConnection,
+} = require("../lead-scoring/ai-sales-analyzer");
 const { buildSiteSummary } = require("../lead-scoring/site-summary-builder");
 
 test("website with digital pains ranks higher than no website", () => {
@@ -116,19 +123,37 @@ test("OpenCode provider uses Zen free endpoint by default", () => {
   const config = resolveProviderConfig({
     provider: "opencode",
     apiKey: "zen-key",
-    model: "deepseek-v4-flash-free",
+    model: "deepseek-v4-flash",
   });
   assert.equal(config.provider, "opencode");
   assert.equal(config.chatCompletionsUrl, "https://opencode.ai/zen/v1/chat/completions");
-  assert.equal(config.model, "deepseek-v4-flash-free");
+  assert.equal(config.model, "deepseek-v4-flash");
+  assert.equal(config.apiStyle, "chat-completions");
 });
 
-test("fresh scoring settings use OpenCode Zen as the real default", () => {
+test("OpenCode Muse uses the Responses endpoint required by Zen", () => {
+  const config = resolveProviderConfig({
+    provider: "opencode",
+    apiKey: "zen-key",
+    model: "muse-spark-1.3-contributor-free",
+  });
+  assert.equal(config.apiStyle, "responses");
+  assert.equal(config.endpointUrl, "https://opencode.ai/zen/v1/responses");
+});
+
+test("fresh scoring settings use OpenRouter free as the real default", () => {
   const settings = defaultSettings();
-  assert.equal(settings.ai.provider, "opencode");
-  assert.equal(settings.ai.model, "deepseek-v4-flash-free");
-  assert.equal(settings.ai.baseUrl, "https://opencode.ai/zen/v1");
+  assert.equal(settings.ai.provider, "openrouter");
+  assert.equal(settings.ai.model, "openrouter/free");
+  assert.equal(settings.ai.baseUrl, "https://openrouter.ai/api/v1");
   assert.equal(settings.ai.fallbackProviders, "[]");
+});
+
+test("NVIDIA Build provider resolves its chat completions endpoint", () => {
+  const config = resolveProviderConfig({ provider: "nvidia", apiKey: "nv-key" });
+  assert.equal(config.model, "deepseek-ai/deepseek-v4-flash");
+  assert.equal(config.apiStyle, "chat-completions");
+  assert.equal(config.endpointUrl, "https://integrate.api.nvidia.com/v1/chat/completions");
 });
 
 test("default free providers resolve openrouter and opencode chain", () => {
@@ -142,7 +167,7 @@ test("default free providers resolve openrouter and opencode chain", () => {
         provider: "opencode",
         enabled: true,
         apiKey: "zen-key",
-        model: "deepseek-v4-flash-free",
+        model: "mimo-v2.5-free",
       },
     ]),
   });
@@ -150,6 +175,69 @@ test("default free providers resolve openrouter and opencode chain", () => {
   assert.equal(chain[0].provider, "openrouter");
   assert.equal(chain[1].provider, "opencode");
   assert.match(chain[1].chatCompletionsUrl, /opencode\.ai\/zen/);
+});
+
+test("Responses payload text is extracted from OpenCode output", () => {
+  assert.equal(extractProviderText({
+    output: [{ type: "message", content: [{ type: "output_text", text: '{"leads":[]}' }] }],
+  }), '{"leads":[]}');
+});
+
+test("connection test sends Muse through Responses schema", async () => {
+  const originalFetch = global.fetch;
+  let request = null;
+  global.fetch = async (url, options) => {
+    request = { url, body: JSON.parse(options.body) };
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  try {
+    const result = await testProviderConnection({
+      provider: "opencode",
+      apiKey: "zen-key",
+      model: "muse-spark-1.3-contributor-free",
+      baseUrl: "https://opencode.ai/zen/v1",
+    });
+    assert.equal(result.endpoint, "https://opencode.ai/zen/v1/responses");
+    assert.equal(request.url, result.endpoint);
+    assert.equal(request.body.input, "Responda apenas OK.");
+    assert.equal(request.body.messages, undefined);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("OpenCode free-only rejection becomes an actionable message", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: false,
+    status: 400,
+    text: async () => '{"error":{"type":"MissingSessionID","message":"OpenCode free tier can only be used in OpenCode"}}',
+  });
+  try {
+    await assert.rejects(
+      () => testProviderConnection({ provider: "opencode", apiKey: "zen-key", model: "muse-spark-1.3-contributor-free" }),
+      /só funciona dentro do próprio OpenCode.*glm-5\.3-flash/s,
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("OpenCode billing rejection distinguishes a valid key without payment", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: false,
+    status: 401,
+    text: async () => JSON.stringify({ type: "error", error: { type: "CreditsError", message: "No payment method." } }),
+  });
+  try {
+    await assert.rejects(
+      () => testProviderConnection({ provider: "opencode", apiKey: "zen-key", model: "glm-5.3-flash" }),
+      /chave foi reconhecida.*não tem forma de pagamento/i,
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test("site summary extracts copy, CTA, trust and objection signals", () => {

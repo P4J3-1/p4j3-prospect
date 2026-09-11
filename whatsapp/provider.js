@@ -15,6 +15,7 @@ class WhatsAppProvider {
   getMessages(jid) { return []; }
   async loadMessages(jid, limit) { return []; }
   async markRead(jid) {}
+  async clearHistory() { return { success: false, error: 'Histórico local não disponível neste provedor' }; }
 }
 
 function WhatsAppProviderFactory(type, config, onStatus, onChatEvent, userDataPath) {

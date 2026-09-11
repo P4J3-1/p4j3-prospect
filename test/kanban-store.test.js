@@ -47,6 +47,7 @@ test('pipeline padrão inclui Enviados e move campanhas enviadas/respondidas', (
   assert.deepEqual(initial.board.columns.map((column) => column.id), [
     'new', 'sent', 'contacted', 'qualified', 'proposal', 'won', 'lost',
   ]);
+  assert.equal(initial.board.rules.filter((rule) => rule.enabled).length, 4);
 
   const sent = store.syncCampaigns([{
     id: 'campaign-1',
@@ -59,6 +60,20 @@ test('pipeline padrão inclui Enviados e move campanhas enviadas/respondidas', (
     leads: [{ id: 'lead-1', name: 'Clínica Aurora', phone: '+55 11 95555-1000', status: 'replied' }],
   }]);
   assert.equal(replied.cards[0].columnId, 'contacted');
+}));
+
+test('automação padrão pode ser desligada sem movimento oculto', () => withStore((store) => {
+  const initial = store.getBoard();
+  store.saveConfig({
+    columns: initial.board.columns,
+    rules: initial.board.rules.filter((rule) => rule.trigger !== 'campaign.sent'),
+  }, initial.revision);
+
+  const board = store.syncCampaigns([{
+    id: 'campaign-1',
+    leads: [{ id: 'lead-1', name: 'Clínica Aurora', phone: '+55 11 95555-1000', status: 'sent' }],
+  }]);
+  assert.equal(board.cards[0].columnId, 'new');
 }));
 
 test('reconstrói índice e mescla Maps sem cidade/UF com scoring normalizado', () => {

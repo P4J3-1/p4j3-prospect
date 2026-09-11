@@ -10,14 +10,26 @@ import {
   AlertTriangle,
   Sparkles,
   ExternalLink,
+  Globe,
   ChevronDown,
   ChevronRight,
   Search,
   Users,
+  X,
   Eye,
   EyeOff
 } from 'lucide-react';
 import { dedupeLeads, normalizeLeadCollection, readLocalArray } from '../leadData';
+import {
+  DEFAULT_SCORE_THRESHOLDS,
+  buildScoringIndex,
+  findScoringLead,
+  leadKey,
+  normalizeThresholds,
+  resolveGroupMembers,
+  resolveServiceGroupMembers,
+  scoreBand,
+} from '../leadMatch.mjs';
 
 const AUDITS = {
   sites: { name: 'Venda de Sites', hint: 'Qualidade e ausência de site, mobile, performance, SEO, hero, CTA e conversão.' },
@@ -28,31 +40,43 @@ const AUDITS = {
 };
 
 const PROVIDERS = {
-  opencode: {
-    name: 'OpenCode',
-    base: 'https://opencode.ai/zen/v1',
-    models: ['deepseek-v4-flash-free']
-  },
   openrouter: {
     name: 'OpenRouter',
     base: 'https://openrouter.ai/api/v1',
+    defaultModel: 'openrouter/free',
     models: [
-      'anthropic/claude-3.5-sonnet',
+      'openrouter/free',
       'openai/gpt-4o-mini',
-      'google/gemini-flash-1.5',
-      'meta-llama/llama-3.1-70b'
+      'anthropic/claude-3.5-sonnet',
+      'google/gemini-2.0-flash-001',
     ]
   },
-  custom: { name: 'Custom API', base: '', models: [] }
+  nvidia: {
+    name: 'NVIDIA Build',
+    base: 'https://integrate.api.nvidia.com/v1',
+    defaultModel: 'deepseek-ai/deepseek-v4-flash',
+    models: [
+      'deepseek-ai/deepseek-v4-flash',
+      'meta/llama-3.3-70b-instruct',
+      'nvidia/llama-3.1-nemotron-ultra-253b-v1',
+    ]
+  },
+  opencode: {
+    name: 'OpenCode',
+    base: 'https://opencode.ai/zen/v1',
+    defaultModel: 'glm-5.3-flash',
+    models: ['glm-5.3-flash', 'deepseek-v4-flash', 'minimax-m3', 'muse-spark-1.3']
+  },
+  custom: { name: 'Custom API', base: '', defaultModel: 'gpt-4.1-mini', models: [] }
 };
 
 function defaultAiConfig() {
   return {
-    provider: 'opencode',
-    baseUrl: 'https://opencode.ai/zen/v1',
+    provider: 'openrouter',
+    baseUrl: 'https://openrouter.ai/api/v1',
     key: '',
     hasApiKey: false,
-    model: 'deepseek-v4-flash-free',
+    model: 'openrouter/free',
     preset: 'sites',
     objective: ''
   };
@@ -85,19 +109,74 @@ function saveAiConfig(cfg) {
 
 function toUiAiConfig(settings, current = defaultAiConfig()) {
   const ai = settings?.ai || {};
-  const provider = ai.provider || current.provider || 'opencode';
+  const provider = ai.provider || current.provider || 'openrouter';
   return {
     ...current,
     provider,
     baseUrl: ai.baseUrl || PROVIDERS[provider]?.base || current.baseUrl,
     key: '',
     hasApiKey: Boolean(ai.hasApiKey || (ai.apiKey && ai.apiKey !== '')),
-    model: ai.model || current.model || 'deepseek-v4-flash-free',
+    model: ai.model || current.model || PROVIDERS[provider]?.defaultModel || 'openrouter/free',
   };
 }
 
-function scBand(score) {
-  return score >= 80 ? 'alta' : score >= 50 ? 'media' : 'baixa';
+// Campos que o usuário realmente muda no dia a dia: faixas de prioridade e os
+// pesos que mais mexem no ranking. O resto fica no preset do motor.
+const RULE_FIELDS = [
+  { key: 'highFrom', group: 'thresholds', label: 'Prioridade alta a partir de', hint: 'score que vira “Ligar primeiro”', min: 50, max: 100 },
+  { key: 'goodFrom', group: 'thresholds', label: 'Vale a pena a partir de', hint: 'score que entra na fila boa', min: 20, max: 95 },
+  { key: 'ignoreBelow', group: 'thresholds', label: 'Ignorar abaixo de', hint: 'score que vira “Pular por agora”', min: 0, max: 80 },
+  { key: 'noWebsitePoints', group: 'digitalPain', label: 'Empresa sem site', hint: 'pontos de dor digital', min: 0, max: 40 },
+  { key: 'missingPixelPoints', group: 'digitalPain', label: 'Site sem pixel', hint: 'argumento de venda forte', min: 0, max: 30 },
+  { key: 'notResponsivePoints', group: 'digitalPain', label: 'Site ruim no celular', hint: 'falha cara de vender', min: 0, max: 30 },
+  { key: 'missingHttpsPoints', group: 'digitalPain', label: 'Site sem HTTPS', hint: 'falha de confiança', min: 0, max: 30 },
+  { key: 'missingWhatsappPoints', group: 'digitalPain', label: 'Site sem WhatsApp', hint: 'contato escondido', min: 0, max: 30 },
+];
+
+function rulesDraftFrom(rules) {
+  const source = rules && typeof rules === 'object' ? rules : {};
+  const draft = {};
+  for (const field of RULE_FIELDS) {
+    const raw = source[field.group]?.[field.key];
+    const value = Number(raw);
+    draft[field.key] = Number.isFinite(value) ? value : DEFAULT_RULE_VALUES[field.key];
+  }
+  return draft;
+}
+
+const DEFAULT_RULE_VALUES = Object.freeze({
+  highFrom: DEFAULT_SCORE_THRESHOLDS.highFrom,
+  goodFrom: DEFAULT_SCORE_THRESHOLDS.goodFrom,
+  ignoreBelow: DEFAULT_SCORE_THRESHOLDS.ignoreBelow,
+  noWebsitePoints: 16,
+  missingPixelPoints: 9,
+  notResponsivePoints: 9,
+  missingHttpsPoints: 9,
+  missingWhatsappPoints: 8,
+});
+
+function defaultRulesDraft() {
+  return { ...DEFAULT_RULE_VALUES };
+}
+
+function buildRulesPatch(draft) {
+  const thresholds = {};
+  const digitalPain = {};
+  for (const field of RULE_FIELDS) {
+    const value = Number(draft?.[field.key]);
+    if (!Number.isFinite(value)) continue;
+    const clamped = Math.max(field.min, Math.min(field.max, Math.round(value)));
+    if (field.group === 'thresholds') thresholds[field.key] = clamped;
+    else digitalPain[field.key] = clamped;
+  }
+  return { thresholds, digitalPain };
+}
+
+function sanitizeRulesDraft(draft) {
+  const thresholds = buildRulesPatch(draft).thresholds;
+  const low = Math.min(thresholds.goodFrom ?? 60, thresholds.highFrom ?? 75);
+  const high = Math.max(thresholds.goodFrom ?? 60, thresholds.highFrom ?? 75);
+  return { ...draft, goodFrom: low, highFrom: high, ignoreBelow: Math.min(thresholds.ignoreBelow ?? 40, low) };
 }
 
 function fmtShort(ts) {
@@ -139,7 +218,6 @@ function analysisFromService(savedLead, preset = 'sites') {
   ].filter(Boolean);
   return {
     score,
-    band: scBand(score),
     pos: positive,
     neg: negative.length ? negative : (Array.isArray(savedLead?.score?.reasons) ? savedLead.score.reasons : []),
     opp: opportunities,
@@ -154,7 +232,9 @@ function analysisFromService(savedLead, preset = 'sites') {
 
 export default function LeadScoring({ onUpdateScoringCount, addLog }) {
   const [leads, setLeads] = useState(() => normalizeLeadCollection(readLocalArray('sigma_leads')));
-  const [groups, setGroups] = useState(() => readLocalArray('sigma_groups'));
+  const [localGroups, setLocalGroups] = useState(() => readLocalArray('sigma_groups'));
+  const [serviceGroups, setServiceGroups] = useState([]);
+  const [canonicalLeads, setCanonicalLeads] = useState([]);
 
   // Grupo ativo
   const [selectedGroupId, setSelectedGroupId] = useState(() => {
@@ -165,12 +245,17 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
     return '';
   });
 
-  // Configuração de IA
+  // Configuração de IA + regras do score
   const [aiConfig, setAiConfig] = useState(() => readAiConfig());
+  const [thresholds, setThresholds] = useState(DEFAULT_SCORE_THRESHOLDS);
+  const [rulesDraft, setRulesDraft] = useState(() => defaultRulesDraft());
+  const [autoAnalyze, setAutoAnalyze] = useState(false);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [aiDraft, setAiDraft] = useState(() => readAiConfig());
   const [showKey, setShowKey] = useState(false);
   const [testStatusMsg, setTestStatusMsg] = useState('');
+  const [testStatusOk, setTestStatusOk] = useState(false);
+  const [aiWarning, setAiWarning] = useState('');
 
   const [analysisMap, setAnalysisMap] = useState({});
 
@@ -189,6 +274,16 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
 
   const activeJobRef = useRef(null);
 
+  const loadCanonicalScoring = useCallback(async () => {
+    if (!window.leadScoringAPI?.getAll) return;
+    try {
+      const response = await window.leadScoringAPI.getAll({});
+      if (response?.success) setCanonicalLeads(response.leads || []);
+    } catch {
+      // O estado vazio continua honesto enquanto o serviço não responde.
+    }
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     window.leadScoringAPI?.getSettings?.().then((response) => {
@@ -199,46 +294,45 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
         return next;
       });
       setAiDraft((current) => toUiAiConfig(response.settings, current));
+      setThresholds(normalizeThresholds(response.settings?.rules?.thresholds));
+      setRulesDraft(rulesDraftFrom(response.settings?.rules));
+      setAutoAnalyze(response.settings?.analysis?.autoAnalyzeAfterScrape === true);
     }).catch(() => {});
     return () => { disposed = true; };
   }, []);
 
   useEffect(() => {
     let disposed = false;
-    const loadCanonicalScoring = async () => {
-      if (!window.leadScoringAPI?.getAll) return;
+    const loadGroups = async () => {
       try {
-        const [analysisResponse, groupsResponse] = await Promise.all([
-          window.leadScoringAPI.getAll({}),
-          window.leadScoringAPI.listGroups?.() || Promise.resolve(null),
-        ]);
+        const groupsResponse = await window.leadScoringAPI?.listGroups?.();
         if (disposed) return;
-        if (analysisResponse?.success) {
-          const next = {};
-          for (const savedLead of analysisResponse.leads || []) {
-            if (savedLead?.id) next[savedLead.id] = analysisFromService(savedLead);
-          }
-          setAnalysisMap(next);
-        }
-        if (groupsResponse?.success && Array.isArray(groupsResponse.groups) && groupsResponse.groups.length) {
-          setGroups(groupsResponse.groups.map((group) => ({
-            ...group,
-            members: Array.isArray(group.members) ? group.members : (group.leadIds || []),
-          })));
-        }
+        if (groupsResponse?.success && Array.isArray(groupsResponse.groups)) setServiceGroups(groupsResponse.groups);
       } catch {
-        // The empty state remains truthful until the canonical store is available.
+        // grupos da Base continuam valendo mesmo se o serviço não responder
       }
     };
     loadCanonicalScoring();
+    loadGroups();
     return () => { disposed = true; };
-  }, []);
+  }, [loadCanonicalScoring]);
+
+  // Mapeia cada resultado persistido para o lead correspondente da base.
+  useEffect(() => {
+    const index = buildScoringIndex(canonicalLeads);
+    const next = {};
+    leads.forEach((lead, position) => {
+      const saved = findScoringLead(index, lead, position);
+      if (saved) next[leadKey(lead, position)] = analysisFromService(saved, aiConfig.preset);
+    });
+    setAnalysisMap(next);
+  }, [leads, canonicalLeads, aiConfig.preset]);
 
   // Sincronizar dados do localStorage
   useEffect(() => {
     const refreshData = () => {
       setLeads(normalizeLeadCollection(readLocalArray('sigma_leads')));
-      setGroups(readLocalArray('sigma_groups'));
+      setLocalGroups(readLocalArray('sigma_groups'));
     };
     window.addEventListener('storage', refreshData);
     window.addEventListener('sigma:leads-updated', refreshData);
@@ -256,24 +350,42 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
     onUpdateScoringCount?.(scoredCount);
   }, [analysisMap, onUpdateScoringCount]);
 
+  // Grupos da Base de Leads + grupos criados pelo próprio scoring, já resolvidos
+  // para leads reais. Nada aparece com contagem inventada.
+  const groups = useMemo(() => {
+    const positionByLead = new Map(leads.map((lead, position) => [lead, position]));
+    const scoringIndex = buildScoringIndex(canonicalLeads);
+    const resolved = new Map();
+    for (const group of localGroups) {
+      const members = resolveGroupMembers(group, leads);
+      resolved.set(String(group.id), {
+        ...group,
+        source: 'base',
+        resolved: members,
+        members: members.map((lead) => leadKey(lead, positionByLead.get(lead) ?? 0)),
+      });
+    }
+    for (const group of serviceGroups) {
+      if (resolved.has(String(group.id))) continue;
+      resolved.set(String(group.id), {
+        ...group,
+        source: 'scoring',
+        resolved: resolveServiceGroupMembers(group, leads, scoringIndex),
+      });
+    }
+    return [...resolved.values()];
+  }, [localGroups, serviceGroups, leads, canonicalLeads]);
+
   // Objeto do grupo ativo
   const currentGroup = useMemo(() => {
-    return groups.find((g) => g.id === selectedGroupId) || null;
+    return groups.find((g) => String(g.id) === String(selectedGroupId)) || null;
   }, [groups, selectedGroupId]);
 
   // Lista de leads do grupo ativo
-  const groupLeads = useMemo(() => {
-    if (!currentGroup) return [];
-    const members = currentGroup.members || currentGroup.leadIds || [];
-    if (!members.length) return [];
-    const filtered = leads.filter((l, idx) =>
-      members.includes(l.id) ||
-      members.includes(idx) ||
-      members.includes(String(idx)) ||
-      members.includes(String(l.id))
-    );
-    return filtered;
-  }, [currentGroup, leads]);
+  const groupLeads = useMemo(() => currentGroup?.resolved || [], [currentGroup]);
+  const groupLeadsRef = useRef([]);
+  useEffect(() => { groupLeadsRef.current = groupLeads; }, [groupLeads]);
+  const basePositions = useMemo(() => new Map(leads.map((lead, position) => [lead, position])), [leads]);
 
   // Salvar grupo selecionado
   const handleSelectGroup = (id) => {
@@ -292,7 +404,7 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
     setIsAiModalOpen(true);
   };
 
-  // Salvar modal de IA
+  // Salvar modal de IA + regras do score
   const handleSaveAiModal = async () => {
     const ai = {
       enabled: Boolean(aiDraft.key || aiDraft.hasApiKey),
@@ -301,8 +413,16 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
       model: aiDraft.model,
       baseUrl: aiDraft.baseUrl,
     };
+    const sanitizedRules = sanitizeRulesDraft(rulesDraft);
+    const rules = buildRulesPatch(sanitizedRules);
+    setRulesDraft(sanitizedRules);
+    setThresholds(normalizeThresholds(rules.thresholds));
     if (window.leadScoringAPI?.updateSettings) {
-      const response = await window.leadScoringAPI.updateSettings({ ai });
+      const response = await window.leadScoringAPI.updateSettings({
+        ai,
+        rules,
+        analysis: { autoAnalyzeAfterScrape: autoAnalyze },
+      });
       if (!response?.success) {
         setTestStatusMsg(response?.error || 'Não foi possível salvar a configuração.');
         return;
@@ -311,7 +431,11 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
       setAiConfig(next);
       setAiDraft(next);
       saveAiConfig(next);
+      setThresholds(normalizeThresholds(response.settings?.rules?.thresholds));
+      setRulesDraft(rulesDraftFrom(response.settings?.rules));
+      setAutoAnalyze(response.settings?.analysis?.autoAnalyzeAfterScrape === true);
       setIsAiModalOpen(false);
+      addLog?.('[SCORING] Configuração de análise atualizada.');
       return;
     }
     const next = { ...aiDraft, key: '' };
@@ -323,6 +447,7 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
   // Testa a rota do provedor de verdade; não aceita validação apenas visual.
   const handleTestAi = async () => {
     setTestStatusMsg('Testando conexão…');
+    setTestStatusOk(false);
     if (!window.leadScoringAPI?.testConnection) {
       setTestStatusMsg('Teste real indisponível nesta versão do aplicativo.');
       return;
@@ -335,6 +460,7 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
         baseUrl: aiDraft.baseUrl,
       });
       if (!response?.success) throw new Error(response?.error || 'A conexão foi recusada.');
+      setTestStatusOk(true);
       setTestStatusMsg(`Conexão confirmada: ${response.provider} · ${response.model}.`);
     } catch (error) {
       setTestStatusMsg(error?.message || 'Não foi possível testar a conexão.');
@@ -357,7 +483,10 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
       setProgressText('Cancelamento solicitado. Resultados já salvos foram preservados.');
       return;
     }
-    if (!groupLeads.length) return;
+    if (!groupLeads.length) {
+      setProgressText('Este grupo não tem leads na base atual. Confira os membros em Base de Leads.');
+      return;
+    }
     if (!window.leadScoringAPI?.analyzeBatch) {
       setProgressText('Serviço de scoring indisponível. Nenhuma análise foi simulada.');
       return;
@@ -376,26 +505,30 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
       const response = await window.leadScoringAPI.analyzeBatch(groupLeads, { jobId });
       if (!response?.success) throw new Error(response?.error || 'A análise em lote falhou.');
 
+      const savedLeads = (response.results || []).filter((row) => row?.success && row.lead).map((row) => row.lead);
+      const savedIndex = buildScoringIndex(savedLeads);
       const nextStates = { ...initialStates };
       const nextAnalyses = {};
-      for (const row of response.results || []) {
-        const savedLead = row?.lead;
-        const matchingLead = groupLeads.find((lead) => String(lead.id) === String(savedLead?.id));
-        const uiLeadId = matchingLead?.id || savedLead?.id;
-        if (row?.success && uiLeadId && savedLead) {
-          const analysis = analysisFromService(savedLead, aiConfig.preset);
-          nextAnalyses[uiLeadId] = analysis;
-          nextStates[uiLeadId] = analysis.noSite ? 'nosite' : 'done';
-        } else if (uiLeadId) {
-          nextStates[uiLeadId] = 'fail';
+      groupLeads.forEach((lead, position) => {
+        const saved = findScoringLead(savedIndex, lead, basePositions.get(lead) ?? position);
+        if (!saved) {
+          nextStates[lead.id] = 'fail';
+          return;
         }
-      }
+        const analysis = analysisFromService(saved, aiConfig.preset);
+        nextAnalyses[lead.id] = analysis;
+        nextStates[lead.id] = analysis.noSite ? 'nosite' : 'done';
+      });
       setAnalysisMap((previous) => ({ ...previous, ...nextAnalyses }));
       setRunStates(nextStates);
       const completed = Object.values(nextStates).filter((state) => state === 'done' || state === 'nosite').length;
       setProgressCount({ current: completed, total });
       setProgressText(response.failures ? `Concluída com ${response.failures} falha(s).` : 'Análise concluída.');
+      // A IA pode falhar e o lote continuar com as regras locais. Isso precisa
+      // aparecer: antes o usuário via "concluído" sem saber que a IA caiu.
+      setAiWarning(response.aiWarning || '');
       addLog?.(`[SCORING] ${completed}/${total} análises persistidas no serviço.`);
+      await loadCanonicalScoring();
     } catch (error) {
       setRunStates((previous) => Object.fromEntries(groupLeads.map((lead) => [lead.id, previous[lead.id] === 'done' ? 'done' : 'fail'])));
       setProgressText(error?.message || 'Não foi possível concluir a análise.');
@@ -424,8 +557,29 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
   useEffect(() => {
     if (!window.leadScoringAPI?.onProgress) return undefined;
     return window.leadScoringAPI.onProgress((payload) => {
-      if (!payload || (activeJobRef.current && payload.jobId !== activeJobRef.current)) return;
-      const uiLeadId = payload.leadId || payload.lead?.id;
+      if (!payload) return;
+      const external = ['auto-started', 'auto-completed', 'auto-failed'].includes(payload.event);
+      if (!external && activeJobRef.current && payload.jobId !== activeJobRef.current) return;
+      if (payload.event === 'auto-started') {
+        setProgressText(payload.message || 'Analisando leads extraídos automaticamente…');
+        setProgressCount({ current: 0, total: Number(payload.total) || 0 });
+        return;
+      }
+      if (payload.event === 'auto-completed') {
+        setProgressText(payload.message || 'Scoring automático concluído.');
+        loadCanonicalScoring();
+        return;
+      }
+      if (payload.event === 'auto-failed') {
+        setProgressText(payload.message || 'Scoring automático falhou.');
+        return;
+      }
+      // O id do serviço não é o id da base: reencontra o lead pela identidade.
+      const savedIndex = payload.lead ? buildScoringIndex([payload.lead]) : null;
+      const matched = savedIndex
+        ? groupLeadsRef.current.find((lead, position) => findScoringLead(savedIndex, lead, position))
+        : null;
+      const uiLeadId = matched?.id || (savedIndex ? '' : payload.leadId || payload.lead?.id);
       if (payload.event === 'started' && uiLeadId) {
         setRunStates((previous) => ({ ...previous, [uiLeadId]: 'run' }));
       } else if (payload.event === 'saved' && payload.lead && uiLeadId) {
@@ -440,7 +594,7 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
       }
       if (payload.message) setProgressText(payload.message);
     });
-  }, [aiConfig.preset]);
+  }, [aiConfig.preset, loadCanonicalScoring]);
 
   // Alternar seleção de linha
   const toggleRowSelect = (id) => {
@@ -501,7 +655,7 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                 <option value="">Escolher grupo…</option>
                 {groups.map((g) => (
                   <option key={g.id} value={g.id}>
-                    {g.name} ({g.members ? g.members.length : 0})
+                    {g.name} ({(g.resolved || []).length})
                   </option>
                 ))}
               </select>
@@ -515,6 +669,7 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                   className="btn btn-primary"
                   onClick={() => {
                     window.location.hash = '#base';
+                    window.dispatchEvent(new CustomEvent('sigma:open-groups'));
                   }}
                 >
                   Criar grupo na Base de Leads
@@ -550,6 +705,9 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
               <div className="lb">2 · IA e análise</div>
               <div className="sc-cfg" id="scCfgLine">
                 IA: {currentProviderName} · {aiConfig.model || 'modelo padrão'} · {currentPresetName}
+                <br />
+                Faixas: alta ≥ {thresholds.highFrom} · boa ≥ {thresholds.goodFrom} · ignorar &lt; {thresholds.ignoreBelow}
+                {autoAnalyze ? ' · análise automática ligada' : ''}
               </div>
               <button
                 type="button"
@@ -576,11 +734,23 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                 <span className="result-count" id="scRunN">
                   {isRunning
                     ? `${progressCount.current}/${progressCount.total}`
-                    : `${groupLeads.length} leads serão analisados.`}
+                    : groupLeads.length
+                      ? `${groupLeads.length} leads serão analisados.`
+                      : 'Este grupo não tem leads na base atual.'}
                 </span>
               </div>
             </div>
           </div>
+
+          {aiWarning ? (
+            <div className="kanban-feedback error" role="alert" id="scAiWarning">
+              <AlertTriangle size={15} />
+              <span>
+                A IA não respondeu ({aiWarning}). Os scores e mensagens saíram das regras locais — confira o provedor em Configurar.
+              </span>
+              <button type="button" aria-label="Fechar aviso" onClick={() => setAiWarning('')}><X size={14} /></button>
+            </div>
+          ) : null}
 
           {/* Painel de Progresso (#scProgPanel) */}
           {(isRunning || progressCount.current > 0) && (
@@ -687,12 +857,27 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                   </tr>
                 </thead>
                 <tbody id="scResBody">
+                  {groupLeads.length === 0 ? (
+                    <tr>
+                      <td colSpan={8}>
+                        <div className="empty">
+                          <div className="e-icon">○</div>
+                          <b style={{ color: 'var(--fg)' }}>Nenhum lead deste grupo está na base atual</b>
+                          <span>
+                            {currentGroup.source === 'scoring'
+                              ? 'Este grupo foi criado pelo scoring e os leads não existem mais na base.'
+                              : 'Os membros do grupo não batem com os leads da Base de Leads. Recrie o grupo na Base para voltar a analisar.'}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
                   {groupLeads.map((lead) => {
                     const an = analysisMap[lead.id];
                     const isRowChecked = selectedRowIds.has(lead.id);
 
                     const score = an ? an.score : null;
-                    const band = score != null ? (score >= 80 ? ['high', 'Alta'] : score >= 50 ? ['mid', 'Média'] : ['low', 'Baixa']) : null;
+                    const band = score != null ? scoreBand(score, thresholds) : null;
 
                     const sit = an ? (an.noSite ? ['Sem site', 'st-nosite'] : ['Concluído', 'st-ok']) : ['Não analisado', 'st-wait'];
 
@@ -719,8 +904,8 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                           {an ? (
                             <span style={{ display: 'inline-flex', alignItems: 'center' }}>
                               <b style={{ fontVariantNumeric: 'tabular-nums' }}>{score}</b>
-                              <span className={`ftag ${band[0]}`} style={{ marginLeft: 6 }}>
-                                {band[1]}
+                              <span className={`ftag ${band.key}`} style={{ marginLeft: 6 }}>
+                                {band.label}
                               </span>
                             </span>
                           ) : (
@@ -729,14 +914,9 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                         </td>
                         <td style={{ fontSize: 12.5 }}>
                           {lead.website ? (
-                            <a
-                              href={lead.website}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ color: 'var(--accent)', textDecoration: 'none' }}
-                            >
-                              {lead.website.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}
-                            </a>
+                            <button type="button" className="site-icon-btn" title={lead.website} aria-label={`Abrir site ${lead.website}`} onClick={() => window.electronAPI?.openSite?.(lead.website)}>
+                              <Globe size={15} />
+                            </button>
                           ) : (
                             'Sem site'
                           )}
@@ -800,7 +980,11 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                         setAiDraft((prev) => ({
                           ...prev,
                           provider: k,
-                          baseUrl: k !== 'custom' && p.base ? p.base : prev.baseUrl
+                          baseUrl: k !== 'custom' && p.base ? p.base : prev.baseUrl,
+                          model: p.defaultModel || prev.model,
+                          // Nunca envia uma chave de outro provedor por acidente.
+                          key: '',
+                          hasApiKey: false,
                         }));
                       }}
                     >
@@ -863,16 +1047,28 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                     <option key={m} value={m} />
                   ))}
                 </datalist>
+                {aiDraft.provider === 'opencode' ? (
+                  <small className={`sc-provider-route ${/-free$/i.test(aiDraft.model || '') ? 'warn' : ''}`}>
+                    {/-free$/i.test(aiDraft.model || '')
+                      ? 'Modelos “-free” do Zen são recusados fora do próprio OpenCode. Escolha um modelo com créditos ou use OpenRouter.'
+                      : `Usa créditos do Zen. A rota correta é escolhida automaticamente (${/^muse-|^gpt-|^grok-/i.test(aiDraft.model || '') ? '/responses' : '/chat/completions'}).`}
+                  </small>
+                ) : null}
+                {aiDraft.provider === 'nvidia' ? <small className="sc-provider-route">NVIDIA Build usa a API compatível com OpenAI em integrate.api.nvidia.com.</small> : null}
+                {aiDraft.provider === 'openrouter' ? <small className="sc-provider-route">OpenRouter/free escolhe automaticamente um modelo gratuito disponível.</small> : null}
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <button type="button" className="btn btn-sm" id="aiTest" onClick={handleTestAi}>
                   Testar conexão
                 </button>
-                <span className="result-count" id="aiTestMsg" role="status">
-                  {testStatusMsg}
-                </span>
               </div>
+              {testStatusMsg ? (
+                <p className={`sc-test-status ${testStatusOk ? 'ok' : 'warn'}`} role="status" id="aiTestMsg">
+                  {testStatusOk ? <CheckCircle size={13} /> : <AlertTriangle size={13} />}
+                  <span>{testStatusMsg}</span>
+                </p>
+              ) : null}
 
               <div className="exp-sec">Foco da auditoria — o que procurar</div>
               <div id="auditPresets" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -907,6 +1103,45 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                   />
                 </div>
               )}
+
+              <div className="exp-sec">Regras do score — como o lead é priorizado</div>
+              <div className="sc-rules-grid" id="scRules">
+                {RULE_FIELDS.map((field) => (
+                  <label key={field.key} className="sc-rule-field">
+                    <span>{field.label}</span>
+                    <input
+                      type="number"
+                      min={field.min}
+                      max={field.max}
+                      value={rulesDraft[field.key] ?? ''}
+                      onChange={(e) => setRulesDraft((previous) => ({ ...previous, [field.key]: e.target.value === '' ? '' : Number(e.target.value) }))}
+                    />
+                    <small>{field.hint}</small>
+                  </label>
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setRulesDraft(defaultRulesDraft())}
+                >
+                  Restaurar padrão
+                </button>
+                <span className="result-count">Vale para a próxima análise e para o Kanban.</span>
+              </div>
+
+              <label className="sc-toggle">
+                <input
+                  type="checkbox"
+                  checked={autoAnalyze}
+                  onChange={(e) => setAutoAnalyze(e.target.checked)}
+                />
+                <span>
+                  <b>Analisar automaticamente após cada extração</b>
+                  <small>Cada busca no Maps já sai com score calculado, sem clique extra.</small>
+                </span>
+              </label>
             </div>
 
             <div className="modal-foot">
@@ -947,49 +1182,52 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
 
             <div className="modal-body" style={{ gridTemplateColumns: '1fr', gap: 12 }}>
               {analysisMap[detailLead.id] ? (
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
-                    <span style={{ fontFamily: 'var(--font-display)', fontSize: 42, fontWeight: 700, lineHeight: 1 }}>
-                      {analysisMap[detailLead.id].score}
-                    </span>
-                    <span className={`ftag ${analysisMap[detailLead.id].score >= 80 ? 'high' : analysisMap[detailLead.id].score >= 50 ? 'mid' : 'low'}`}>
-                      {analysisMap[detailLead.id].score >= 80 ? 'Alta' : analysisMap[detailLead.id].score >= 50 ? 'Média' : 'Baixa'}
-                    </span>
-                  </div>
-
-                  <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-                    {AUDITS[analysisMap[detailLead.id].preset]?.name || analysisMap[detailLead.id].preset} · {fmtShort(analysisMap[detailLead.id].ts)} · {analysisMap[detailLead.id].provider}
-                  </div>
-
-                  {/* Accordions */}
-                  {[
-                    { t: `Pontos positivos (${analysisMap[detailLead.id].pos.length})`, items: analysisMap[detailLead.id].pos },
-                    { t: `Problemas encontrados (${analysisMap[detailLead.id].neg.length})`, items: analysisMap[detailLead.id].neg },
-                    { t: `Oportunidades (${analysisMap[detailLead.id].opp.length})`, items: analysisMap[detailLead.id].opp },
-                    ...(analysisMap[detailLead.id].sections || [])
-                  ].map((sec, idx) => {
-                    const isOpen = Boolean(openAccSections[sec.t]);
-                    return (
-                      <div key={idx} className={`acc ${isOpen ? 'open' : ''}`}>
-                        <button
-                          type="button"
-                          className="acc-head"
-                          onClick={() => toggleAcc(sec.t)}
-                        >
-                          <span>{sec.t}</span>
-                          <span className="chev">›</span>
-                        </button>
-                        <div className="acc-body">
-                          <ul>
-                            {sec.items.map((it, i) => (
-                              <li key={i}>{it}</li>
-                            ))}
-                          </ul>
-                        </div>
+                (() => {
+                  const detail = analysisMap[detailLead.id];
+                  const detailBand = scoreBand(detail.score, thresholds);
+                  return (
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
+                        <span style={{ fontFamily: 'var(--font-display)', fontSize: 42, fontWeight: 700, lineHeight: 1 }}>
+                          {detail.score}
+                        </span>
+                        <span className={`ftag ${detailBand.key}`}>{detailBand.label}</span>
                       </div>
-                    );
-                  })}
-                </div>
+
+                      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+                        {AUDITS[detail.preset]?.name || detail.preset} · {fmtShort(detail.ts)} · {detail.provider}
+                      </div>
+
+                      {[
+                        { t: `Pontos positivos (${detail.pos.length})`, items: detail.pos },
+                        { t: `Problemas encontrados (${detail.neg.length})`, items: detail.neg },
+                        { t: `Oportunidades (${detail.opp.length})`, items: detail.opp },
+                        ...(detail.sections || [])
+                      ].map((sec, idx) => {
+                        const isOpen = Boolean(openAccSections[sec.t]);
+                        return (
+                          <div key={idx} className={`acc ${isOpen ? 'open' : ''}`}>
+                            <button
+                              type="button"
+                              className="acc-head"
+                              onClick={() => toggleAcc(sec.t)}
+                            >
+                              <span>{sec.t}</span>
+                              <span className="chev">›</span>
+                            </button>
+                            <div className="acc-body">
+                              <ul>
+                                {sec.items.map((it, i) => (
+                                  <li key={i}>{it}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()
               ) : (
                 <div className="empty">
                   <div className="e-icon">○</div>

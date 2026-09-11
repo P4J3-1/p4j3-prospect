@@ -1,12 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Bell,
+  Clock3,
   Globe,
+  DollarSign,
   Instagram,
   Mail,
   MessageCircle,
   Percent,
   Phone,
   Send,
+  Trophy,
   Users,
 } from 'lucide-react';
 import {
@@ -95,13 +99,61 @@ function getCampaignCategoryMetrics(campaigns) {
   return byCategory;
 }
 
-function Overview({ onNewExtraction, leadsCount = 0 }) {
+function money(value) {
+  return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function shortDate(value) {
+  const date = new Date(Number(value) || value || NaN);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+    : '—';
+}
+
+const UF_CODES = new Set('AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO'.split(' '));
+
+function compactExtractionLabel(search) {
+  const raw = String(search?.label || search?.query || '').trim();
+  const uf = String(search?.uf || raw.match(/(?:^|[\s,·-])(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)(?:$|[\s,·-])/i)?.[1] || '').toUpperCase();
+  const niche = String(search?.niche || raw.split(/[·|]/)[0] || 'Extração').trim();
+  return { label: `${niche || 'Extração'}${UF_CODES.has(uf) ? ` · ${uf}` : ''}`, niche: niche || 'Extração', uf };
+}
+
+function Overview({ onNavigate, onNewExtraction, leadsCount = 0 }) {
   const [categoryView, setCategoryView] = useState(() => localStorage.getItem('sigma_overview_category_view') || 'bars');
   const [searchView, setSearchView] = useState(() => localStorage.getItem('sigma_overview_search_view') || 'bars');
+  const [recentFilter, setRecentFilter] = useState('all');
   const [selectedMetrics, setSelectedMetrics] = useState(['leads']);
   const [expandedOther, setExpandedOther] = useState(false);
   const [selectedCategories, setSelectedCategories] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
+  const [kanbanSnapshot, setKanbanSnapshot] = useState({ cards: [], stats: { wonValue: 0, wonCount: 0, ticketAverage: 0, openValue: 0, reminderCount: 0 } });
+  const [pendingMenuOpen, setPendingMenuOpen] = useState(false);
+  const [standaloneReminders, setStandaloneReminders] = useState(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('sigma_whatsapp_reminders') || '[]');
+      return Array.isArray(raw) ? raw : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    const refreshStandaloneReminders = () => {
+      try {
+        const raw = JSON.parse(localStorage.getItem('sigma_whatsapp_reminders') || '[]');
+        setStandaloneReminders(Array.isArray(raw) ? raw : []);
+      } catch {
+        setStandaloneReminders([]);
+      }
+    };
+    window.addEventListener('sigma:reminders-updated', refreshStandaloneReminders);
+    window.addEventListener('storage', refreshStandaloneReminders);
+    return () => {
+      window.removeEventListener('sigma:reminders-updated', refreshStandaloneReminders);
+      window.removeEventListener('storage', refreshStandaloneReminders);
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -114,6 +166,70 @@ function Overview({ onNewExtraction, leadsCount = 0 }) {
       });
     return () => { mounted = false; };
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadDealStats = async () => {
+      if (!window.kanbanAPI?.getBoard) return;
+      try {
+        const mapsLeads = normalizeLeadCollection(readLocalArray('sigma_leads'));
+        const synced = await window.kanbanAPI.syncMapsLeads?.(mapsLeads);
+        const response = await window.kanbanAPI.getBoard();
+        const snapshot = response?.board || synced?.board;
+        if (mounted && snapshot) setKanbanSnapshot(snapshot);
+      } catch {
+        if (mounted) setKanbanSnapshot({ cards: [], stats: { wonValue: 0, wonCount: 0, ticketAverage: 0, openValue: 0, reminderCount: 0 } });
+      }
+    };
+    const refresh = () => loadDealStats();
+    loadDealStats();
+    window.addEventListener('sigma:deal-updated', refresh);
+    window.addEventListener('sigma:leads-updated', refresh);
+    return () => {
+      mounted = false;
+      window.removeEventListener('sigma:deal-updated', refresh);
+      window.removeEventListener('sigma:leads-updated', refresh);
+    };
+  }, [leadsCount]);
+
+  const dealStats = kanbanSnapshot.stats || {};
+  const pendingDeals = useMemo(() => {
+    const kanbanPending = (kanbanSnapshot.cards || [])
+      .filter((card) => card.dealStatus !== 'won' && card.dealStatus !== 'lost' && (Number(card.dealValue) > 0 || card.reminderAt));
+    const standalonePending = standaloneReminders.map((item) => ({
+      ...item,
+      standalone: true,
+      entityKey: `standalone:${item.id || item.key || item.jid || item.phone}`,
+      entity: { profile: { name: item.name || item.phone || 'Contato', phone: item.phone || item.key || '' } },
+      dealStatus: 'open',
+      dealValue: 0,
+      reminderNote: item.note || '',
+    }));
+    return [...kanbanPending, ...standalonePending]
+    .sort((a, b) => {
+      const aReminder = Number(a.reminderAt) || Number.MAX_SAFE_INTEGER;
+      const bReminder = Number(b.reminderAt) || Number.MAX_SAFE_INTEGER;
+      return aReminder - bReminder || Number(b.repliedAt || 0) - Number(a.repliedAt || 0);
+    })
+    .slice(0, 6);
+  }, [kanbanSnapshot.cards, standaloneReminders]);
+
+  const reminderTotal = Number(dealStats.reminderCount || 0) + standaloneReminders.length;
+
+  const openPendingDeal = (card) => {
+    const profile = card?.entity?.profile || {};
+    const name = profile.name || card?.entity?.name || 'Lead';
+    const tel = profile.phone || profile.whatsapp || profile.tel || card?.entity?.phone || '';
+    if (tel) {
+      try {
+        localStorage.setItem('sigma_wa_pending', JSON.stringify({ name, tel, direct: true }));
+      } catch { /* best effort */ }
+      onNavigate?.('whatsapp');
+    } else {
+      onNavigate?.('kanban');
+    }
+    setPendingMenuOpen(false);
+  };
 
   useEffect(() => {
     try { localStorage.setItem('sigma_overview_category_view', categoryView); } catch {}
@@ -144,11 +260,19 @@ function Overview({ onNewExtraction, leadsCount = 0 }) {
       }))
       .sort((a, b) => b.leads - a.leads || a.name.localeCompare(b.name, 'pt-BR'));
 
-    const recent = searches.slice(0, 7).map((search) => ({
-      ...search,
-      label: String(search.label || search.query || 'Extração sem nome').trim(),
-      count: getSearchLeadCount(leads, search.id),
-    }));
+    const recent = searches.slice(0, 7).map((search) => {
+      const extractionLeads = leads.filter((lead) => String(lead?.searchId ?? '') === String(search.id ?? ''));
+      const compact = compactExtractionLabel(search);
+      const count = extractionLeads.length || getSearchLeadCount(leads, search.id) || Number(search?.leadCount || search?.count || 0);
+      return {
+        ...search,
+        ...compact,
+        count,
+        withSite: extractionLeads.filter((lead) => lead?.website || lead?.site).length,
+        withPhone: extractionLeads.filter((lead) => lead?.phone || lead?.tel || lead?.whatsapp).length,
+        withEmail: extractionLeads.filter((lead) => lead?.email || lead?.mail).length,
+      };
+    });
 
     return {
       total: stats.total || Number(leadsCount || 0),
@@ -176,7 +300,13 @@ function Overview({ onNewExtraction, leadsCount = 0 }) {
     Math.max(...displayedCategories.map((category) => metricValue(category, id)), 1),
   ])), [displayedCategories, selectedMetrics]);
 
-  const maxSearch = Math.max(...data.recent.map((item) => item.count), 1);
+  const filteredRecent = useMemo(() => data.recent
+    .map((item) => ({
+      ...item,
+      visibleCount: recentFilter === 'site' ? item.withSite : recentFilter === 'phone' ? item.withPhone : recentFilter === 'email' ? item.withEmail : item.count,
+    }))
+    .filter((item) => item.visibleCount > 0), [data.recent, recentFilter]);
+  const maxSearch = Math.max(...filteredRecent.map((item) => item.visibleCount), 1);
 
   const toggleMetric = (id) => {
     setSelectedMetrics((current) => {
@@ -295,11 +425,37 @@ function Overview({ onNewExtraction, leadsCount = 0 }) {
         <div className="hero-cta">
           <button type="button" className="btn btn-primary overview-new-button" onClick={onNewExtraction}>+ Nova Extração</button>
         </div>
-        <div className="overview-coverage hero-contacts" data-od-id="coverage">
-          <span className="hc" title="Com telefone" aria-label={`${data.phone} com telefone`}><Phone /><b>{data.phone}</b></span>
-          <span className="hc" title="Com site" aria-label={`${data.web} com site`}><Globe /><b>{data.web}</b></span>
-          <span className="hc" title="Com Instagram" aria-label={`${data.instagram} com Instagram`}><Instagram /><b>{data.instagram}</b></span>
-          <span className="hc" title="Com e-mail" aria-label={`${data.email} com e-mail`}><Mail /><b>{data.email}</b></span>
+        <div className="overview-hero-bottom">
+          <div className="overview-coverage hero-contacts" data-od-id="coverage">
+            <span className="hc" title="Com telefone" aria-label={`${data.phone} com telefone`}><Phone /><b>{data.phone}</b></span>
+            <span className="hc" title="Com site" aria-label={`${data.web} com site`}><Globe /><b>{data.web}</b></span>
+            <span className="hc" title="Com Instagram" aria-label={`${data.instagram} com Instagram`}><Instagram /><b>{data.instagram}</b></span>
+            <span className="hc" title="Com e-mail" aria-label={`${data.email} com e-mail`}><Mail /><b>{data.email}</b></span>
+          </div>
+          <div className="overview-crm-tools">
+            <div className="overview-crm-metrics" aria-label="Resumo comercial">
+              <span className="overview-crm-metric" title="Receita ganha" aria-label={`Receita ganha: ${money(dealStats.wonValue)}`}><DollarSign size={15} /><b>{money(dealStats.wonValue)}</b></span>
+              <span className="overview-crm-metric" title="Valor pendente" aria-label={`Valor pendente: ${money(dealStats.openValue)}`}><Clock3 size={15} /><b>{money(dealStats.openValue)}</b></span>
+              <span className="overview-crm-metric" title="Vendas fechadas" aria-label={`Vendas fechadas: ${dealStats.wonCount || 0}`}><Trophy size={15} /><b>{Number(dealStats.wonCount || 0).toLocaleString('pt-BR')}</b></span>
+              <button type="button" className={`overview-crm-metric overview-crm-reminder ${pendingMenuOpen ? 'active' : ''}`} title="Abrir pendências" aria-label={`Lembretes: ${reminderTotal}`} aria-expanded={pendingMenuOpen} onClick={() => setPendingMenuOpen((open) => !open)}><Bell size={15} /><b>{reminderTotal.toLocaleString('pt-BR')}</b></button>
+            </div>
+            {pendingMenuOpen && (
+              <div className="overview-pending-popover" role="dialog" aria-label="Pendências comerciais">
+                <div className="overview-pending-popover-head"><span>Pendências</span><button type="button" aria-label="Fechar pendências" onClick={() => setPendingMenuOpen(false)}>×</button></div>
+                {pendingDeals.length ? pendingDeals.map((card) => {
+                  const profile = card.entity?.profile || {};
+                  const due = card.reminderAt && Number(card.reminderAt) <= Date.now();
+                  return (
+                    <button type="button" className="overview-pending-popover-item" key={card.entityKey} onClick={() => openPendingDeal(card)}>
+                      <span className="overview-pending-popover-icon"><Bell size={14} /></span>
+                      <span className="overview-pending-popover-copy"><b>{profile.name || 'Lead sem nome'}</b><small>{card.reminderNote || (due ? 'Lembrete vencido' : 'Lembrete')}</small></span>
+                      <span className="overview-pending-popover-value">{Number(card.dealValue) > 0 ? money(card.dealValue) : '—'}</span>
+                    </button>
+                  );
+                }) : <span className="overview-pending-empty">Nenhuma pendência</span>}
+              </div>
+            )}
+          </div>
         </div>
       </section>
 
@@ -338,20 +494,30 @@ function Overview({ onNewExtraction, leadsCount = 0 }) {
         </section>
 
         <section className="overview-panel panel" data-od-id="dashboard-recent">
-          <div className="overview-panel-head panel-head">
-            <h3>Últimas extrações</h3>
+          <div className="overview-panel-head panel-head overview-recent-head">
+            <div><h3>Últimas extrações</h3><span className="overview-recent-subtitle">Nicho · UF</span></div>
             <div className="overview-segment seg" aria-label="Visualização de extrações">
               <button type="button" aria-pressed={searchView === 'bars'} onClick={() => setSearchView('bars')} title="Barras"><BarsIcon /></button>
               <button type="button" aria-pressed={searchView === 'table'} onClick={() => setSearchView('table')} title="Tabela"><TableIcon /></button>
             </div>
           </div>
-          {data.recent.length ? (
+          <div className="overview-recent-filters" role="group" aria-label="Filtrar leads das extrações">
+            {[
+              ['all', 'Todos', ListIcon],
+              ['site', 'Com site', Globe],
+              ['phone', 'Com telefone', Phone],
+              ['email', 'Com e-mail', Mail],
+            ].map(([id, label, Icon]) => (
+              <button key={id} type="button" className={recentFilter === id ? 'active' : ''} aria-pressed={recentFilter === id} onClick={() => setRecentFilter(id)} title={label} aria-label={label}><Icon size={15} /></button>
+            ))}
+          </div>
+          {filteredRecent.length ? (
             <div className={`overview-search-list ${searchView === 'table' ? 'is-table' : ''}`}>
-              {data.recent.map((item) => (
+              {filteredRecent.map((item) => (
                 <div key={item.id}>
                   <span title={item.label}>{item.label}</span>
-                  {searchView === 'bars' && <i><i style={{ width: `${Math.max(2, (item.count / maxSearch) * 100)}%` }} /></i>}
-                  <b>{item.count} <small>leads</small></b>
+                  {searchView === 'bars' && <i><i style={{ width: `${Math.max(2, (item.visibleCount / maxSearch) * 100)}%` }} /></i>}
+                  <b>{item.visibleCount} <small>leads</small></b>
                 </div>
               ))}
             </div>

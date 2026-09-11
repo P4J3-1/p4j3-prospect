@@ -1137,11 +1137,13 @@ tr:hover td {
 }
 .chat-bubble {
   max-width: min(68%, 460px);
+  min-width: 0;
   padding: 8px 10px 6px;
   border-radius: 14px;
   font-size: 13px;
   line-height: 1.45;
   word-break: break-word;
+  overflow: hidden;
   position: relative;
   box-shadow: 0 1px 2px rgba(15,23,42,.04);
 }
@@ -1852,13 +1854,16 @@ tr:hover td {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 220px;
-  max-width: 300px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 4px 2px;
+  overflow: hidden;
 }
 .chat-voice-play {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: none;
   background: rgba(108, 92, 231, 0.9);
@@ -1866,7 +1871,7 @@ tr:hover td {
   display: grid;
   place-items: center;
   cursor: pointer;
-  flex-shrink: 0;
+  flex: 0 0 36px;
   box-shadow: 0 4px 12px rgba(108, 92, 231, 0.35);
 }
 .chat-bubble.out .chat-voice-play {
@@ -1884,12 +1889,14 @@ tr:hover td {
   animation: spin 0.7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-.chat-voice-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.chat-voice-body { flex: 1 1 auto; min-width: 0; max-width: 100%; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
 .chat-voice-wave {
   position: relative;
   height: 28px;
   border-radius: 8px;
   overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
   cursor: pointer;
   background: var(--overlay-soft);
 }
@@ -1904,7 +1911,8 @@ tr:hover td {
 }
 .chat-voice-bars {
   position: absolute; inset: 0;
-  display: flex; align-items: center; gap: 2px; padding: 0 6px;
+  display: flex; align-items: center; gap: 1px; padding: 0 5px;
+  overflow: hidden;
 }
 .chat-voice-bars span {
   flex: 1;
@@ -1915,15 +1923,19 @@ tr:hover td {
 }
 .chat-voice-meta {
   display: flex; justify-content: space-between;
+  min-width: 0; max-width: 100%; overflow: hidden;
   font-size: 11px; color: var(--muted);
 }
 .chat-voice-time { font-variant-numeric: tabular-nums; }
+.chat-voice-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .chat-bubble-wrap {
   display: flex;
   align-items: flex-end;
   gap: 4px;
   max-width: 85%;
+  min-width: 0;
+  overflow: visible;
   position: relative;
 }
 .chat-bubble-wrap.out { align-self: flex-end; flex-direction: row-reverse; }
@@ -1948,6 +1960,21 @@ tr:hover td {
   cursor: pointer;
 }
 .chat-bubble-action-btn:hover { color: var(--fg); border-color: var(--accent); }
+.wa-chat-context-menu { position: fixed; z-index: 120; width: min(264px, calc(100vw - 16px)); display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 11px; background: var(--menu-bg, #fff); color: var(--fg); box-shadow: 0 14px 34px rgba(15, 23, 42, .2); }
+.wa-chat-context-title { overflow: hidden; padding: 3px 5px 6px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.wa-chat-context-menu > button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 7px; border: 0; border-radius: 7px; background: transparent; color: var(--fg); font-size: 12px; text-align: left; cursor: pointer; }
+.wa-chat-context-menu > button:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.wa-chat-context-menu > button:disabled { opacity: .55; cursor: wait; }
+.wa-chat-context-field { display: grid; gap: 4px; padding: 4px 5px 2px; color: var(--muted); font-size: 10px; }
+.wa-chat-context-field select, .wa-chat-context-closed input { min-width: 0; height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--fg); font-size: 11.5px; }
+.wa-chat-context-closed { display: grid; gap: 6px; padding: 4px 5px 2px; border-top: 1px solid var(--border); }
+.wa-chat-context-closed .btn { justify-self: end; }
+.wa-reminder-modal { width: min(430px, 94vw); }
+.wa-reminder-modal .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 20px 0; }
+.wa-reminder-modal .modal-head > div { min-width: 0; }
+.wa-reminder-modal .modal-head .icon-btn { flex: 0 0 auto; margin: 0; }
+.wa-reminder-modal .modal-body { display: grid; gap: 10px; }
+.wa-reminder-lead { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--surface-warm); color: var(--fg); font-size: 12px; font-weight: 700; }
 .chat-msg-menu {
   position: absolute;
   bottom: 100%;
@@ -7125,12 +7152,14 @@ tr { height: 40px; }
 .help-tip-bubble { position:absolute; left:0; top:calc(100% + 6px); background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:11px; line-height:1.5; box-shadow:0 8px 24px rgba(15,23,42,.12); width:min(280px,70vw); z-index:20; }
 
 .update-banner { display:flex; align-items:center; gap:8px; padding:8px 14px; font-size:12px; font-weight:600; border-bottom:1px solid var(--border); }
-.update-banner.checking { background:#F8FAFC; color:var(--muted); }
-.update-banner.available { background:#EFF6FF; color:#1D4ED8; border-color:#BFDBFE; }
-.update-banner.downloading { background:#EFF6FF; color:#1D4ED8; flex-wrap:wrap; }
-.update-banner.downloaded { background:#ECFDF5; color:#065F46; border-color:#A7F3D0; }
-.update-banner.error { background:#FEF2F2; color:#991B1B; border-color:#FECACA; }
-.update-progress-bar { width:100%; height:4px; background:rgba(37,99,235,.15); border-radius:999px; overflow:hidden; margin-top:4px; flex-basis:100%; }
+.update-banner small { color: inherit; font-size: 11px; font-weight: 500; opacity: .8; font-variant-numeric: tabular-nums; }
+.update-banner .icon-btn { margin-left: 2px; }
+.update-banner.checking { background:var(--surface-warm); color:var(--muted); }
+.update-banner.available { background:var(--accent-soft); color:#087b5e; border-color:#bce7d5; }
+.update-banner.downloading { background:var(--accent-soft); color:#087b5e; flex-wrap:wrap; }
+.update-banner.downloaded { background:var(--accent-soft); color:#065f46; border-color:#bce7d5; }
+.update-banner.error { background:#fff6f4; color:#9f2d21; border-color:#f2c4be; }
+.update-progress-bar { width:100%; height:3px; background:rgba(16,163,127,.18); border-radius:999px; overflow:hidden; margin-top:4px; flex-basis:100%; }
 .update-progress-fill { height:100%; background:var(--accent); border-radius:999px; transition:width .3s ease; }
 .btn-sm { height:28px; padding:0 10px; font-size:11px; border-radius:6px; }
 .btn-ghost { background:transparent; border:1px solid var(--border); color:var(--fg); }
@@ -7556,6 +7585,227 @@ body.route-whatsapp .app-screen-container { max-width: none; height: 100dvh; pad
   .map-floating-controls { top: 72px; }
   .map-floating-telemetry { overflow-x: auto; }
 }
+
+/* Funil comercial: configuração direta, valor do negócio e receita. */
+.kanban-simple-builder { padding: 14px; border: 1px solid #b9e3d7; border-radius: 14px; background: #f4fbf8; }
+.kanban-easy-tag { padding: 3px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.kanban-simple-list { display: grid; gap: 7px; margin-top: 10px; }
+.kanban-simple-row { display: grid; grid-template-columns: 32px minmax(180px, 1fr) auto minmax(150px, .7fr); align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+.kanban-simple-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 9px; background: var(--accent-soft); color: var(--accent); }
+.kanban-simple-copy { min-width: 0; display: grid; gap: 2px; }
+.kanban-simple-copy b { color: var(--fg); font-size: 12.5px; }
+.kanban-simple-copy small { color: var(--muted); font-size: 10.5px; }
+.kanban-simple-row > svg { color: var(--muted); }
+.kanban-simple-row select { min-width: 0; height: 34px; border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--fg); font-size: 12px; }
+
+.kanban-deal-box { display: grid; gap: 10px; padding: 13px; border: 1px solid #b9e3d7; border-radius: 12px; background: #f4fbf8; }
+.kanban-deal-head { display: flex; align-items: center; gap: 9px; }
+.kanban-deal-head > div { display: grid; gap: 2px; }
+.kanban-deal-head b { color: var(--fg); font-size: 13px; }
+.kanban-deal-head small { color: var(--muted); font-size: 10.5px; }
+.kanban-deal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.kanban-deal-box .btn { justify-self: start; }
+.kanban-deal-error { margin: 0; color: var(--danger); font-size: 11.5px; }
+.kanban-card-value { display: flex; align-items: center; gap: 4px; margin-top: 7px; color: #087b5e; font-size: 11px; font-weight: 700; }
+.kanban-card-signals { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.kanban-card-signals .kanban-card-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kanban-card-reminder { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 7px; background: var(--accent-soft); color: #087b5e; }
+.kanban-card-reminder.due { background: #fff4d9; color: #b45309; }
+.kanban-timeline { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-warm); }
+.kanban-timeline > div { min-width: 0; display: flex; align-items: flex-start; gap: 6px; color: var(--muted); }
+.kanban-timeline > div.done { color: #087b5e; }
+.kanban-timeline > div > span { min-width: 0; display: grid; gap: 2px; }
+.kanban-timeline small { color: var(--muted); font-size: 10px; }
+.kanban-timeline b { overflow: hidden; color: var(--fg); font-size: 10.5px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.kanban-reminder-box { display: grid; gap: 10px; padding: 13px; border: 1px solid #d9d7f5; border-radius: 12px; background: #fafaff; }
+.kanban-reminder-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; gap: 7px; }
+.kanban-reminder-grid .field { min-width: 0; }
+
+.overview-crm-summary { display: grid; gap: 12px; padding: 13px 15px; border: 1px solid #b9e3d7; border-radius: 14px; background: #f4fbf8; }
+.overview-hero { overflow: visible; }
+.overview-hero-bottom { grid-column: 1 / -1; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-top: 10px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.12); position: relative; z-index: 2; }
+.overview-hero-bottom .hero-contacts { grid-column: auto; flex: 1 1 auto; min-width: 0; margin-top: 0; padding-top: 0; border-top: 0; }
+.overview-crm-tools { position: relative; flex: 0 0 auto; margin-left: auto; }
+.overview-crm-tools .overview-crm-metrics { display: flex; align-items: center; justify-content: flex-end; gap: 0; }
+.overview-crm-tools .overview-crm-metric { min-width: 0; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; color: #8bdcc6; font-size: 12px; line-height: 1; white-space: nowrap; }
+.overview-crm-tools .overview-crm-metric + .overview-crm-metric { border-left: 1px solid rgba(255,255,255,.14); }
+.overview-crm-tools .overview-crm-metric b { color: #fff; font-size: 12px; font-variant-numeric: tabular-nums; }
+.overview-crm-tools .overview-crm-reminder { border: 0; background: transparent; cursor: pointer; }
+.overview-crm-tools .overview-crm-reminder:hover, .overview-crm-tools .overview-crm-reminder.active { color: #fff; }
+.overview-pending-popover { position: absolute; right: 0; bottom: calc(100% + 12px); z-index: 20; width: min(330px, calc(100vw - 40px)); display: grid; gap: 4px; padding: 9px; border: 1px solid #cfe7df; border-radius: 12px; background: #fff; color: #15201c; box-shadow: 0 16px 34px rgba(8, 39, 29, .22); }
+.overview-pending-popover-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 3px 6px; color: #587068; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.overview-pending-popover-head button { width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: #587068; font-size: 18px; line-height: 1; cursor: pointer; }
+.overview-pending-popover-head button:hover { background: #eef8f4; color: #087b5e; }
+.overview-pending-popover-item { min-width: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 7px; border: 1px solid #e4eee9; border-radius: 9px; background: #fbfefd; color: #15201c; text-align: left; cursor: pointer; }
+.overview-pending-popover-item:hover { border-color: #8bdcc6; background: #f1fbf7; }
+.overview-pending-popover-icon { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; background: #d9f4eb; color: #087b5e; }
+.overview-pending-popover-copy { min-width: 0; display: grid; gap: 2px; }
+.overview-pending-popover-copy b, .overview-pending-popover-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-pending-popover-copy b { font-size: 11.5px; }
+.overview-pending-popover-copy small { color: #6b7d76; font-size: 10px; }
+.overview-pending-popover-value { color: #087b5e; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.overview-pending-empty { padding: 12px 6px 9px; color: #6b7d76; font-size: 11px; text-align: center; }
+.overview-crm-metrics { display: grid; grid-template-columns: minmax(210px, 1.25fr) repeat(3, minmax(120px, .75fr)) auto; align-items: center; gap: 12px; }
+.overview-crm-metrics > div { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.overview-crm-metrics > div + div { padding-left: 12px; border-left: 1px solid #d7ebe5; }
+.overview-crm-metrics span { min-width: 0; display: grid; gap: 1px; }
+.overview-crm-metrics small { color: var(--muted); font-size: 10px; }
+.overview-crm-metrics b, .overview-crm-metrics strong { color: var(--fg); font-size: 14px; font-variant-numeric: tabular-nums; }
+.overview-crm-metrics .overview-deal-main strong { color: #087b5e; font-size: 20px; }
+.overview-crm-metrics .btn { justify-self: end; }
+.overview-deal-strip { display: none; }
+.overview-deal-strip > div { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.overview-deal-strip > div + div { padding-left: 12px; border-left: 1px solid #d7ebe5; }
+.overview-deal-strip span { min-width: 0; display: grid; gap: 1px; }
+.overview-deal-strip small { color: var(--muted); font-size: 10px; }
+.overview-deal-strip b, .overview-deal-strip strong { color: var(--fg); font-size: 14px; font-variant-numeric: tabular-nums; }
+.overview-deal-strip .overview-deal-main strong { color: #087b5e; font-size: 20px; }
+.overview-deal-icon { width: 36px; height: 36px; flex: 0 0 auto; display: grid !important; place-items: center; border-radius: 10px; background: #d9f4eb; color: #087b5e; }
+.overview-pending-inline { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid #d7ebe5; }
+.overview-pending-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.overview-pending-head h2 { margin: 3px 0 0; color: var(--fg); font-size: 15px; }
+.overview-pending-count { min-width: 24px; height: 24px; display: inline-grid; place-items: center; border-radius: 999px; background: #d9f4eb; color: #087b5e; font-size: 11px; font-weight: 700; }
+.overview-pending-list { display: grid; gap: 6px; }
+.overview-pending-list > button { min-width: 0; display: grid; grid-template-columns: minmax(180px, 1.5fr) minmax(120px, .8fr) minmax(120px, .8fr); align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-warm); color: var(--fg); text-align: left; cursor: pointer; }
+.overview-pending-list > button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.overview-pending-list span { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.overview-pending-list span:not(.overview-pending-lead) { display: grid; gap: 1px; }
+.overview-pending-list small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.overview-pending-list b { overflow: hidden; color: var(--fg); font-size: 11.5px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.overview-pending-lead { display: grid !important; gap: 2px !important; }
+.overview-pending-value b { color: #087b5e; }
+.overview-pending-reminder { color: #087b5e; }
+.overview-pending-reminder.due { color: #b45309; }
+.overview-pending-reminder > span { min-width: 0; }
+.lead-crm-summary { margin-top: 16px; padding-top: 2px; border-top: 1px solid var(--border); }
+.lead-crm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 14px; padding: 10px 0 2px; }
+.lead-crm-grid > div { min-width: 0; display: grid; gap: 2px; }
+.lead-crm-grid span { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.lead-crm-grid b { color: var(--fg); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.settings-streaming-mode { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 14px; border: 1px solid #b9e3d7; border-radius: 12px; background: #f4fbf8; }
+.settings-streaming-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; background: #d9f4eb; color: #087b5e; }
+.settings-streaming-mode h2 { margin: 0 0 3px; color: var(--fg); font-size: 14px; }
+.settings-streaming-mode p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.settings-switch { min-width: 112px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 999px; background: #fff; color: var(--muted); font-size: 11px; cursor: pointer; }
+.settings-switch > span { width: 9px; height: 9px; border-radius: 50%; background: #9ca3af; }
+.settings-switch.on { border-color: #8ad5bd; background: var(--accent-soft); color: #087b5e; }
+.settings-switch.on > span { background: var(--accent); }
+.sc-provider-route { display: block; margin-top: 5px; color: var(--muted); font-size: 10.5px; line-height: 1.35; }
+.sc-provider-route.warn { color: #a16207; font-weight: 600; }
+
+@media (max-width: 900px) {
+  .kanban-simple-row { grid-template-columns: 32px minmax(0, 1fr); }
+  .kanban-simple-row > svg { display: none; }
+  .kanban-simple-row select { grid-column: 2; }
+  .overview-crm-metrics { grid-template-columns: 1fr 1fr; }
+  .overview-crm-metrics > div + div { padding-left: 0; border-left: 0; }
+  .overview-crm-metrics .btn { justify-self: start; }
+  .overview-hero-bottom { align-items: stretch; flex-direction: column; }
+  .overview-crm-tools { margin-left: 0; }
+  .overview-crm-tools .overview-crm-metrics { justify-content: flex-end; }
+  .overview-pending-list > button { grid-template-columns: minmax(150px, 1fr) minmax(110px, .8fr) minmax(110px, .8fr); }
+}
+
+@media (max-width: 620px) {
+  .kanban-deal-grid, .overview-crm-metrics { grid-template-columns: 1fr; }
+  .overview-crm-metrics .btn { width: 100%; }
+  .overview-crm-tools .overview-crm-metrics { justify-content: flex-start; flex-wrap: wrap; row-gap: 9px; }
+  .overview-crm-tools .overview-crm-metric { padding: 0 9px; }
+  .overview-crm-tools .overview-crm-metric:first-child { padding-left: 0; }
+  .overview-pending-head { align-items: flex-start; flex-direction: column; }
+  .overview-pending-list > button { grid-template-columns: 1fr 1fr; }
+  .overview-pending-list > button > span:first-child { grid-column: 1 / -1; }
+  .settings-streaming-mode { grid-template-columns: auto minmax(0, 1fr); }
+  .settings-switch { grid-column: 1 / -1; width: 100%; }
+  .lead-crm-grid { grid-template-columns: 1fr; }
+}
+
+/* Polimento final do dashboard e dos controles de áudio. */
+.overview-hero {
+  background-color: #101613;
+  background-image:
+    linear-gradient(90deg, rgba(10, 19, 15, .9), rgba(10, 19, 15, .62)),
+    image-set(
+      url("../assets/sidebar-art-teal-1x.png") 1x,
+      url("../assets/sidebar-art-teal-2x.png") 2x
+    );
+  background-position: center;
+  background-size: cover;
+}
+.overview-recent-head { align-items: flex-start; }
+.overview-recent-head > div:first-child { min-width: 0; }
+.overview-recent-subtitle { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.2; }
+.overview-recent-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 5px; }
+.overview-recent-filters button {
+  appearance: none;
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font: 600 11px/1.1 var(--font-body);
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+.overview-recent-filters button:hover,
+.overview-recent-filters button:focus-visible { border-color: var(--accent); background: var(--accent-soft); color: #087b5e; outline: none; }
+.overview-recent-filters button.active,
+.overview-recent-filters button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: #087b5e; }
+.overview-recent-filters button svg { flex: 0 0 auto; stroke-width: 2; }
+.overview-search-list > div { align-items: center; min-height: 42px; }
+.overview-search-list > div > span { min-width: 0; padding-left: 2px; }
+
+.kanban-manual-lead-modal { width: min(560px, 94vw); max-width: 560px; }
+.kanban-manual-lead-body { display: grid; gap: 13px; padding: 18px 20px 6px; }
+.kanban-manual-source { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.kanban-manual-source button { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--border); border-radius: 10px; background: #fff; color: var(--muted); font: 600 12px var(--font-body); cursor: pointer; }
+.kanban-manual-source button:hover, .kanban-manual-source button.active { border-color: var(--accent); background: var(--accent-soft); color: #087b5e; }
+.kanban-manual-lead-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.kanban-manual-lead-grid .field { min-width: 0; }
+.kanban-manual-lead-grid input, .kanban-manual-lead-grid select, .kanban-manual-lead-body > .field select { width: 100%; box-sizing: border-box; min-height: 40px; }
+.kanban-manual-empty { margin: 0; color: var(--muted); font-size: 12px; }
+
+.chat-bubble .chat-voice {
+  width: min(360px, 100%);
+  min-width: min(280px, 100%);
+  min-height: 66px;
+  gap: 12px;
+  padding: 6px 4px;
+}
+.chat-bubble.voice-bubble { width: min(420px, 100%); max-width: min(420px, 100%); }
+.chat-bubble.voice-bubble .chat-voice-meta > span:first-child { flex: 1 1 auto; }
+.chat-voice-play { width: 44px; height: 44px; flex-basis: 44px; }
+.chat-voice-wave { height: 34px; border-radius: 9px; }
+.chat-voice-bars { gap: 2px; padding: 0 7px; }
+.chat-voice-meta { font-size: 12px; font-weight: 700; }
+.chat-bubble.out .chat-voice-meta { color: rgba(255,255,255,.86); }
+.chat-bubble.out .chat-voice-meta > span:first-child,
+.chat-bubble.out .chat-voice-time { color: #fff; font-weight: 700; }
+.chat-bubble.out .chat-voice-bars span { background: rgba(8, 61, 48, .48); }
+.chat-bubble.out .chat-voice-wave { background: rgba(0, 74, 57, .22); }
+body.route-whatsapp .wa-open-design .chat-bubble.out .chat-voice-meta { color: rgba(255,255,255,.9); }
+body.route-whatsapp .wa-open-design .chat-bubble.out .chat-voice-meta > span:first-child,
+body.route-whatsapp .wa-open-design .chat-bubble.out .chat-voice-time { color: #fff; font-weight: 700; }
+
+@media (max-width: 620px) {
+  .chat-bubble .chat-voice { min-width: 0; width: 100%; }
+  .kanban-manual-lead-grid, .kanban-manual-source { grid-template-columns: 1fr; }
+}
+
+/* A análise da base começa recolhida para manter a base de leads enxuta. */
+.base-analysis-panel { padding: 0; overflow: hidden; }
+.base-analysis-panel .base-analysis-head { min-height: 58px; margin: 0; padding: 12px 18px; }
+.base-analysis-toggle { min-width: 0; display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: var(--fg); text-align: left; cursor: pointer; }
+.base-analysis-toggle > span { min-width: 0; display: grid; gap: 2px; }
+.base-analysis-toggle h3 { margin: 0; font-size: 15px; font-weight: 650; }
+.base-analysis-toggle small { color: var(--muted); font-size: 11px; }
+.base-analysis-toggle svg { color: var(--accent); flex: 0 0 auto; }
+.base-analysis-toggle:hover h3 { color: var(--accent); }
+.base-analysis-panel > #base-analysis-content { padding: 0 18px 16px; }
 
 /* ─── Open Design · Lead Scoring workflow ─────────────────────────────── */
 .ls-open-design {
@@ -8016,12 +8266,7 @@ body.route-kanban .app-screen-container { max-width: none; }
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(250px, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-  flex: 1;
   gap: 12px;
-  overflow: auto;
   padding-bottom: 4px;
 }
 .kanban-column {
@@ -8035,6 +8280,7 @@ body.route-kanban .app-screen-container { max-width: none; }
   background: var(--surface-warm);
   overflow: hidden;
 }
+.kanban-column.over-wip { border-color: #f2c4be; }
 .kanban-column-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,.76); }
 .kanban-column-head > div { min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .kanban-column-head h2 { margin: 0; color: var(--fg); font-size: 13px; }
@@ -8047,7 +8293,6 @@ body.route-kanban .app-screen-container { max-width: none; }
 .kanban-card:hover { border-color: var(--kanban-stage); box-shadow: 0 5px 14px rgba(23,26,48,.08); }
 .kanban-card:active { cursor: grabbing; }
 .kanban-card-title { min-width: 0; display: flex; align-items: center; gap: 5px; }
-.kanban-card-title > svg { flex: 0 0 auto; color: var(--muted); }
 .kanban-card-title strong { min-width: 0; overflow: hidden; color: var(--fg); font-size: 12.5px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 .kanban-card-title span { margin-left: auto; padding: 2px 5px; border-radius: 99px; background: #fff4d9; color: #9a6200; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .kanban-card-meta { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -8111,6 +8356,16 @@ body.route-whatsapp .app-screen-container { overflow: hidden; }
   text-align: center;
 }
 .settings-zoom-controls .btn { min-height: 36px; }
+.settings-update-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-warm); }
+.settings-update-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.settings-update-head h2 { margin: 2px 0 0; color: var(--fg); font-size: 15px; }
+.settings-update-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.settings-update-head p b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.settings-update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-update-progress { display: grid; gap: 4px; }
+.settings-update-progress small { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.settings-update-status { display: flex; align-items: center; gap: 6px; margin: 0; color: #087b5e; font-size: 12px; }
+.settings-update-status.warn { color: #9f2d21; }
 @media (min-width: 900px) and (max-width: 1180px) {
   .kanban-topbar { align-items: flex-start; flex-direction: column; }
   .kanban-actions { justify-content: flex-start; }
@@ -8147,6 +8402,112 @@ body.route-whatsapp .app-screen-container { overflow: hidden; }
 .kanban-card-bottom { align-items: flex-start; flex-wrap: wrap; }
 .kanban-source-chips { justify-content: flex-start; }
 
+/* Automações gamificadas: leitura rápida, um clique por receita. */
+.kanban-tabs { display: flex; gap: 6px; padding: 10px 20px 0; border-bottom: 1px solid var(--border); }
+.kanban-tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border: 1px solid var(--border); border-bottom: 0; border-radius: 10px 10px 0 0; background: var(--surface-warm); color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer; }
+.kanban-tabs button.on { background: #fff; color: var(--fg); box-shadow: 0 -2px 0 var(--accent) inset; }
+.kanban-tabs button b { padding: 1px 6px; border-radius: 99px; background: var(--accent-soft); color: #087b5e; font-size: 10px; }
+.kanban-limit-hint { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.kanban-level-card { padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(180deg, #fff, var(--surface-warm)); }
+.kanban-level-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.kanban-level-head h3 { margin: 2px 0 0; color: var(--fg); font-size: 17px; letter-spacing: -.02em; }
+.kanban-level-head p { margin: 3px 0 0; color: var(--muted); font-size: 11.5px; }
+.kanban-level-xp { display: flex; align-items: baseline; gap: 4px; padding: 6px 10px; border-radius: 10px; background: var(--accent-soft); color: #087b5e; }
+.kanban-level-xp svg { align-self: center; }
+.kanban-level-xp b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.kanban-level-xp small { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.kanban-level-track { height: 8px; margin: 12px 0 8px; border-radius: 99px; background: #ececec; overflow: hidden; }
+.kanban-level-fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), #34d399); transition: width var(--dur-base) var(--ease-out); }
+.kanban-level-foot { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 11px; }
+.kanban-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.kanban-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 1px dashed var(--border); border-radius: 99px; color: var(--muted); font-size: 10.5px; }
+.kanban-badge.done { border-style: solid; border-color: #bce7d5; background: var(--accent-soft); color: #087b5e; font-weight: 600; }
+.kanban-recipes { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.kanban-recipe { display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-warm); color: var(--fg); text-align: left; cursor: pointer; transition: border-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.kanban-recipe:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-1px); }
+.kanban-recipe:disabled { cursor: default; opacity: .6; }
+.kanban-recipe.done { border-color: #bce7d5; background: var(--accent-soft); color: #087b5e; }
+.kanban-recipe > svg:last-child { margin-left: auto; flex: 0 0 auto; }
+.kanban-recipe-icon { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 9px; background: #fff; color: var(--accent); box-shadow: 0 1px 3px rgba(23,26,48,.07); }
+.kanban-recipe-text { min-width: 0; display: grid; gap: 1px; }
+.kanban-recipe-text b { font-size: 12.5px; }
+.kanban-recipe-text small { overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.kanban-rule-card { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-warm); overflow: hidden; }
+.kanban-rule-card.off { opacity: .68; }
+.kanban-rule-card.broken { border-color: #f2c4be; background: #fff8f7; }
+.kanban-rule-summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+.kanban-rule-summary p { min-width: 0; flex: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 0; color: var(--muted); font-size: 12px; }
+.kanban-rule-summary p b { color: var(--fg); }
+.kanban-rule-summary p svg { color: var(--accent); }
+.kanban-rule-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 99px; background: var(--kanban-stage, var(--border)); }
+.kanban-rule-dot.broken { background: #ef4444; }
+.kanban-rule-priority { padding: 2px 6px; border-radius: 99px; background: #fff; color: var(--muted); font-size: 10px; font-weight: 700; }
+.kanban-rule-warning { margin: 0; padding: 0 12px 10px; color: #9f2d21; font-size: 11px; }
+.kanban-rule-card .kanban-rule-editor { border: 0; border-top: 1px solid var(--border); border-radius: 0; background: #fff; }
+.kanban-confirm { display: inline-flex; align-items: center; gap: 6px; color: #835800; font-size: 11px; }
+.kanban-stage-order { display: inline-flex; flex-direction: column; gap: 2px; }
+.kanban-stage-order .icon-btn { width: 20px; height: 16px; min-height: 16px; }
+.kanban-terminal-tag { padding: 1px 6px; border-radius: 99px; background: var(--accent-soft); color: #087b5e; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.kanban-wip-over { color: #9f2d21; font-weight: 700; }
+.kanban-wip-track { height: 3px; background: #ececec; }
+.kanban-wip-fill { height: 100%; background: var(--kanban-stage); transition: width var(--dur-base) var(--ease-out); }
+.kanban-column.over-wip .kanban-wip-fill { background: #ef4444; }
+.kanban-score-band { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 99px; background: var(--surface-warm); color: var(--muted); font-size: 10px; }
+.kanban-score-band b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.kanban-score-band.high { background: var(--accent-soft); color: #087b5e; }
+.kanban-score-band.high b { color: #087b5e; }
+.kanban-score-band.mid { background: #fff4d9; color: #9a6200; }
+.kanban-score-band.mid b { color: #9a6200; }
+.kanban-activity { padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: #fff; }
+.kanban-activity-head { display: flex; align-items: center; gap: 7px; color: var(--fg); font-size: 12.5px; }
+.kanban-activity-head svg { color: var(--accent); }
+.kanban-activity-head span { color: var(--muted); font-size: 11px; font-weight: 400; }
+.kanban-activity-empty { margin: 8px 0 0; color: var(--muted); font-size: 11.5px; }
+.kanban-activity ul { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; max-height: 190px; overflow-y: auto; }
+.kanban-activity li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: var(--surface-warm); color: var(--fg); font-size: 11.5px; }
+.kanban-activity li svg { flex: 0 0 auto; color: var(--muted); }
+.kanban-activity li time { margin-left: auto; color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .kanban-recipes { grid-template-columns: 1fr; }
+  .kanban-rule-summary { flex-wrap: wrap; }
+  .kanban-rule-summary p { flex-basis: 100%; order: 3; }
+}
+
+/* Filtros de grupo: "com" / "sem" por canal, presets de um clique e prévia. */
+.grp-modes { display: flex; gap: 6px; padding: 4px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-warm); }
+.grp-modes button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.grp-modes button.on { border-color: var(--border); background: #fff; color: var(--fg); box-shadow: 0 1px 3px rgba(23,26,48,.06); }
+.grp-modes button b { padding: 1px 7px; border-radius: 99px; background: var(--accent-soft); color: #087b5e; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.grp-filters-title { margin: 4px 0 6px; color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.grp-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.grp-chip { padding: 6px 11px; border: 1px solid var(--border); border-radius: 99px; background: var(--surface-warm); color: var(--fg); font-size: 12px; cursor: pointer; transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+.grp-chip:hover { border-color: var(--accent); }
+.grp-chip.on { border-color: #bce7d5; background: var(--accent-soft); color: #087b5e; font-weight: 600; }
+.grp-channels { display: grid; gap: 6px; margin-top: 8px; }
+.grp-channel { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 9px; background: #fff; }
+.grp-channel-name { color: var(--fg); font-size: 12.5px; font-weight: 600; }
+.grp-seg { display: inline-flex; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-warm); }
+.grp-seg button { min-width: 62px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 11.5px; cursor: pointer; }
+.grp-seg button.on { background: #fff; color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgba(23,26,48,.08); }
+.grp-extra { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); align-items: end; gap: 8px; }
+.grp-extra .field { display: grid; gap: 4px; }
+.grp-extra .field span { color: var(--muted); font-size: 11px; }
+.grp-extra input { min-height: 34px; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; background: #fff; font-size: 13px; }
+.grp-preview { display: grid; gap: 3px; padding: 11px 12px; border: 1px solid #bce7d5; border-radius: 10px; background: var(--accent-soft); color: #087b5e; }
+.grp-preview b { font-size: 13px; }
+.grp-preview span { overflow: hidden; color: #0a6b52; font-size: 11.5px; text-overflow: ellipsis; }
+.grp-manage-list { display: grid; gap: 6px; }
+.grp-manage-row { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-warm); }
+.grp-manage-row > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.grp-manage-row b { overflow: hidden; color: var(--fg); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.grp-manage-row span { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.bbar-count { margin-left: 5px; padding: 1px 6px; border-radius: 99px; background: var(--accent-soft); color: #087b5e; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) {
+  .grp-channel { flex-direction: column; align-items: stretch; }
+  .grp-seg button { flex: 1; min-width: 0; }
+}
+
 /* Pós-QA: dados densos e progresso precisam permanecer legíveis no desktop. */
 .base-leads-view [data-od-id="base-chart"] { min-width: 0; overflow: hidden; }
 .base-leads-view [data-od-id="base-chart"] .scrollbox { padding: 0 4px 6px; overflow-x: hidden !important; }
@@ -8177,6 +8538,14 @@ body.route-whatsapp .app-screen-container { overflow: hidden; }
 .btn-danger:hover:not(:disabled) { background: #b91c1c !important; border-color: #b91c1c !important; }
 .settings-clear-modal { width: min(480px, 94vw); }
 .settings-clear-modal p { margin: 0; color: var(--muted); line-height: 1.5; }
+.settings-clear-options { display: grid; gap: 6px; margin-top: 12px; max-height: min(52vh, 390px); overflow: auto; }
+.settings-clear-option, .settings-clear-select-all { min-width: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 9px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-warm); cursor: pointer; }
+.settings-clear-select-all { border-color: #b9e3d7; background: #f1fbf7; }
+.settings-clear-option:hover, .settings-clear-select-all:hover { border-color: var(--accent); }
+.settings-clear-option input, .settings-clear-select-all input { width: 15px; height: 15px; margin: 1px 0 0; accent-color: var(--accent); }
+.settings-clear-option span, .settings-clear-select-all span { min-width: 0; display: grid; gap: 2px; }
+.settings-clear-option b, .settings-clear-select-all b { color: var(--fg); font-size: 12px; }
+.settings-clear-option small, .settings-clear-select-all small { overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 
 /* A confirmação de extração sobe da bandeja inferior e dura cinco segundos. */
 .toast-container { top: auto; right: 20px; bottom: 20px; }

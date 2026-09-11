@@ -63,6 +63,7 @@ export default function NewExtractionModal({
 
   const [cidadeObj, setCidadeObj] = useState(null);
   const [cidadeInput, setCidadeInput] = useState('');
+  const [cidadeUf, setCidadeUf] = useState('SP');
   const [cidadeError, setCidadeError] = useState(false);
   const [locSuggestions, setLocSuggestions] = useState([]);
   const [showLocList, setShowLocList] = useState(false);
@@ -79,6 +80,7 @@ export default function NewExtractionModal({
       setNichoError(false);
       setCidadeObj(null);
       setCidadeInput('');
+      setCidadeUf('SP');
       setCidadeError(false);
       setBairroInput('');
       setBairros([]);
@@ -89,7 +91,7 @@ export default function NewExtractionModal({
 
   const wzTitles = {
     1: 'Qual nicho você quer pesquisar?',
-    2: 'Em qual cidade?',
+    2: 'Em qual município?',
     3: 'Quais bairros?'
   };
 
@@ -125,34 +127,14 @@ export default function NewExtractionModal({
     setCidadeInput(val);
     setCidadeObj(null);
     setCidadeError(false);
-    const nq = norm(val).trim();
-    if (!nq) {
-      setLocSuggestions([]);
-      setShowLocList(false);
-      return;
-    }
-    const all = CIDADES.concat(ESTADOS);
-    const scored = [];
-    all.forEach((c) => {
-      const nn = norm(c.n);
-      let s = -1;
-      const uf = norm(c.uf);
-      if (nn === nq || uf === nq) s = 0;
-      else if (nn.indexOf(nq) === 0) s = 1;
-      else if (nn.indexOf(nq) >= 0) s = 2;
-      if (s < 0) return;
-      if (c.estado) s += 0.5;
-      scored.push({ c, s });
-    });
-    scored.sort((a, b) => a.s - b.s || a.c.n.localeCompare(b.c.n, 'pt-BR'));
-    const results = scored.slice(0, 7).map((r) => r.c);
-    setLocSuggestions(results);
-    setShowLocList(results.length > 0);
+    setLocSuggestions([]);
+    setShowLocList(false);
   };
 
   const pickLoc = (item) => {
     setCidadeObj(item);
-    setCidadeInput(`${item.n} — ${item.uf}${item.estado ? ' · Estado' : ''}`);
+    setCidadeInput(item.n);
+    setCidadeUf(item.uf);
     setCidadeError(false);
     setShowLocList(false);
   };
@@ -171,8 +153,7 @@ export default function NewExtractionModal({
   };
 
   const cidadeLabel = () => {
-    if (!cidadeObj) return cidadeInput;
-    return `${cidadeObj.n} — ${cidadeObj.uf}${cidadeObj.estado ? ' · Estado' : ''}`;
+    return `${cidadeObj?.n || cidadeInput} — ${cidadeObj?.uf || cidadeUf}`;
   };
 
   const handleNext = () => {
@@ -197,7 +178,7 @@ export default function NewExtractionModal({
     }
     // Step 3 - Start extraction!
     const neigh = bairros.length > 0 ? bairros.join(', ') : '';
-    const city = cidadeObj ? `${cidadeObj.n}, ${cidadeObj.uf}` : cidadeInput;
+    const city = `${cidadeObj?.n || cidadeInput.trim()}, ${cidadeObj?.uf || cidadeUf}`;
     onStartExtraction?.({
       niche: nicho.trim(),
       neigh,
@@ -209,7 +190,7 @@ export default function NewExtractionModal({
 
   return (
     <div className="overlay on modal-overlay" onClick={onClose} style={{ display: 'grid' }}>
-      <div className="modal modal-content" onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, 94vw)' }}>
+      <div className="modal modal-content new-extraction-modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(620px, 94vw)' }}>
         <div className="modal-head">
           <div className="eyebrow">Etapa {step} de 3</div>
           <h2 id="mTitle" style={{ fontSize: '20px', fontWeight: 600, marginTop: '4px' }}>
@@ -299,12 +280,13 @@ export default function NewExtractionModal({
           {step === 2 && (
             <div className="wz-step">
               <div className={`field ${cidadeError ? 'invalid' : ''}`}>
-                <label htmlFor="wzCidade">Cidade ou estado</label>
-                <div className="ac-wrap">
+                <div className="location-fields">
+                  <div className="field">
+                    <label htmlFor="wzCidade">Município</label>
                   <input
                     id="wzCidade"
-                    placeholder="Ex.: Rio de Janeiro, São Paulo, Curitiba"
-                    autoComplete="off"
+                    placeholder="Ex.: Taguatinga, Campinas, Niterói"
+                    autoComplete="address-level2"
                     value={cidadeInput}
                     onChange={(e) => handleLocChange(e.target.value)}
                     onKeyDown={(e) => {
@@ -315,27 +297,13 @@ export default function NewExtractionModal({
                     }}
                     autoFocus
                   />
-                  {showLocList && locSuggestions.length > 0 && (
-                    <div className="ac-list" role="listbox">
-                      {locSuggestions.map((c) => (
-                        <button
-                          key={`${c.n}-${c.uf}`}
-                          type="button"
-                          className="ac-item"
-                          onClick={() => {
-                            pickLoc(c);
-                            setStep(3);
-                          }}
-                        >
-                          <span>
-                            <span>{c.n} — {c.uf}</span>
-                            <small>{c.estado ? 'Estado' : 'Município'}</small>
-                          </span>
-                          <span className="t">{c.estado ? 'Estado' : 'Município'}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  </div>
+                  <div className="field">
+                    <label htmlFor="wzUf">UF</label>
+                    <select id="wzUf" value={cidadeUf} onChange={(event) => { setCidadeUf(event.target.value); setCidadeObj(null); }}>
+                      {ESTADOS.map((estado) => <option key={estado.uf} value={estado.uf}>{estado.uf} · {estado.n}</option>)}
+                    </select>
+                  </div>
                 </div>
                 {cidadeError && <span className="field-err" style={{ display: 'block' }}>Escolha uma localização para continuar.</span>}
               </div>

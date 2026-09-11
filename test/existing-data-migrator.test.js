@@ -71,3 +71,43 @@ test('não altera arquivo ausente nem conteúdo sem endereço', () => withRoot((
   assert.equal(report.files.find((entry) => entry.file === 'kanban.json').status, 'missing');
   assert.equal(fs.existsSync(path.join(root, 'migrations')), false);
 }));
+
+test('limpa site e instagram já salvos na base', () => withRoot((root) => {
+  writeJson(path.join(root, 'lead-scoring', 'prospecting-leads.json'), {
+    lead_1: {
+      company: {
+        name: 'Odonto Lume',
+        website: 'https://maps.app.goo.gl/abc123',
+        instagram: 'https://www.instagram.com/odonto.lume/?igsh=xyz',
+      },
+    },
+    lead_2: {
+      company: { name: 'Café Aurora', website: 'https://cafeaurora.com?utm_source=gmaps', instagram: 'cafe.aurora' },
+    },
+  });
+
+  const report = migrateExistingData(root, {
+    localStorage: {
+      sigma_leads: JSON.stringify([{
+        id: 'lead_1',
+        name: 'Odonto Lume',
+        website: 'https://www.google.com/maps/place/Odonto',
+        instagram: 'odonto.lume',
+      }]),
+    },
+  });
+
+  assert.equal(report.changed, true);
+  const persisted = JSON.parse(fs.readFileSync(path.join(root, 'lead-scoring', 'prospecting-leads.json'), 'utf8'));
+  assert.equal(persisted.lead_1.company.website, '');
+  assert.equal(persisted.lead_1.company.instagram, '@odonto.lume');
+  assert.equal(persisted.lead_2.company.website, 'https://cafeaurora.com/');
+  assert.equal(persisted.lead_2.company.instagram, '@cafe.aurora');
+
+  const stored = JSON.parse(report.localStorageUpdates.sigma_leads);
+  assert.equal(stored[0].website, '');
+  assert.equal(stored[0].instagram, '@odonto.lume');
+
+  const second = migrateExistingData(root, { localStorage: report.localStorageUpdates });
+  assert.equal(second.changed, false);
+}));

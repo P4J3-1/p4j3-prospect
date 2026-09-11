@@ -10,6 +10,7 @@ class LeadScoringService {
     this.store = new ProspectingStore(userDataPath);
     this.onProgress = onProgress;
     this.activeJobs = new Map();
+    this.lastAiWarning = "";
   }
 
   getSettings() {
@@ -75,6 +76,7 @@ class LeadScoringService {
     const settings = this.store.getSettings();
     const jobId = options.jobId || `batch_${Date.now()}`;
     this.activeJobs.set(jobId, { cancelled: false });
+    this.lastAiWarning = "";
     const results = [];
     const prepared = [];
     try {
@@ -95,6 +97,8 @@ class LeadScoringService {
           const normalized = normalizeLead(lead, options);
           const { siteAnalysis, baseScore } = await this._analyzeLeadBase(normalized, settings, jobId, token);
           const baseSaved = this._saveAnalyzedLead(normalized, siteAnalysis, baseScore, null, settings);
+          // Todo lead salvo entra no relatório do lote, mesmo sem a etapa de IA.
+          results.push({ success: true, lead: baseSaved, aiRefined: false });
           this.onProgress({
             event: "saved",
             jobId,
@@ -142,7 +146,11 @@ class LeadScoringService {
         const analyses = await analyzeBatchWithSalesAI(group, settings);
         group.forEach((item, itemIndex) => {
           const saved = this._saveAnalyzedLead(item.lead, item.siteAnalysis, item.score, analyses[itemIndex], settings);
-          results.push({ success: true, lead: saved });
+          const position = results.findIndex((row) => row?.lead?.id === saved.id);
+          if (position >= 0) results[position] = { success: true, lead: saved, aiRefined: !analyses[itemIndex]?.aiFailed };
+          else results.push({ success: true, lead: saved, aiRefined: !analyses[itemIndex]?.aiFailed });
+          const aiFailed = Boolean(analyses[itemIndex]?.aiFailed);
+          if (aiFailed && !this.lastAiWarning) this.lastAiWarning = analyses[itemIndex]?.aiError || "";
           this.onProgress({
             event: "saved",
             jobId,
@@ -150,7 +158,11 @@ class LeadScoringService {
             lead: saved,
             stats: this.store.getStats(),
             progress: chunks.length ? ((chunkIndex + 1) / chunks.length) : 1,
-            message: `IA refinou: ${saved.company?.name || "lead"} (${saved.score?.value || 0} pts)`,
+            // Dizer "IA refinou" quando caiu no plano B era mentira: o lote
+            // inteiro ficava marcado como sucesso sem nenhum ganho de IA.
+            message: aiFailed
+              ? `Regras locais aplicadas: ${saved.company?.name || "lead"} (${saved.score?.value || 0} pts)`
+              : `IA refinou: ${saved.company?.name || "lead"} (${saved.score?.value || 0} pts)`,
           });
         });
       }
@@ -163,6 +175,7 @@ class LeadScoringService {
       count: results.length,
       analyzedCount: results.filter((r) => r.success).length,
       failures: results.filter((r) => !r.success).length,
+      aiWarning: this.lastAiWarning || "",
     };
   }
 
@@ -189,6 +202,11 @@ class LeadScoringService {
 
   listGroups() {
     return this.store.listGroups();
+  }
+
+  /** Espelha os grupos da Base de Leads no armazenamento do serviço. */
+  syncGroups(groups) {
+    return this.store.replaceGroups(groups);
   }
 
   getGroup(id) {

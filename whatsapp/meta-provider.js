@@ -69,6 +69,8 @@ class MetaProvider extends WhatsAppProvider {
 
   getStatus() { return this._status; }
 
+  clearHistory() { return { success: true }; }
+
   async sendMedia(to, content) {
     return { success: false, error: 'Media not supported on Meta API' };
   }

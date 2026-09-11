@@ -34,6 +34,7 @@ import {
   readLocalArray,
 } from '../leadData';
 import { useNotifications } from './NotificationCenter';
+import { instagramProfileUrl, normalizeInstagram } from '../leadLinks.mjs';
 
 const BASEMAPS = {
   padrao: {
@@ -192,7 +193,10 @@ function getLeadCat(l) { return l.category || l.cat || 'Geral'; }
 function getLeadPhone(l) { return l.phone || l.tel || ''; }
 function getLeadEmail(l) { return l.email || l.mail || ''; }
 function getLeadWebsite(l) { return l.website || l.site || ''; }
-function getLeadIg(l) { return l.instagram || l.ig || ''; }
+function getLeadIg(l) {
+  const raw = l.instagram || l.ig || '';
+  return normalizeInstagram(raw) || raw;
+}
 function getLeadBairro(l) { return l.neighborhood || l.bairro || l.hood || ''; }
 function getLeadCity(l) { return l.city || l.cidade || ''; }
 function getLeadState(l) { return l.state || l.uf || ''; }
@@ -732,7 +736,7 @@ export default function MapScraperView({
         <div class="lp-pop">
           <b>${name}</b>
           <div class="m">${hood ? `${hood} · ` : ''}★ ${rating} (${reviews})</div>
-          <div class="m">${phone || cat}</div>
+          <div class="m" ${phone ? 'data-sensitive-phone="true"' : ''}>${phone || cat}</div>
           <button type="button" data-lead-key="${leadId}">Ver no feed</button>
         </div>
       `);
@@ -1645,7 +1649,8 @@ export default function MapScraperView({
                         style={{ width: 32, height: 32, minHeight: 32, borderRadius: 8 }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          window.open(`https://instagram.com/${ig.replace('@', '')}`, '_blank', 'noopener');
+                          const profileUrl = instagramProfileUrl(ig);
+                          if (profileUrl) window.open(profileUrl, '_blank', 'noopener');
                         }}
                       >
                         <svg

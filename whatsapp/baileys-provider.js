@@ -1872,6 +1872,19 @@ class BaileysProvider extends WhatsAppProvider {
     }
   }
 
+  /** Remove conversas e mensagens locais, mantendo a sessão autenticada. */
+  clearHistory() {
+    this._chats = {};
+    this._messages = {};
+    this._contacts = {};
+    this._jidAliases = {};
+    this._msgIndex = {};
+    this._profilePicCache = {};
+    this._saveDataNow();
+    this._emitChatUpdate();
+    return { success: true };
+  }
+
   /**
    * Apaga mensagem.
    * forEveryone=true: tenta apagar para todos (só próprias, janela do WA).

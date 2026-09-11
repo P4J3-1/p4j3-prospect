@@ -9,6 +9,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const XLSX = require('xlsx');
 const { KanbanStore } = require('../kanban/kanban-store');
+const { ProspectingStore } = require('../lead-scoring/prospecting-store');
 
 const outputDir = path.join(__dirname, '..', 'docs', 'qa', 'open-design-lote1');
 const qaUserDataPath = path.join(os.tmpdir(), `sigma-gmaps-qa-${process.pid}`);
@@ -34,6 +35,37 @@ const fixtureSearches = [
 const fixtureGroups = [
   { id: 'group-demo', name: 'Odontologia · Zona Sul', members: ['lead-1', 'lead-2'], count: 2, color: '#10a37f' },
 ];
+
+// O serviço de scoring gera id próprio (lead_<slug>). O fixture usa o mesmo
+// formato de propósito: só casa com a base por identidade, nunca pelo id do
+// renderer — exatamente o caminho que a tela precisa provar.
+function scoringServiceId(lead) {
+  return `lead_${String(lead.name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')}_${String(lead.city || '').slice(0, 6).toLowerCase()}`;
+}
+
+function scoringFixtureLead(lead, value, priority) {
+  return {
+    id: scoringServiceId(lead),
+    company: {
+      name: lead.name,
+      address: lead.address,
+      city: lead.city,
+      state: lead.state,
+      phone: lead.phone,
+      website: lead.website || '',
+      instagram: lead.instagram || '',
+      reviewCount: 80,
+      rating: 4.8,
+    },
+    score: { value, priority, reasons: ['Análise persistida no fixture de QA'] },
+    updatedAt: now,
+  };
+}
 const fixtureCampaigns = [
   {
     id: 'campaign-1', name: 'Odontologia · Zona Sul', status: 'running', createdAt: now - 7200000,
@@ -67,6 +99,9 @@ const fixtureMessages = [
 const fixtureConnectionState = { connected: true };
 const fixtureFailureState = { connect: false, startChat: false, createCampaign: false, mapRepair: false };
 let fixtureMapRepairRequests = 0;
+// Store real dos grupos: o harness prova que um grupo criado na Base chega ao
+// serviço (e portanto aparece no Lead Scoring e nas campanhas).
+const fixtureScoringStore = new ProspectingStore(qaUserDataPath);
 const fixtureKanbanStore = new KanbanStore(qaUserDataPath);
 fixtureKanbanStore.syncLeads(fixtureLeads, 'maps');
 fixtureKanbanStore.syncLeads(
@@ -99,29 +134,55 @@ const mocks = {
   'campaign-get-all': { campaigns: fixtureCampaigns },
   'lead-scoring-get-all': {
     success: true,
-    leads: fixtureLeads.slice(0, 2).map((lead) => ({ id: lead.id, company: lead, score: { value: lead.id === 'lead-1' ? 82 : 45, priority: lead.id === 'lead-1' ? 'alta' : 'media' } })),
+    leads: [
+      scoringFixtureLead(fixtureLeads[0], 82, 'alta'),
+      scoringFixtureLead(fixtureLeads[1], 45, 'baixa'),
+    ],
     total: 2,
-    stats: { total: 2, highPriority: 1, goodOpportunity: 1, responded: 0, closed: 0, closedValue: 0 },
+    stats: { total: 2, highPriority: 1, goodOpportunity: 0, responded: 0, closed: 0, closedValue: 0 },
   },
-  'lead-scoring-list-groups': { success: true, groups: [{ id: 'group-demo', name: 'Odontologia · Zona Sul', leadIds: ['lead-1', 'lead-2'], count: 2, color: '#10a37f' }] },
+  'lead-scoring-list-groups': () => ({ success: true, groups: fixtureScoringStore.listGroups() }),
+  'lead-scoring-sync-groups': (_event, { groups } = {}) => ({
+    success: true,
+    groups: fixtureScoringStore.replaceGroups(groups || []),
+  }),
   'lead-scoring-analyze-batch': {
     success: true,
     failures: 0,
-    results: fixtureLeads.slice(0, 2).map((lead) => ({
-      success: true,
-      lead: { id: lead.id, company: lead, score: { value: lead.id === 'lead-1' ? 82 : 45, reasons: ['Análise persistida no fixture de QA'] }, updatedAt: now },
-    })),
+    results: [
+      { success: true, lead: scoringFixtureLead(fixtureLeads[0], 82, 'alta'), aiRefined: false },
+      { success: true, lead: scoringFixtureLead(fixtureLeads[1], 45, 'baixa'), aiRefined: false },
+    ],
   },
   'lead-scoring-analyze-lead': {
     success: true,
-    lead: { id: 'lead-1', company: fixtureLeads[0], score: { value: 82, reasons: ['Análise persistida no fixture de QA'] }, updatedAt: now },
+    lead: scoringFixtureLead(fixtureLeads[0], 82, 'alta'),
   },
-  'lead-scoring-get-settings': { success: true, settings: { ai: { provider: 'opencode', model: 'deepseek-v4-flash-free', hasApiKey: true } } },
-  'lead-scoring-test-connection': { success: true, provider: 'opencode', model: 'deepseek-v4-flash-free' },
+  'lead-scoring-get-settings': {
+    success: true,
+    settings: {
+      ai: { provider: 'opencode', model: 'muse-spark-1.3-contributor-free', hasApiKey: true },
+      analysis: { autoAnalyzeAfterScrape: false },
+      rules: {
+        thresholds: { ignoreBelow: 40, goodFrom: 60, highFrom: 75 },
+        digitalPain: { noWebsitePoints: 16, missingPixelPoints: 9 },
+      },
+    },
+  },
+  'lead-scoring-update-settings': { success: true, settings: { ai: { provider: 'opencode', model: 'muse-spark-1.3-contributor-free', hasApiKey: true } } },
+  'lead-scoring-test-connection': { success: true, provider: 'opencode', model: 'muse-spark-1.3-contributor-free' },
+  'update-status': {
+    isPackaged: false,
+    version: require('../package.json').version,
+    hasUpdater: false,
+    unavailableReason: 'Atualizações funcionam na versão instalada, não na prévia de desenvolvimento.',
+    last: { status: 'idle', ts: now },
+  },
+  'update-check': { success: false, error: 'Atualizações funcionam na versão instalada, não na prévia de desenvolvimento.' },
 };
 
 Object.entries(mocks).forEach(([channel, value]) => {
-  ipcMain.handle(channel, () => value);
+  ipcMain.handle(channel, (event, payload) => (typeof value === 'function' ? value(event, payload) : value));
 });
 
 // Fluxo determinístico para exercitar o painel expansível da extração sem
@@ -211,7 +272,7 @@ ipcMain.handle('campaign-update', (_event, { id, updates }) => {
 ipcMain.handle('kanban-get-board', () => ({ success: true, board: fixtureKanbanStore.getBoard() }));
 ipcMain.handle('kanban-sync-maps', (_event, { leads } = {}) => ({
   success: true,
-  board: fixtureKanbanStore.syncLeads(leads, 'maps'),
+  board: fixtureKanbanStore.syncLeads(leads, 'maps', { replace: true, authoritative: true }),
 }));
 ipcMain.handle('kanban-save-config', (_event, { board, expectedRevision } = {}) => {
   try {
@@ -223,6 +284,13 @@ ipcMain.handle('kanban-save-config', (_event, { board, expectedRevision } = {}) 
 ipcMain.handle('kanban-move-card', (_event, payload = {}) => {
   try {
     return { success: true, board: fixtureKanbanStore.moveCard(payload) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+ipcMain.handle('kanban-record-deal', (_event, payload = {}) => {
+  try {
+    return { success: true, board: fixtureKanbanStore.recordDeal(payload) };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -471,13 +539,140 @@ app.whenReady().then(async () => {
   await win.webContents.executeJavaScript(`document.querySelector('.base-leads-view tbody .rowcheck')?.click()`);
   await pause(100);
   await captureModal('criar-grupo-modal', `([...document.querySelectorAll('.selbar button')].find((node) => (node.textContent || '').includes('Criar grupo')))?.click();`, '.overlay.on');
+
+  // Criar grupo precisa permitir filtrar a base, não só usar a seleção.
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.selbar button')].find((node) => (node.textContent || '').includes('Criar grupo')))?.click()`);
+  await pause(160);
+  const groupFilterPanel = await win.webContents.executeJavaScript(`(() => {
+    const modal = document.querySelector('.overlay.on .modal');
+    const filterTab = [...(modal?.querySelectorAll('.grp-modes button') || [])].find((node) => (node.textContent || '').includes('Filtrar a base'));
+    filterTab?.click();
+    return { modes: modal?.querySelectorAll('.grp-modes button').length || 0, hasTab: Boolean(filterTab) };
+  })()`);
+  await pause(160);
+  const groupFilterUi = await win.webContents.executeJavaScript(`(() => {
+    const modal = document.querySelector('.overlay.on .modal');
+    const presets = [...(modal?.querySelectorAll('.grp-presets .grp-chip') || [])];
+    const label = (node) => (node.textContent || '').trim();
+    const before = modal?.querySelector('[data-od-id="group-preview"]')?.innerText || '';
+    presets.find((node) => label(node).includes('Sem site'))?.click();
+    return { presets: presets.map(label), channels: modal?.querySelectorAll('.grp-channel').length || 0, before };
+  })()`);
+  await pause(160);
+  const groupFilterResult = await win.webContents.executeJavaScript(`(() => {
+    const modal = document.querySelector('.overlay.on .modal');
+    const selected = modal?.querySelector('.grp-presets .grp-chip.on');
+    const preview = modal?.querySelector('[data-od-id="group-preview"]')?.innerText || '';
+    const createButton = [...(modal?.querySelectorAll('.modal-foot button') || [])].find((node) => (node.textContent || '').includes('Criar grupo com'));
+    return { selected: (selected?.textContent || '').trim(), preview, createLabel: (createButton?.textContent || '').trim(), disabled: Boolean(createButton?.disabled) };
+  })()`);
+  if (!groupFilterPanel.hasTab || groupFilterUi.presets.length < 4 || groupFilterUi.channels < 4) {
+    errors.push(`Grupo: filtros ausentes ${JSON.stringify({ ...groupFilterPanel, ...groupFilterUi })}`);
+  }
+  if (!/Sem site/i.test(groupFilterResult.selected) || !/lead\(s\) entram neste grupo/i.test(groupFilterResult.preview)) {
+    errors.push(`Grupo: filtro "Sem site" não refletiu na prévia ${JSON.stringify(groupFilterResult)}`);
+  }
+  fs.writeFileSync(path.join(outputDir, 'criar-grupo-filtros-1440x900.png'), (await win.capturePage()).toPNG());
+  await win.webContents.executeJavaScript(`document.querySelector('.overlay.on')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+  await pause(120);
+
+  // O grupo criado na Base precisa chegar ao serviço — é o que faz ele aparecer
+  // no Lead Scoring e no assistente de campanha.
+  const groupSynced = await (async () => {
+    await win.webContents.executeJavaScript(`window.dispatchEvent(new Event('sigma:groups-updated'))`);
+    await pause(80);
+    await win.webContents.executeJavaScript(`([...document.querySelectorAll('.selbar button')].find((node) => (node.textContent || '').includes('Criar grupo')))?.click()`);
+    await pause(140);
+    await win.webContents.executeJavaScript(`(() => {
+      const modal = document.querySelector('.overlay.on .modal');
+      const input = modal?.querySelector('#grpName');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, 'QA sem site');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      [...(modal?.querySelectorAll('.grp-modes button') || [])].find((node) => (node.textContent || '').includes('Filtrar a base'))?.click();
+    })()`);
+    await pause(140);
+    await win.webContents.executeJavaScript(`(() => {
+      const modal = document.querySelector('.overlay.on .modal');
+      [...(modal?.querySelectorAll('.grp-presets .grp-chip') || [])].find((node) => (node.textContent || '').includes('Sem site'))?.click();
+    })()`);
+    await pause(140);
+    await win.webContents.executeJavaScript(`(() => {
+      const modal = document.querySelector('.overlay.on .modal');
+      [...(modal?.querySelectorAll('.modal-foot button') || [])].find((node) => (node.textContent || '').includes('Criar grupo'))?.click();
+    })()`);
+    await pause(320);
+    return win.webContents.executeJavaScript(`(async () => {
+      const res = await window.leadScoringAPI.listGroups();
+      const group = (res?.groups || []).find((item) => item.name === 'QA sem site');
+      return { found: Boolean(group), members: (group?.leadIds || []).length, listed: (res?.groups || []).length };
+    })()`);
+  })();
+  if (!groupSynced.found || groupSynced.members < 1) {
+    errors.push(`Grupo da Base não chegou ao serviço de scoring ${JSON.stringify(groupSynced)}`);
+  }
+
+  await win.webContents.executeJavaScript(`document.querySelector('.overlay.on')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+  await pause(100);
+
   await captureModal('adicionar-grupo-modal', `([...document.querySelectorAll('.selbar button')].find((node) => (node.textContent || '').includes('Adicionar a grupo')))?.click();`, '.overlay.on');
   await captureModal('detalhe-lead-modal', `document.querySelector('.base-leads-view tbody td b')?.click();`, '.overlay.on');
 
+  // A aba Scoring da Base precisa mostrar o score real, casado por identidade
+  // (o serviço salva com id próprio, diferente do id da base). O lead usado é
+  // o "Odonto Lume", que tem score no fixture — os demais seguem sem análise.
+  const baseScoringTab = await win.webContents.executeJavaScript(`(() => {
+    const cell = [...document.querySelectorAll('.base-leads-view tbody td b')]
+      .find((node) => (node.textContent || '').includes('Odonto Lume'))
+      || document.querySelector('.base-leads-view tbody td b');
+    cell?.click();
+    return Boolean(cell);
+  })()`);
+  if (!baseScoringTab) errors.push('Base de leads: detalhe do lead não abriu para checar scoring');
+  await pause(200);
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.ltabs button')].find((node) => (node.textContent || '').includes('Scoring')))?.click()`);
+  await pause(160);
+  const baseScoringPanel = await win.webContents.executeJavaScript(`(() => {
+    const body = document.querySelector('.modal-body');
+    const text = body?.innerText || '';
+    return { text, hasScore: /82/.test(text), hasBand: /Alta/.test(text) };
+  })()`);
+  if (!baseScoringPanel.hasScore || !baseScoringPanel.hasBand) {
+    errors.push(`Base de leads: aba Scoring sem score real ${JSON.stringify({ hasScore: baseScoringPanel.hasScore, hasBand: baseScoringPanel.hasBand, text: baseScoringPanel.text.slice(0, 160) })}`);
+  }
+  await win.webContents.executeJavaScript(`document.querySelector('.modal-foot button')?.click()`);
+  await pause(120);
+
   await navigateTo('lead scoring');
+  // O grupo criado na Base precisa estar listado aqui, com membros reais.
+  const scoringGroupList = await win.webContents.executeJavaScript(`(() => {
+    const select = document.querySelector('#scGroupPick, .ls-open-design-step select');
+    const options = [...(select?.options || [])].map((option) => ({ value: option.value, label: (option.textContent || '').trim() }));
+    return { options, hasGroup: options.some((option) => /QA sem site/.test(option.label)) };
+  })()`);
+  if (!scoringGroupList.hasGroup) {
+    errors.push(`Lead scoring: grupo da base não apareceu na lista ${JSON.stringify(scoringGroupList.options)}`);
+  }
   await win.webContents.executeJavaScript(`(() => { const select = document.querySelector('#scGroupPick, .ls-open-design-step select'); const option = [...(select?.options || [])].find((item) => item.value); if (select && option) { select.value = option.value; select.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
   await pause(180);
+  const scoringRows = await win.webContents.executeJavaScript(`(() => {
+    const rows = [...document.querySelectorAll('#scResults tbody tr')];
+    const scoreCells = rows.map((row) => row.querySelector('td:nth-child(3)')?.textContent?.trim() || '');
+    return { rows: rows.length, scores: scoreCells, text: document.querySelector('#scResults')?.innerText || '' };
+  })()`);
+  if (!/82/.test(scoringRows.text) || !/45/.test(scoringRows.text)) {
+    errors.push(`Lead scoring: score do serviço não apareceu na tabela ${JSON.stringify(scoringRows.scores)}`);
+  }
   await captureModal('configurar-ia-modal', `document.querySelector('#scCfgBtn')?.click();`, '#aiCfgOv');
+  const scoreRules = await win.webContents.executeJavaScript(`(() => ({
+    fields: document.querySelectorAll('#scRules .sc-rule-field').length,
+    highFrom: document.querySelector('#scRules .sc-rule-field input')?.value || '',
+    autoToggle: Boolean(document.querySelector('.sc-toggle input')),
+    thresholdsLine: document.querySelector('#scCfgLine')?.textContent || '',
+  }))()`);
+  if (scoreRules.fields < 6 || scoreRules.highFrom !== '75' || !scoreRules.autoToggle || !/alta ≥ 75/.test(scoreRules.thresholdsLine)) {
+    errors.push(`Lead scoring: regras do score incompletas ${JSON.stringify(scoreRules)}`);
+  }
   await captureModal('detalhe-scoring-modal', `document.querySelector('#scResults tbody td b')?.click();`, '.overlay.on');
 
   await navigateTo('kanban', 900);
@@ -510,17 +705,92 @@ app.whenReady().then(async () => {
   if (!globalMove || !globalMovePersisted) errors.push('Kanban geral: movimento manual não persistiu visualmente');
   await win.webContents.executeJavaScript(`([...document.querySelectorAll('button')].find((node) => (node.textContent || '').includes('Configurar Kanban')))?.click()`);
   await pause(180);
-  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.kanban-settings-modal button')].find((node) => (node.textContent || '').trim() === 'Regra'))?.click()`);
+  const automationPanel = await win.webContents.executeJavaScript(`(() => ({
+    level: Boolean(document.querySelector('.kanban-settings-modal .kanban-level-card')),
+    recipes: document.querySelectorAll('.kanban-settings-modal .kanban-recipe').length,
+    badges: document.querySelectorAll('.kanban-settings-modal .kanban-badge').length,
+    simpleRows: document.querySelectorAll('.kanban-settings-modal .kanban-simple-row').length,
+    simpleConfigured: [...document.querySelectorAll('.kanban-settings-modal .kanban-simple-row select')].filter((node) => node.value).length,
+  }))()`);
+  if (!automationPanel.level || automationPanel.recipes < 4 || automationPanel.badges < 4 || automationPanel.simpleRows !== 4 || automationPanel.simpleConfigured !== 4) {
+    errors.push(`Kanban geral: painel de automação incompleto ${JSON.stringify(automationPanel)}`);
+  }
+  const recipeApplied = await win.webContents.executeJavaScript(`(() => {
+    const recipe = document.querySelector('.kanban-settings-modal .kanban-recipe:not(.done)');
+    recipe?.click();
+    return Boolean(recipe);
+  })()`);
+  await pause(120);
+  if (!recipeApplied) errors.push('Kanban geral: atalho de automação não aplicado');
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.kanban-settings-modal button')].find((node) => (node.textContent || '').includes('Regra do zero')))?.click()`);
   await pause(100);
   const ruleEditorVisible = await win.webContents.executeJavaScript(`document.querySelectorAll('.kanban-settings-modal .kanban-rule-editor').length === 1`);
   if (!ruleEditorVisible) errors.push('Kanban geral: regra de negócio não foi adicionada');
   fs.writeFileSync(path.join(outputDir, 'kanban-configuracao-1440x900.png'), (await win.capturePage()).toPNG());
   await win.webContents.executeJavaScript(`([...document.querySelectorAll('.kanban-settings-modal button')].find((node) => (node.textContent || '').includes('Salvar Kanban')))?.click()`);
   await pause(260);
-  const ruleSaved = await win.webContents.executeJavaScript(`document.querySelectorAll('.kanban-rule-editor').length === 0 && /Configuração do Kanban salva/i.test(document.body.innerText)`);
+  const ruleSaved = await win.webContents.executeJavaScript(`document.querySelectorAll('.kanban-rule-editor').length === 0 && /Kanban salvo/i.test(document.body.innerText)`);
   if (!ruleSaved) errors.push('Kanban geral: regra/configuração não foi salva');
+  const activityPanel = await win.webContents.executeJavaScript(`(() => {
+    const button = [...document.querySelectorAll('.kanban-actions button')].find((node) => (node.textContent || '').includes('Histórico'));
+    button?.click();
+    return Boolean(button);
+  })()`);
+  await pause(140);
+  const activityVisible = await win.webContents.executeJavaScript(`Boolean(document.querySelector('.kanban-activity'))`);
+  if (!activityPanel || !activityVisible) errors.push('Kanban geral: histórico de atividade não abriu');
   await captureModal('configurar-kanban-modal', `([...document.querySelectorAll('button')].find((node) => (node.textContent || '').includes('Configurar Kanban')))?.click();`, '.kanban-modal-overlay');
+  await captureModal('kanban-negocio-modal', `document.querySelector('.kanban-card')?.click();`, '.kanban-modal-overlay');
 
+  // Venda registrada pela interface precisa mover o card e alimentar a receita.
+  await win.webContents.executeJavaScript(`document.querySelector('.kanban-card')?.click()`);
+  await pause(140);
+  await win.webContents.executeJavaScript(`(() => {
+    const box = document.querySelector('.kanban-deal-box');
+    const selects = box?.querySelectorAll('select') || [];
+    const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+    if (selects[0]) {
+      selectSetter.call(selects[0], 'won');
+      selects[0].dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  })()`);
+  await pause(100);
+  await win.webContents.executeJavaScript(`(() => {
+    const valueInput = document.querySelector('.kanban-deal-box input[inputmode="decimal"]');
+    const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    if (valueInput) {
+      inputSetter.call(valueInput, '1250,50');
+      valueInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  })()`);
+  await pause(100);
+  await win.webContents.executeJavaScript(`([...document.querySelectorAll('.kanban-modal-foot button')].find((node) => (node.textContent || '').includes('Salvar negócio')))?.click()`);
+  await pause(260);
+  const savedDeal = await win.webContents.executeJavaScript(`(() => ({
+    notice: document.body.innerText,
+    outcome: document.querySelector('.kanban-deal-box select')?.value || '',
+    value: document.querySelector('.kanban-deal-box input[inputmode="decimal"]')?.value || '',
+  }))()`);
+  if (!/Venda registrada/i.test(savedDeal.notice) || savedDeal.outcome !== 'won' || !/1\.250,50|1250,50/.test(savedDeal.value)) {
+    errors.push(`Kanban geral: venda não foi salva pela interface ${JSON.stringify(savedDeal)}`);
+  }
+  await win.webContents.executeJavaScript(`document.querySelector('.kanban-modal-overlay')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+  await pause(100);
+  await navigateTo('visão geral', 520);
+  const revenueSummary = await win.webContents.executeJavaScript(`(() => {
+    const strip = document.querySelector('.overview-deal-strip');
+    return { present: Boolean(strip), text: strip?.innerText || '' };
+  })()`);
+  if (!revenueSummary.present || !/1\.250,50/.test(revenueSummary.text) || !/Vendas fechadas\s*1/i.test(revenueSummary.text)) {
+    errors.push(`Visão Geral: receita da venda não apareceu ${JSON.stringify(revenueSummary)}`);
+  }
+  fs.writeFileSync(path.join(outputDir, 'overview-venda-1440x900.png'), (await win.capturePage()).toPNG());
+
+  // O bloco de WhatsApp é o mais sensível a tempo (wizard + QR) e já tem
+  // cobertura própria. Em iterações de Kanban/Base/Scoring, pule-o para
+  // fechar o relatório sem depender de animações do wizard.
+  const skipWhatsApp = process.env.SIGMA_QA_SKIP_WHATSAPP === '1';
+  if (!skipWhatsApp) {
   await navigateTo('whatsapp', 800);
   await captureModal('nova-conversa-modal', `document.querySelector('[data-od-id="wa-new-chat"]')?.click();`, '#chatOv');
   await captureModal('nova-campanha-modal', `document.querySelector('[data-od-id="wa-new-campaign"]')?.click();`, '.camp-wizard-backdrop');
@@ -637,6 +907,7 @@ app.whenReady().then(async () => {
   fs.writeFileSync(path.join(outputDir, 'whatsapp-campaign-offline-draft-1440x900.png'), (await win.capturePage()).toPNG());
   await win.webContents.executeJavaScript(`document.querySelector('.camp-wizard-close')?.click()`);
   await win.webContents.executeJavaScript(`document.querySelector('.sigma-campaign-head-actions .wa-icon-button')?.click()`);
+  }
 
   // Regressão do mapa: todos os leads com coordenada devem ter marcador, sem
   // corte invisível em 100 itens; registros antigos também são normalizados.
@@ -709,6 +980,15 @@ app.whenReady().then(async () => {
   }
 
   await navigateTo('configurações', 420);
+  const updateCard = await win.webContents.executeJavaScript(`(() => {
+    const card = document.querySelector('[data-od-id="settings-updates"]');
+    const checkButton = [...(card?.querySelectorAll('button') || [])].find((node) => (node.textContent || '').includes('Verificar agora'));
+    const text = card?.innerText || '';
+    return { present: Boolean(card), hasCheck: Boolean(checkButton), hasVersion: /v\\d+\\.\\d+\\.\\d+/.test(text), text: text.slice(0, 200) };
+  })()`);
+  if (!updateCard.present || !updateCard.hasCheck || !updateCard.hasVersion) {
+    errors.push(`Configurações: seção de atualizações incompleta ${JSON.stringify(updateCard)}`);
+  }
   await captureModal('limpar-base-modal', `document.querySelector('[data-od-id="settings-clear-leads"]')?.click();`, '.modal-overlay');
 
   const desktopViewports = [];
@@ -771,7 +1051,9 @@ app.whenReady().then(async () => {
   };
   await inspectDesktop({ width: 1024, height: 768, label: 'kanban', route: 'kanban', file: 'desktop-1024x768-kanban.png' });
   await inspectDesktop({ width: 1440, height: 900, label: 'scraper maps', route: 'scraper', file: 'desktop-1440x900-mapa.png' });
-  await inspectDesktop({ width: 1920, height: 1080, label: 'whatsapp', route: 'whatsapp', file: 'desktop-1920x1080-whatsapp.png' });
+  if (!skipWhatsApp) {
+    await inspectDesktop({ width: 1920, height: 1080, label: 'whatsapp', route: 'whatsapp', file: 'desktop-1920x1080-whatsapp.png' });
+  }
 
   const finalCapture = await win.capturePage();
   const viewport = finalCapture.getSize();

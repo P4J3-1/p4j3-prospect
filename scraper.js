@@ -4,8 +4,16 @@ const { extractBusinessData } = require('./utils/businessData');
 const { geocodeAddress, isValidCoord } = require('./utils/geocode');
 const { normalizeAddress } = require('./utils/address-normalizer');
 const { normalizeText } = require('./utils/text-normalizer');
+const {
+  normalizeInstagram,
+  normalizeLeadLinks,
+  normalizePhoneDisplay,
+  isSocialUrl,
+  isAggregatorUrl,
+} = require('./utils/lead-links');
 
 function normalizePlaceText(place = {}) {
+  const links = normalizeLeadLinks(place);
   return {
     ...place,
     name: normalizeText(place.name),
@@ -13,6 +21,9 @@ function normalizePlaceText(place = {}) {
     description: normalizeText(place.description),
     openingHours: normalizeText(place.openingHours),
     address: normalizeAddress(place.address),
+    phone: normalizePhoneDisplay(place.phone) || normalizeText(place.phone),
+    website: links.website,
+    instagram: links.instagram,
   };
 }
 
@@ -162,17 +173,16 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
               if (err.code === 'SCRAPE_CANCELLED') throw err;
             }
           }
-          place.instagram = '';
-          if (place.website && place.website.includes('instagram.com')) {
-            place.instagram = place.website;
-            place.website = '';
-          }
+          // O Instagram já vem do painel do lugar. O fallback fica restrito ao
+          // mesmo painel para não herdar a rede social de outro resultado.
           if (!place.instagram) {
-            const ig = await page.locator('a[href*="instagram.com"]').first();
-            if (await ig.count() > 0) place.instagram = await ig.getAttribute('href');
+            const ig = page.locator('div[role="main"] a[href*="instagram.com"]').first();
+            if (await ig.count() > 0) place.instagram = normalizeInstagram(await ig.getAttribute('href'));
           }
 
-          if (place.website && !place.website.includes('instagram.com') && !place.website.includes('facebook.com') && !place.website.includes('youtube.com')) {
+          // E-mail só faz sentido em site próprio: rede social e agregador não
+          // expõem contato da empresa de forma confiável.
+          if (place.website && !isSocialUrl(place.website) && !isAggregatorUrl(place.website)) {
             checkCancelled(cancelToken);
             place.email = await scrapeEmails(browser, place.website, onProgress, cancelToken);
           } else {

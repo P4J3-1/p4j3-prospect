@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-09-09T23:02:22.065Z",
+  "generatedAt": "2026-09-11T05:01:38.382Z",
   "version": "1.1.8",
   "desktopOnly": true,
-  "viewport": "2880x1620",
+  "viewport": "2160x1350",
   "routes": 8,
   "modals": 18,
   "controlledErrorScenarios": 4,
@@ -102,63 +102,11 @@
       "chatShell": null,
       "chatList": null,
       "chatRoom": null
-    },
-    {
-      "requested": "1920x1080",
-      "route": "whatsapp",
-      "viewport": "1920x1080",
-      "scrollWidth": 1920,
-      "noGlobalHorizontalOverflow": true,
-      "windowControls": 3,
-      "windowControlDetails": [
-        {
-          "x": 1801,
-          "y": 14,
-          "width": 28,
-          "height": 28,
-          "color": "rgb(110, 110, 110)",
-          "opacity": "1",
-          "iconWidth": 13,
-          "iconHeight": 13
-        },
-        {
-          "x": 1829,
-          "y": 14,
-          "width": 28,
-          "height": 28,
-          "color": "rgb(110, 110, 110)",
-          "opacity": "1",
-          "iconWidth": 11,
-          "iconHeight": 11
-        },
-        {
-          "x": 1857,
-          "y": 14,
-          "width": 28,
-          "height": 28,
-          "color": "rgb(110, 110, 110)",
-          "opacity": "1",
-          "iconWidth": 13,
-          "iconHeight": 13
-        }
-      ],
-      "kanbanColumns": 0,
-      "map": null,
-      "mapMarkers": 0,
-      "chatShell": {
-        "width": 1681,
-        "height": 963
-      },
-      "chatList": {
-        "width": 538,
-        "height": 963
-      },
-      "chatRoom": {
-        "width": 1143,
-        "height": 963
-      }
     }
   ],
-  "errors": [],
-  "passed": true
+  "errors": [
+    "Modal não abriu: importar-leads-modal",
+    "Base: prévia XLSX inválida {\"open\":false,\"text\":\"\"}"
+  ],
+  "passed": false
 }

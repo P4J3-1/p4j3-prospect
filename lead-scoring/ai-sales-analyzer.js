@@ -24,8 +24,8 @@ async function analyzeBatchWithSalesAI(items, settings) {
   let lastError = "";
   for (const providerConfig of providers) {
     try {
-      const json = await requestChatCompletion(providerConfig, payload);
-      const parsed = parseJsonResponse(json.choices?.[0]?.message?.content || "{}");
+      const json = await attemptProvider(providerConfig, payload);
+      const parsed = parseJsonResponse(extractProviderText(json));
       const rows = Array.isArray(parsed) ? parsed : parsed.leads || parsed.resultados || [];
       return leads.map((item, index) => {
         const input = rows.find((row) => String(row.leadId || row.id || "") === String(item.lead.id)) || rows[index] || {};
@@ -40,37 +40,142 @@ async function analyzeBatchWithSalesAI(items, settings) {
     }
   }
 
-  return leads.map((item) => fallbackSalesAnalysis(item.lead, item.siteAnalysis, item.score, settings, lastError));
+  const fallback = leads.map((item) => fallbackSalesAnalysis(item.lead, item.siteAnalysis, item.score, settings, lastError));
+  fallback.aiFailed = true;
+  fallback.aiError = lastError;
+  return fallback;
 }
 
-async function requestChatCompletion(providerConfig, payload) {
-  const res = await fetch(providerConfig.chatCompletionsUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${providerConfig.apiKey}`,
-      ...providerConfig.headers,
-    },
-    body: JSON.stringify({
-      model: providerConfig.model || providerConfig.defaultModel,
-      temperature: 0.25,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            "Voce e um analista CRO e closer B2B. Avalie copy, conversao, prova social e objecoes. Use os dados ja extraidos; nao invente. Retorne apenas JSON valido no schema pedido.",
-        },
-        { role: "user", content: JSON.stringify(payload) },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    const err = new Error(`IA falhou: HTTP ${res.status}`);
-    err.status = res.status;
-    throw err;
+// Endpoints gratuitos e gateways OpenAI-compatíveis costumam recusar
+// `response_format` e devolver 5xx em picos. Sem timeout, um provedor pendurado
+// travava o lote inteiro sem forma de cancelar.
+const REQUEST_TIMEOUT_MS = 45000;
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function requestChatCompletion(providerConfig, payload, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const body = {
+    model: providerConfig.model || providerConfig.defaultModel,
+    temperature: 0.25,
+    messages: [
+      {
+        role: "system",
+        content:
+          "Voce e um analista CRO e closer B2B. Avalie copy, conversao, prova social e objecoes. Use os dados ja extraidos; nao invente. Retorne apenas JSON valido no schema pedido.",
+      },
+      { role: "user", content: JSON.stringify(payload) },
+    ],
+  };
+  // Nem todo provedor aceita o modo JSON estrito; ele é opcional e cai no
+  // segundo passo quando o provedor recusa.
+  if (options.jsonMode !== false) body.response_format = { type: "json_object" };
+  try {
+    const res = await fetch(providerConfig.chatCompletionsUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${providerConfig.apiKey}`,
+        ...providerConfig.headers,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
+      const err = new Error(`IA falhou: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
+      err.status = res.status;
+      throw err;
+    }
+    return await res.json();
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeout = new Error(`IA não respondeu em ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s`);
+      timeout.status = 408;
+      throw timeout;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  return await res.json();
+}
+
+async function requestResponses(providerConfig, payload) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(providerConfig.endpointUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${providerConfig.apiKey}`,
+        ...providerConfig.headers,
+      },
+      body: JSON.stringify({
+        model: providerConfig.model || providerConfig.defaultModel,
+        instructions:
+          "Voce e um analista CRO e closer B2B. Avalie copy, conversao, prova social e objecoes. Use os dados ja extraidos; nao invente. Retorne apenas JSON valido no schema pedido.",
+        input: JSON.stringify(payload),
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
+      const err = new Error(`IA falhou: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
+      err.status = res.status;
+      throw err;
+    }
+    return await res.json();
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeout = new Error(`IA não respondeu em ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s`);
+      timeout.status = 408;
+      throw timeout;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Uma tentativa completa por provedor: modo JSON, depois sem modo JSON (para
+ * provedores que recusam `response_format`), com uma repetição em erro
+ * temporário. Devolve o JSON ou lança o último erro real.
+ */
+async function attemptProvider(providerConfig, payload) {
+  if (providerConfig.apiStyle === "responses") {
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await requestResponses(providerConfig, payload);
+      } catch (error) {
+        lastError = error;
+        if (attempt > 0 || !RETRYABLE_STATUS.has(Number(error?.status || 0))) break;
+        await sleep(900);
+      }
+    }
+    throw lastError || new Error("Falha desconhecida na chamada de IA");
+  }
+  const attempts = [{ jsonMode: true }, { jsonMode: false }, { jsonMode: false, retry: true }];
+  let lastError = null;
+  for (const attempt of attempts) {
+    try {
+      return await requestChatCompletion(providerConfig, payload, attempt);
+    } catch (error) {
+      lastError = error;
+      const status = Number(error?.status || 0);
+      const isJsonModeRejection = attempt.jsonMode && [400, 404, 415, 422, 500, 501].includes(status);
+      if (isJsonModeRejection) continue;
+      if (attempt.retry || !RETRYABLE_STATUS.has(status)) break;
+      await sleep(900);
+    }
+  }
+  throw lastError || new Error("Falha desconhecida na chamada de IA");
 }
 
 async function testProviderConnection(ai = {}) {
@@ -79,24 +184,64 @@ async function testProviderConnection(ai = {}) {
     throw new Error("Informe a API key antes de testar a conexão.");
   }
 
-  const response = await fetch(providerConfig.chatCompletionsUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${providerConfig.apiKey}`,
-      ...providerConfig.headers,
-    },
-    body: JSON.stringify({
-      model: providerConfig.model || providerConfig.defaultModel,
-      max_tokens: 1,
-      temperature: 0,
-      messages: [{ role: "user", content: "Responda apenas OK." }],
-    }),
+  const send = async (extra = {}) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try {
+      const isResponses = providerConfig.apiStyle === "responses";
+      const body = isResponses
+        ? {
+            model: providerConfig.model || providerConfig.defaultModel,
+            input: "Responda apenas OK.",
+            max_output_tokens: 16,
+            ...extra,
+          }
+        : {
+            model: providerConfig.model || providerConfig.defaultModel,
+            max_tokens: 4,
+            temperature: 0,
+            messages: [{ role: "user", content: "Responda apenas OK." }],
+            ...extra,
+          };
+      return await fetch(providerConfig.endpointUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${providerConfig.apiKey}`,
+          ...providerConfig.headers,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let response = await send().catch((error) => {
+    if (error?.name === "AbortError") {
+      const timeout = new Error("O provedor não respondeu em 30s. Verifique a Base URL e a conexão.");
+      timeout.status = 408;
+      throw timeout;
+    }
+    throw new Error(`Não foi possível alcançar o provedor: ${error.message}`);
   });
 
+  // Alguns gateways recusam limite curto. Repetir sem esse limite separa
+  // "parâmetro de teste recusado" de indisponibilidade real.
+  let firstFailure = "";
   if (!response.ok) {
-    const body = (await response.text()).replace(/\s+/g, " ").slice(0, 240);
-    const error = new Error(`Conexão recusada: HTTP ${response.status}${body ? ` — ${body}` : ""}`);
+    firstFailure = (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
+    if ([400, 404, 422, 500, 501, 502, 503, 504].includes(response.status)) {
+      response = await send(providerConfig.apiStyle === "responses"
+        ? { max_output_tokens: undefined }
+        : { max_tokens: undefined }).catch(() => response);
+    }
+  }
+
+  if (!response.ok) {
+    const body = firstFailure || (await response.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
+    const error = new Error(describeHttpFailure(response.status, body));
     error.status = response.status;
     throw error;
   }
@@ -104,20 +249,47 @@ async function testProviderConnection(ai = {}) {
   return {
     provider: providerConfig.provider,
     model: providerConfig.model || providerConfig.defaultModel,
-    endpoint: providerConfig.chatCompletionsUrl,
+    endpoint: providerConfig.endpointUrl,
   };
+}
+
+/** Traduz o erro do provedor para algo acionável em português. */
+function describeHttpFailure(status, body = "") {
+  const detail = body ? ` Detalhe: ${body}` : "";
+  if (/MissingSessionID|free tier can only be used in OpenCode/i.test(body)) {
+    return "Este modelo gratuito do OpenCode só funciona dentro do próprio OpenCode. No Sigma, escolha um modelo Zen com créditos (ex.: glm-5.3-flash) ou use uma chave do OpenRouter.";
+  }
+  if (/CreditsError|No payment method|add a payment method/i.test(body)) {
+    return "A chave foi reconhecida, mas o workspace do OpenCode Zen não tem forma de pagamento. Adicione créditos/faturamento no OpenCode ou use uma chave do OpenRouter.";
+  }
+  if (status === 401 || status === 403) {
+    return `Chave recusada (HTTP ${status}). Confira a API key deste provedor.`;
+  }
+  if (status === 404) {
+    return `Rota ou modelo não encontrado (HTTP 404). Confira a Base URL e o nome do modelo.${detail}`;
+  }
+  if (status === 429) {
+    return `Limite de uso atingido (HTTP 429). Aguarde alguns minutos ou use outra chave.${detail}`;
+  }
+  if (status >= 500) {
+    return `O provedor está instável agora (HTTP ${status}). A análise continua com as regras locais até ele voltar.${detail}`;
+  }
+  return `Conexão recusada: HTTP ${status}.${detail}`;
 }
 
 function resolveProviderConfig(ai = {}) {
   const provider = String(ai.provider || "openrouter").toLowerCase();
   const appName = ai.appName || "Sigma GMaps Scraper";
   if (provider === "openrouter") {
+    const endpointUrl = joinApiUrl(ai.baseUrl || "https://openrouter.ai/api/v1", "chat/completions");
     return {
       provider,
       apiKey: ai.apiKey || "",
       model: ai.model || "openrouter/free",
       defaultModel: "openrouter/free",
-      chatCompletionsUrl: joinChatUrl(ai.baseUrl || "https://openrouter.ai/api/v1"),
+      apiStyle: "chat-completions",
+      endpointUrl,
+      chatCompletionsUrl: endpointUrl,
       headers: {
         ...(ai.siteUrl ? { "HTTP-Referer": ai.siteUrl } : { "HTTP-Referer": "https://sigma-gmaps.local" }),
         "X-Title": appName,
@@ -125,36 +297,58 @@ function resolveProviderConfig(ai = {}) {
     };
   }
   if (provider === "opencode") {
-    // OpenCode Zen — endpoint OpenAI-compatible com modelos gratuitos
-    // https://opencode.ai/zen/v1/chat/completions
+    const model = ai.model || "glm-5.3-flash";
+    const apiStyle = openCodeApiStyle(model);
+    const endpointUrl = joinApiUrl(ai.baseUrl || "https://opencode.ai/zen/v1", apiStyle === "responses" ? "responses" : "chat/completions");
     return {
       provider: "opencode",
       apiKey: ai.apiKey || "",
-      model: ai.model || "deepseek-v4-flash-free",
-      defaultModel: "deepseek-v4-flash-free",
-      chatCompletionsUrl: joinChatUrl(ai.baseUrl || "https://opencode.ai/zen/v1"),
+      model,
+      defaultModel: "glm-5.3-flash",
+      apiStyle,
+      endpointUrl,
+      chatCompletionsUrl: endpointUrl,
       headers: {
         ...parseExtraHeaders(ai.extraHeaders),
         "X-Title": appName,
       },
     };
   }
+  if (provider === "nvidia") {
+    const endpointUrl = joinApiUrl(ai.baseUrl || "https://integrate.api.nvidia.com/v1", "chat/completions");
+    return {
+      provider: "nvidia",
+      apiKey: ai.apiKey || "",
+      model: ai.model || "deepseek-ai/deepseek-v4-flash",
+      defaultModel: "deepseek-ai/deepseek-v4-flash",
+      apiStyle: "chat-completions",
+      endpointUrl,
+      chatCompletionsUrl: endpointUrl,
+      headers: parseExtraHeaders(ai.extraHeaders),
+    };
+  }
   if (provider === "custom") {
+    const endpointUrl = joinApiUrl(ai.baseUrl || "", "chat/completions");
     return {
       provider,
       apiKey: ai.apiKey || "",
       model: ai.model || "gpt-4.1-mini",
       defaultModel: ai.model || "gpt-4.1-mini",
-      chatCompletionsUrl: joinChatUrl(ai.baseUrl || ""),
+      apiStyle: "chat-completions",
+      endpointUrl,
+      chatCompletionsUrl: endpointUrl,
       headers: parseExtraHeaders(ai.extraHeaders),
     };
   }
+  const endpointUrl = joinApiUrl(ai.baseUrl || "https://api.openai.com/v1", "chat/completions");
   return {
     provider: "openai",
     apiKey: ai.apiKey || "",
     model: ai.model || "gpt-4.1-mini",
     defaultModel: "gpt-4.1-mini",
-    chatCompletionsUrl: joinChatUrl(ai.baseUrl || "https://api.openai.com/v1"),
+    apiStyle: "chat-completions",
+    endpointUrl,
+    chatCompletionsUrl: endpointUrl,
     headers: {},
   };
 }
@@ -165,7 +359,7 @@ function resolveProviderChain(ai = {}) {
   const chain = [primary, ...extras.map((provider) => resolveProviderConfig({ ...ai, ...provider }))];
   const seen = new Set();
   return chain.filter((provider) => {
-    const key = `${provider.provider}|${provider.chatCompletionsUrl}|${provider.model}`;
+    const key = `${provider.provider}|${provider.endpointUrl}|${provider.model}`;
     if (!provider.apiKey || seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -188,11 +382,30 @@ function hasAnyProviderKey(ai = {}) {
   return parseProviderFallbacks(ai).some((provider) => provider.apiKey);
 }
 
-function joinChatUrl(baseUrl) {
+function joinApiUrl(baseUrl, route) {
   const clean = String(baseUrl || "").trim().replace(/\/+$/, "");
   if (!clean) throw new Error("Base URL do provedor de IA nao configurada");
-  if (/\/chat\/completions$/i.test(clean)) return clean;
-  return `${clean}/chat/completions`;
+  if (/\/(chat\/completions|responses)$/i.test(clean)) {
+    return clean.replace(/\/(chat\/completions|responses)$/i, `/${route}`);
+  }
+  return `${clean}/${route}`;
+}
+
+function openCodeApiStyle(model) {
+  return /^(muse-|gpt-|grok-)/i.test(String(model || "")) ? "responses" : "chat-completions";
+}
+
+function extractProviderText(json = {}) {
+  const chat = json?.choices?.[0]?.message?.content;
+  if (typeof chat === "string" && chat.trim()) return chat;
+  if (typeof json.output_text === "string" && json.output_text.trim()) return json.output_text;
+  const chunks = [];
+  for (const item of Array.isArray(json.output) ? json.output : []) {
+    for (const content of Array.isArray(item?.content) ? item.content : []) {
+      if (typeof content?.text === "string") chunks.push(content.text);
+    }
+  }
+  return chunks.join("\n") || "{}";
 }
 
 function parseExtraHeaders(value) {
@@ -453,4 +666,13 @@ function clamp(value) {
   return Math.max(0, Math.min(100, Math.round(Number(value || 0))));
 }
 
-module.exports = { analyzeWithSalesAI, analyzeBatchWithSalesAI, fallbackSalesAnalysis, resolveProviderConfig, resolveProviderChain, testProviderConnection };
+module.exports = {
+  analyzeWithSalesAI,
+  analyzeBatchWithSalesAI,
+  fallbackSalesAnalysis,
+  resolveProviderConfig,
+  resolveProviderChain,
+  testProviderConnection,
+  extractProviderText,
+  openCodeApiStyle,
+};

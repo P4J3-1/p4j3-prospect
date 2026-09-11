@@ -1,8 +1,25 @@
+// Preset recomendado. Todo peso aqui pode ser ajustado em
+// Configurar análise → Regras do score; o motor lê exatamente estes números.
 const DEFAULT_RULES = {
   thresholds: {
     ignoreBelow: 40,
     goodFrom: 60,
     highFrom: 75,
+  },
+  commercialFit: {
+    reviewsHigh: 200,
+    reviewsMid: 50,
+    reviewsLow: 10,
+    reviewsHighPoints: 7,
+    reviewsMidPoints: 5,
+    reviewsLowPoints: 3,
+    ratingHigh: 4.5,
+    ratingMid: 4,
+    ratingHighPoints: 5,
+    ratingMidPoints: 3,
+    priorityCategoryPoints: 8,
+    otherCategoryPoints: 4,
+    maxPoints: 20,
   },
   digitalPain: {
     // Sem site ainda vale a pena, mas NÃO passa na frente de site com vários problemas.
@@ -22,14 +39,58 @@ const DEFAULT_RULES = {
     httpErrorsPoints: 5,
     multiPainBoostFrom: 3,
     multiPainBoostPoints: 10,
+    maxPoints: 45,
+  },
+  contactability: {
+    hasPhonePoints: 5,
+    hasWhatsappPoints: 5,
+    hasEmailPoints: 3,
+    hasInstagramPoints: 2,
+    maxPoints: 15,
+  },
+  conversionPotential: {
+    noWebsiteHighBonus: 12,
+    noWebsiteLowBonus: 8,
+    hasWebsitePoints: 6,
+    missingPixelPoints: 5,
+    missingWhatsappPoints: 4,
+    missingFormPoints: 3,
+    ctaLowPoints: 4,
+    ctaMediaPoints: 2,
+    missingHttpsPoints: 2,
+    notResponsivePoints: 2,
+    strongReviewsPoints: 3,
+    healthySitePenalty: 8,
+    maxPoints: 25,
   },
 };
 
+const PRIORITY_CATEGORY = /(cl[ií]nica|odont|est[eé]tica|advoc|imobili|arquitet|construt|academia|restaurante|hotel|pousada|escola|curso|oficina|auto|turismo|delivery|m[eé]dico)/i;
+
+function number(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+/** Mescla o preset com o que o usuário salvou, grupo por grupo. */
 function resolveRules(settings) {
-  const rules = (settings && settings.rules) || {};
-  const digitalPain = { ...DEFAULT_RULES.digitalPain, ...(rules.digitalPain || {}) };
-  const thresholds = { ...DEFAULT_RULES.thresholds, ...(rules.thresholds || {}) };
-  return { digitalPain, thresholds };
+  const saved = (settings && settings.rules) || {};
+  const merge = (group) => {
+    const base = DEFAULT_RULES[group];
+    const patch = saved[group] && typeof saved[group] === 'object' ? saved[group] : {};
+    const merged = { ...base };
+    for (const key of Object.keys(base)) {
+      if (patch[key] != null && Number.isFinite(Number(patch[key]))) merged[key] = Number(patch[key]);
+    }
+    return merged;
+  };
+  return {
+    thresholds: merge('thresholds'),
+    commercialFit: merge('commercialFit'),
+    digitalPain: merge('digitalPain'),
+    contactability: merge('contactability'),
+    conversionPotential: merge('conversionPotential'),
+  };
 }
 
 function hasMediaPixel(site = {}) {
@@ -55,16 +116,16 @@ function listSitePains(company, site = {}, digitalPainRules = DEFAULT_RULES.digi
 function calculateScore(lead, siteAnalysis = {}, aiSignal = {}, settings = {}) {
   const company = lead.company || {};
   const rules = resolveRules(settings);
-  const commercialFit = scoreCommercialFit(company);
+  const commercialFit = scoreCommercialFit(company, rules.commercialFit);
   const digitalPain = scoreDigitalPain(company, siteAnalysis, rules.digitalPain);
-  const contactability = scoreContactability(company, siteAnalysis);
-  const conversionPotential = scoreConversionPotential(company, siteAnalysis);
+  const contactability = scoreContactability(company, siteAnalysis, rules.contactability);
+  const conversionPotential = scoreConversionPotential(company, siteAnalysis, rules.conversionPotential);
   const ai = Number(aiSignal.scoreContribution || 0);
   let value = clamp(commercialFit + digitalPain + contactability + conversionPotential + ai, 0, 100);
 
   // Prioridade alta = tem site com várias falhas fáceis de vender (pixel, HTTPS, mobile, WhatsApp…).
   const pains = listSitePains(company, siteAnalysis, rules.digitalPain);
-  const strongPains = pains.filter((p) => ["https", "mobile", "whatsapp", "pixel", "slow"].includes(p));
+  const strongPains = pains.filter((pain) => ["https", "mobile", "whatsapp", "pixel", "slow"].includes(pain));
   if (company.website && strongPains.length >= 2 && commercialFit >= 8) {
     value = Math.max(value, rules.thresholds.highFrom);
   }
@@ -92,90 +153,86 @@ function calculateScore(lead, siteAnalysis = {}, aiSignal = {}, settings = {}) {
   };
 }
 
-function scoreCommercialFit(company) {
+function scoreCommercialFit(company, rules = DEFAULT_RULES.commercialFit) {
   let score = 0;
   const reviews = Number(company.reviewCount || company.totalReviews || 0);
   const rating = Number(company.rating || 0);
   const category = String(company.category || "").toLowerCase();
-  if (reviews >= 200) score += 7;
-  else if (reviews >= 50) score += 5;
-  else if (reviews >= 10) score += 3;
-  if (rating >= 4.5) score += 5;
-  else if (rating >= 4) score += 3;
-  if (/(cl[ií]nica|odont|est[eé]tica|advoc|imobili|arquitet|construt|academia|restaurante|hotel|pousada|escola|curso|oficina|auto|turismo|delivery|m[eé]dico)/i.test(category)) {
-    score += 8;
-  } else if (category) {
-    score += 4;
-  }
-  return clamp(score, 0, 20);
+  if (reviews >= rules.reviewsHigh) score += rules.reviewsHighPoints;
+  else if (reviews >= rules.reviewsMid) score += rules.reviewsMidPoints;
+  else if (reviews >= rules.reviewsLow) score += rules.reviewsLowPoints;
+  if (rating >= rules.ratingHigh) score += rules.ratingHighPoints;
+  else if (rating >= rules.ratingMid) score += rules.ratingMidPoints;
+  if (PRIORITY_CATEGORY.test(category)) score += rules.priorityCategoryPoints;
+  else if (category) score += rules.otherCategoryPoints;
+  return clamp(score, 0, rules.maxPoints);
 }
 
-function scoreDigitalPain(company, site, digitalPainRules) {
-  const r = digitalPainRules;
-  if (!company.website) return clamp(r.noWebsitePoints, 0, 40);
+function scoreDigitalPain(company, site, rules) {
+  if (!company.website) return clamp(rules.noWebsitePoints, 0, rules.maxPoints);
   if (site.digitalPresence && site.digitalPresence.reachable !== true) return 0;
 
   let score = 0;
-  if (!site.hasHttps) score += r.missingHttpsPoints;
-  if (!site.hasOwnDomain) score += r.missingOwnDomainPoints;
-  if ((site.performance?.loadTimeMs || 0) > r.slowLoadMs) score += r.slowLoadPoints;
-  if (!site.content?.title || site.content.title.length < 18) score += r.shortTitlePoints;
-  if (!site.content?.description) score += r.missingDescriptionPoints;
-  if (!site.content?.h1) score += r.missingH1Points;
-  if (site.mobile?.isResponsive === false) score += r.notResponsivePoints;
-  if (!site.conversion?.hasWhatsappButton) score += r.missingWhatsappPoints;
-  if (!site.conversion?.hasForm) score += r.missingFormPoints;
-  if (!hasMediaPixel(site)) score += r.missingPixelPoints;
-  if (!site.tracking?.googleAnalytics && !site.tracking?.googleTagManager) score += r.missingTrackingPoints;
-  if ((site.crawl?.httpErrors || []).length > 0) score += r.httpErrorsPoints;
+  if (!site.hasHttps) score += rules.missingHttpsPoints;
+  if (!site.hasOwnDomain) score += rules.missingOwnDomainPoints;
+  if ((site.performance?.loadTimeMs || 0) > rules.slowLoadMs) score += rules.slowLoadPoints;
+  if (!site.content?.title || site.content.title.length < 18) score += rules.shortTitlePoints;
+  if (!site.content?.description) score += rules.missingDescriptionPoints;
+  if (!site.content?.h1) score += rules.missingH1Points;
+  if (site.mobile?.isResponsive === false) score += rules.notResponsivePoints;
+  if (!site.conversion?.hasWhatsappButton) score += rules.missingWhatsappPoints;
+  if (!site.conversion?.hasForm) score += rules.missingFormPoints;
+  if (!hasMediaPixel(site)) score += rules.missingPixelPoints;
+  if (!site.tracking?.googleAnalytics && !site.tracking?.googleTagManager) score += rules.missingTrackingPoints;
+  if ((site.crawl?.httpErrors || []).length > 0) score += rules.httpErrorsPoints;
 
-  const painCount = listSitePains(company, site, r).length;
-  if (painCount >= (r.multiPainBoostFrom || 3)) {
-    score += r.multiPainBoostPoints || 10;
+  const painCount = listSitePains(company, site, rules).length;
+  if (painCount >= rules.multiPainBoostFrom) {
+    score += rules.multiPainBoostPoints;
   }
-  return clamp(score, 0, 45);
+  return clamp(score, 0, rules.maxPoints);
 }
 
-function scoreContactability(company, site) {
+function scoreContactability(company, site, rules = DEFAULT_RULES.contactability) {
   let score = 0;
-  if (company.phone) score += 5;
-  if (company.whatsapp || site.conversion?.hasWhatsappButton) score += 5;
-  if (company.email) score += 3;
-  if (company.instagram) score += 2;
-  return clamp(score, 0, 15);
+  if (company.phone) score += rules.hasPhonePoints;
+  if (company.whatsapp || site.conversion?.hasWhatsappButton) score += rules.hasWhatsappPoints;
+  if (company.email) score += rules.hasEmailPoints;
+  if (company.instagram) score += rules.hasInstagramPoints;
+  return clamp(score, 0, rules.maxPoints);
 }
 
 /**
  * Potencial de conversão = chance de você VENDER melhoria (não se o site já converte bem).
  * Site com falhas de conversão sobe; site “redondo” desce.
  */
-function scoreConversionPotential(company, site) {
+function scoreConversionPotential(company, site, rules = DEFAULT_RULES.conversionPotential) {
   let score = 0;
   if (!company.website) {
-    return Number(company.reviewCount || 0) >= 50 ? 12 : 8;
+    return Number(company.reviewCount || 0) >= 50 ? rules.noWebsiteHighBonus : rules.noWebsiteLowBonus;
   }
   if (site.digitalPresence && site.digitalPresence.reachable !== true) return 0;
 
   // Tem site = dá para oferecer reforma/landing/sistema.
-  score += 6;
+  score += rules.hasWebsitePoints;
 
-  if (!hasMediaPixel(site)) score += 5;
-  if (!site.conversion?.hasWhatsappButton) score += 4;
-  if (!site.conversion?.hasForm) score += 3;
-  if (site.conversion?.ctaStrength === "baixa") score += 4;
-  else if (site.conversion?.ctaStrength === "media") score += 2;
-  if (!site.hasHttps) score += 2;
-  if (site.mobile?.isResponsive === false) score += 2;
+  if (!hasMediaPixel(site)) score += rules.missingPixelPoints;
+  if (!site.conversion?.hasWhatsappButton) score += rules.missingWhatsappPoints;
+  if (!site.conversion?.hasForm) score += rules.missingFormPoints;
+  if (site.conversion?.ctaStrength === "baixa") score += rules.ctaLowPoints;
+  else if (site.conversion?.ctaStrength === "media") score += rules.ctaMediaPoints;
+  if (!site.hasHttps) score += rules.missingHttpsPoints;
+  if (site.mobile?.isResponsive === false) score += rules.notResponsivePoints;
 
   // Bom volume no Google = lead que já atrai visita e pode converter melhor.
-  if (Number(company.reviewCount || 0) >= 50 && Number(company.rating || 0) >= 4) score += 3;
+  if (Number(company.reviewCount || 0) >= 50 && Number(company.rating || 0) >= 4) score += rules.strongReviewsPoints;
 
   // Site já “saudável” tem menos potencial de venda imediata.
   if (hasMediaPixel(site) && site.conversion?.hasWhatsappButton && site.hasHttps && site.mobile?.isResponsive !== false) {
-    score = Math.max(0, score - 8);
+    score = Math.max(0, score - rules.healthySitePenalty);
   }
 
-  return clamp(score, 0, 25);
+  return clamp(score, 0, rules.maxPoints);
 }
 
 function buildReasons(company, site, score, pains = []) {
@@ -211,9 +268,9 @@ function buildReasons(company, site, score, pains = []) {
 
 function classify(score, thresholds) {
   const t = thresholds || DEFAULT_RULES.thresholds;
-  const highFrom = Number.isFinite(Number(t.highFrom)) ? Number(t.highFrom) : 75;
-  const goodFrom = Number.isFinite(Number(t.goodFrom)) ? Number(t.goodFrom) : 60;
-  const ignoreBelow = Number.isFinite(Number(t.ignoreBelow)) ? Number(t.ignoreBelow) : 40;
+  const highFrom = number(t.highFrom, DEFAULT_RULES.thresholds.highFrom);
+  const goodFrom = number(t.goodFrom, DEFAULT_RULES.thresholds.goodFrom);
+  const ignoreBelow = number(t.ignoreBelow, DEFAULT_RULES.thresholds.ignoreBelow);
   if (score < ignoreBelow) return "ignorar";
   if (score < goodFrom) return "baixa";
   if (score < highFrom) return "boa";
@@ -233,4 +290,16 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, Math.round(Number(value || 0))));
 }
 
-module.exports = { calculateScore, classify, DEFAULT_RULES, listSitePains, hasMediaPixel, buildReasons };
+module.exports = {
+  calculateScore,
+  classify,
+  DEFAULT_RULES,
+  resolveRules,
+  listSitePains,
+  hasMediaPixel,
+  buildReasons,
+  scoreCommercialFit,
+  scoreContactability,
+  scoreConversionPotential,
+  scoreDigitalPain,
+};

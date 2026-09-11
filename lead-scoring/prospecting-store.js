@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { DEFAULT_RULES } = require("./scoring-engine");
 
 function websiteValue(lead) {
   return String(lead?.company?.website || lead?.website || "").trim();
@@ -68,9 +69,9 @@ class ProspectingStore {
       if (!hasKey) {
         this.settings.ai = {
           ...(this.settings.ai || {}),
-          provider: this.settings.ai?.provider || "opencode",
-          model: this.settings.ai?.model || "deepseek-v4-flash-free",
-          baseUrl: this.settings.ai?.baseUrl || "https://opencode.ai/zen/v1",
+          provider: this.settings.ai?.provider || "openrouter",
+          model: this.settings.ai?.model || "openrouter/free",
+          baseUrl: this.settings.ai?.baseUrl || "https://openrouter.ai/api/v1",
           siteUrl: this.settings.ai?.siteUrl || "https://sigma-gmaps.local",
           fallbackProviders:
             this.settings.ai?.fallbackProviders ||
@@ -85,22 +86,24 @@ class ProspectingStore {
     }
     if (dirty) this.saveSettings();
 
-    // v3: novas instalações usam OpenCode Zen. Só migra o antigo preset
-    // OpenRouter sem chave; uma escolha ou chave do usuário nunca é substituída.
-    if (!this.settings.analysis?.openCodeDefaultApplied) {
+    // v4: OpenRouter é o padrão. Migra apenas configurações automáticas sem
+    // chave; uma escolha já autenticada pelo usuário nunca é substituída.
+    if (!this.settings.analysis?.openRouterDefaultApplied) {
       const ai = this.settings.ai || {};
-      const isLegacyOpenRouterDefault = ai.provider === "openrouter" && (!ai.model || ai.model === "openrouter/free");
       const hasKey = !!(ai.apiKey && ai.apiKey !== "********");
-      if (!hasKey && (isLegacyOpenRouterDefault || !ai.provider)) {
+      const isAutomaticDefault = !ai.provider
+        || ai.provider === "opencode"
+        || (ai.provider === "openrouter" && (!ai.model || ai.model === "openrouter/free"));
+      if (!hasKey && isAutomaticDefault) {
         this.settings.ai = {
           ...ai,
-          provider: "opencode",
-          model: "deepseek-v4-flash-free",
-          baseUrl: "https://opencode.ai/zen/v1",
+          provider: "openrouter",
+          model: "openrouter/free",
+          baseUrl: "https://openrouter.ai/api/v1",
           fallbackProviders: "[]",
         };
       }
-      this.settings.analysis = { ...(this.settings.analysis || {}), openCodeDefaultApplied: true };
+      this.settings.analysis = { ...(this.settings.analysis || {}), openRouterDefaultApplied: true };
       this.saveSettings();
     }
   }
@@ -324,6 +327,55 @@ class ProspectingStore {
     return { ...group, count: ids.length };
   }
 
+  /**
+   * Substitui a lista inteira de grupos pelo que o renderer enviou. É um
+   * replace idempotente: mantém os dois lados iguais sem operações parciais
+   * que possam divergir (era o motivo de grupos sumirem nas campanhas).
+   */
+  replaceGroups(list) {
+    const next = {};
+    for (const raw of (Array.isArray(list) ? list : []).slice(0, 500)) {
+      const id = String(raw?.id || "").trim().slice(0, 80);
+      const name = String(raw?.name || "").trim().slice(0, 80);
+      if (!id || !name) continue;
+      const ids = uniqueIds(raw?.leadIds || raw?.members);
+      next[id] = {
+        id,
+        name,
+        description: String(raw?.description || "").slice(0, 240),
+        color: String(raw?.color || pickGroupColor()).slice(0, 20),
+        leadIds: ids,
+        segment: raw?.segment && typeof raw.segment === "object" ? raw.segment : null,
+        createdAt: Number(raw?.createdAt || raw?.created) || Date.now(),
+        updatedAt: Number(raw?.updatedAt || raw?.updated) || Date.now(),
+      };
+    }
+    this.groups = next;
+    this._rebuildLeadGroupIds();
+    this.saveGroups();
+    this.save();
+    return this.listGroups();
+  }
+
+  /** Recalcula groupIds dos leads analisados a partir dos grupos atuais. */
+  _rebuildLeadGroupIds() {
+    const byLead = new Map();
+    for (const group of Object.values(this.groups)) {
+      for (const leadId of group.leadIds || []) {
+        const key = String(leadId);
+        if (!this.leads[key]) continue;
+        byLead.set(key, [...(byLead.get(key) || []), group.id]);
+      }
+    }
+    for (const lead of Object.values(this.leads)) {
+      const next = byLead.get(String(lead.id)) || [];
+      const current = Array.isArray(lead.groupIds) ? lead.groupIds.map(String) : [];
+      if (current.length === next.length && next.every((id) => current.includes(id))) continue;
+      lead.groupIds = next;
+      lead.updatedAt = Date.now();
+    }
+  }
+
   updateGroup(id, patch = {}) {
     const group = this.groups[id];
     if (!group) throw new Error("Grupo não encontrado");
@@ -468,10 +520,10 @@ function defaultSettings() {
     },
     ai: {
       enabled: false,
-      provider: "opencode",
+      provider: "openrouter",
       apiKey: "",
-      model: "deepseek-v4-flash-free",
-      baseUrl: "https://opencode.ai/zen/v1",
+      model: "openrouter/free",
+      baseUrl: "https://openrouter.ai/api/v1",
       siteUrl: "https://sigma-scraper.local",
       appName: "Sigma Scraper",
       extraHeaders: "",
@@ -492,74 +544,15 @@ function defaultSettings() {
   };
 }
 
-// Preset recomendado de regras de scoring. O usuário pode ajustar livremente,
-// mas o sistema já vem pronto para rodar com bom ajuste sem configuração prévia.
+// Preset recomendado de regras de scoring. Fonte única: o próprio motor.
+// O usuário pode ajustar livremente, mas o sistema já vem pronto para rodar
+// com bom ajuste sem configuração prévia.
 function defaultRules() {
-  return {
-    thresholds: {
-      ignoreBelow: 40,
-      goodFrom: 60,
-      highFrom: 75,
-    },
-    commercialFit: {
-      reviewsHigh: 200,
-      reviewsMid: 50,
-      reviewsLow: 10,
-      reviewsHighPoints: 7,
-      reviewsMidPoints: 5,
-      reviewsLowPoints: 3,
-      ratingHigh: 4.5,
-      ratingMid: 4,
-      ratingHighPoints: 5,
-      ratingMidPoints: 3,
-      priorityCategoryPoints: 8,
-      otherCategoryPoints: 4,
-      maxPoints: 20,
-    },
-    digitalPain: {
-      // Alta prioridade = TEM site com falhas (pixel, HTTPS, mobile, WhatsApp…)
-      noWebsitePoints: 16,
-      missingHttpsPoints: 9,
-      missingOwnDomainPoints: 4,
-      slowLoadMs: 3500,
-      slowLoadPoints: 7,
-      shortTitlePoints: 3,
-      missingDescriptionPoints: 3,
-      missingH1Points: 3,
-      notResponsivePoints: 9,
-      missingWhatsappPoints: 8,
-      missingFormPoints: 5,
-      missingTrackingPoints: 4,
-      missingPixelPoints: 9,
-      httpErrorsPoints: 5,
-      multiPainBoostFrom: 3,
-      multiPainBoostPoints: 10,
-      maxPoints: 45,
-    },
-    contactability: {
-      hasPhonePoints: 5,
-      hasWhatsappPoints: 5,
-      hasEmailPoints: 3,
-      hasInstagramPoints: 2,
-      maxPoints: 15,
-    },
-    conversionPotential: {
-      noWebsiteHighBonus: 12,
-      noWebsiteLowBonus: 8,
-      hasWebsitePoints: 6,
-      missingPixelPoints: 5,
-      missingWhatsappPoints: 4,
-      missingFormPoints: 3,
-      ctaLowPoints: 4,
-      ctaMediaPoints: 2,
-      strongReviewsPoints: 3,
-      maxPoints: 25,
-    },
-  };
+  return JSON.parse(JSON.stringify(DEFAULT_RULES));
 }
 
 function mergeSettings(base, patch) {
-  const rules = mergeRules(defaultRules(), patch.rules);
+  const rules = mergeRules(base?.rules, patch?.rules);
   const out = {
     ...base,
     ...patch,
@@ -571,11 +564,15 @@ function mergeSettings(base, patch) {
   return out;
 }
 
+// Preset → configuração atual → patch. Um patch parcial (ex.: só faixas de
+// prioridade) nunca apaga o que o usuário já tinha ajustado nos outros grupos.
 function mergeRules(base, patch) {
-  if (!patch || typeof patch !== "object") return base;
+  const defaults = defaultRules();
+  const current = base && typeof base === 'object' ? base : {};
+  const incoming = patch && typeof patch === 'object' ? patch : {};
   const out = {};
-  for (const key of Object.keys(base)) {
-    out[key] = { ...base[key], ...(patch[key] || {}) };
+  for (const key of Object.keys(defaults)) {
+    out[key] = { ...defaults[key], ...(current[key] || {}), ...(incoming[key] || {}) };
   }
   return out;
 }
@@ -616,4 +613,4 @@ function hasAnyPixel(lead) {
   );
 }
 
-module.exports = { ProspectingStore, createLeadId, defaultSettings };
+module.exports = { ProspectingStore, createLeadId, defaultSettings, defaultRules, mergeSettings };

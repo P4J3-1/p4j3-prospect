@@ -2,9 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const { normalizeAddress } = require('./address-normalizer');
 const { isDisplayTextKey, normalizeText } = require('./text-normalizer');
+const { normalizeLeadLinks } = require('./lead-links');
 
-const MIGRATION_ID = 'lead-text-normalization-v2';
+const MIGRATION_ID = 'lead-normalization-v3';
 const ADDRESS_KEYS = new Set(['address', 'endereco']);
+const WEBSITE_KEYS = ['website', 'site'];
+const INSTAGRAM_KEYS = ['instagram', 'ig'];
 const LOCAL_STORAGE_KEYS = [
   'sigma_leads',
   'sigma_scoring',
@@ -69,6 +72,53 @@ function normalizeAddressFields(value, stats, seen = new WeakSet(), pathLabel = 
       continue;
     }
     if (current && typeof current === 'object') normalizeAddressFields(current, stats, seen, childPath);
+  }
+  return value;
+}
+
+/**
+ * Limpa website/instagram já salvos: link do Google deixa de aparecer como
+ * site da empresa e Instagram passa a ser @handle, nunca URL completa.
+ */
+function normalizeLinkFields(value, stats, seen = new WeakSet(), pathLabel = '') {
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value)) return value;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => normalizeLinkFields(item, stats, seen, `${pathLabel}[${index}]`));
+    return value;
+  }
+
+  const hasWebsiteKey = WEBSITE_KEYS.some((key) => typeof value[key] === 'string' || value[key] === null);
+  const hasInstagramKey = INSTAGRAM_KEYS.some((key) => typeof value[key] === 'string' || value[key] === null);
+  if (hasWebsiteKey || hasInstagramKey) {
+    const links = normalizeLeadLinks(value);
+    for (const key of WEBSITE_KEYS) {
+      if (value[key] === undefined) continue;
+      stats.fields += 1;
+      if (value[key] !== links.website) {
+        if (stats.examples.length < 5) stats.examples.push({ path: pathLabel ? `${pathLabel}.${key}` : key, before: value[key], after: links.website });
+        value[key] = links.website;
+        stats.changed += 1;
+      }
+    }
+    for (const key of INSTAGRAM_KEYS) {
+      if (value[key] === undefined) continue;
+      stats.fields += 1;
+      if (value[key] !== links.instagram) {
+        if (stats.examples.length < 5) stats.examples.push({ path: pathLabel ? `${pathLabel}.${key}` : key, before: value[key], after: links.instagram });
+        value[key] = links.instagram;
+        stats.changed += 1;
+      }
+    }
+  }
+
+  for (const [key, current] of Object.entries(value)) {
+    if (String(key).toLowerCase() === 'raw') continue;
+    if (current && typeof current === 'object') {
+      normalizeLinkFields(current, stats, seen, pathLabel ? `${pathLabel}.${key}` : key);
+    }
   }
   return value;
 }
@@ -157,7 +207,8 @@ function migrateExistingData(userDataPath, options = {}) {
   for (const filePath of files) {
     const result = migrateJsonFile(filePath, backupDir, (value, stats) => {
       if (path.basename(filePath) === 'geocode-cache.json') return normalizeGeocodeCache(value, stats);
-      return normalizeAddressFields(value, stats);
+      normalizeAddressFields(value, stats);
+      return normalizeLinkFields(value, stats);
     });
     reports.push({ ...result, file: path.relative(root, filePath) });
     if (result.status === 'migrated') changed = true;
@@ -175,6 +226,7 @@ function migrateExistingData(userDataPath, options = {}) {
     const stats = createStats(`localStorage:${key}`);
     const value = clone(parsed.value);
     normalizeAddressFields(value, stats);
+    normalizeLinkFields(value, stats);
     if (stats.changed) {
       localStorageUpdates[key] = JSON.stringify(value);
       localStorageReport.push({ key, ...stats, status: 'migrated' });
@@ -215,5 +267,6 @@ module.exports = {
   MIGRATION_ID,
   LOCAL_STORAGE_KEYS,
   normalizeAddressFields,
+  normalizeLinkFields,
   migrateExistingData,
 };

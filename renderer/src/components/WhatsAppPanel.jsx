@@ -30,6 +30,7 @@ import {
   ChevronLeft,
   Check,
   Clock,
+  Bell,
   BarChart3,
   Sparkles,
   Reply,
@@ -40,6 +41,7 @@ import {
 } from 'lucide-react';
 import TriggersManagerModal from './TriggersManagerModal';
 import ChatVoicePlayer from './ChatVoicePlayer';
+import { resolveGroupMembers } from '../leadMatch.mjs';
 
 /** Isola crash de um player de áudio para não derrubar o chat inteiro */
 class VoicePlayerBoundary extends React.Component {
@@ -234,6 +236,10 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [scrapeSearches, setScrapeSearches] = useState([]); // { id, label, count, withPhone }
   const [scrapeLeadPool, setScrapeLeadPool] = useState([]); // leads do scraping em memória
   const [scoringGroups, setScoringGroups] = useState([]);
+  // Membros resolvidos contra a base de leads. O grupo guarda chaves de
+  // identidade (telefone, nome+endereço), então a resolução precisa acontecer
+  // aqui — o serviço sozinho não consegue ligar grupo → telefone para discar.
+  const [groupResolvedLeads, setGroupResolvedLeads] = useState(() => new Map());
   const [scoringLeadPool, setScoringLeadPool] = useState([]); // leads analisados
   const [scoringPriorityFilter, setScoringPriorityFilter] = useState('all'); // all | alta | media | baixa
   const [recipientBrowseFilter, setRecipientBrowseFilter] = useState('');
@@ -263,6 +269,14 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [newChatSearch, setNewChatSearch] = useState('');
   const [newChatBusy, setNewChatBusy] = useState(false);
   const [newChatError, setNewChatError] = useState('');
+  const [directChatPending, setDirectChatPending] = useState(null);
+  const [chatContextMenu, setChatContextMenu] = useState(null);
+  const [chatReminderTarget, setChatReminderTarget] = useState(null);
+  const [chatReminderDraft, setChatReminderDraft] = useState({ at: '', note: '' });
+  const [chatKanbanCard, setChatKanbanCard] = useState(null);
+  const [chatKanbanColumns, setChatKanbanColumns] = useState([]);
+  const [chatKanbanBusy, setChatKanbanBusy] = useState(false);
+  const [chatKanbanValue, setChatKanbanValue] = useState('');
   const [forwardMessage, setForwardMessage] = useState(null);
   const [forwardSearch, setForwardSearch] = useState('');
   const [forwardBusy, setForwardBusy] = useState(false);
@@ -903,6 +917,140 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   /** JID correto para enviar (evita usar dígitos de @lid como se fossem telefone). */
   const getSendJid = () => activeChatMeta?.sendJid || activeChatMeta?.phoneJid || activeChatJid;
 
+  const getChatPhone = (chat) => String(chat?.phone || chat?.phoneNumber || chat?.jid || '').replace(/\D/g, '');
+  const findKanbanCardForChat = (chat, board) => {
+    const phone = getChatPhone(chat);
+    const name = String(chat?.name || '').trim().toLocaleLowerCase('pt-BR');
+    return (board?.cards || []).find((card) => {
+      const profile = card?.entity?.profile || {};
+      const cardPhone = String(profile.phone || profile.whatsapp || '').replace(/\D/g, '');
+      const cardName = String(profile.name || '').trim().toLocaleLowerCase('pt-BR');
+      return (phone && cardPhone && (cardPhone === phone || cardPhone.endsWith(phone) || phone.endsWith(cardPhone)))
+        || (name && cardName && name === cardName);
+    }) || null;
+  };
+
+  const openChatContextMenu = async (event, chat) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setChatContextMenu({ chat, x: event.clientX, y: event.clientY, loading: true });
+    try {
+      const result = await window.kanbanAPI?.getBoard?.();
+      const board = result?.board || result;
+      setChatContextMenu((current) => current?.chat === chat ? { ...current, loading: false } : current);
+      setChatKanbanColumns(board?.board?.columns || []);
+      setChatKanbanCard(findKanbanCardForChat(chat, board));
+    } catch {
+      setChatContextMenu((current) => current?.chat === chat ? { ...current, loading: false } : current);
+      setChatKanbanColumns([]);
+      setChatKanbanCard(null);
+    }
+  };
+
+  const openChatReminder = () => {
+    const target = chatContextMenu?.chat || null;
+    let standalone = null;
+    try {
+      const reminders = JSON.parse(localStorage.getItem('sigma_whatsapp_reminders') || '[]');
+      const key = getChatPhone(target) || target?.jid || '';
+      standalone = Array.isArray(reminders).find((item) => item.key === key || (item.jid && item.jid === target?.jid)) || null;
+    } catch { /* histórico local indisponível não impede abrir o modal */ }
+    setChatReminderDraft({
+      at: chatKanbanCard?.reminderAt
+        ? new Date(Number(chatKanbanCard.reminderAt)).toISOString().slice(0, 16)
+        : standalone?.reminderAt ? new Date(Number(standalone.reminderAt)).toISOString().slice(0, 16) : '',
+      note: chatKanbanCard?.reminderNote || standalone?.note || '',
+    });
+    setChatReminderTarget(target);
+    setChatContextMenu(null);
+  };
+
+  const saveChatReminder = async () => {
+    setChatKanbanBusy(true);
+    try {
+      if (chatKanbanCard && window.kanbanAPI?.recordDeal) {
+        const response = await window.kanbanAPI.recordDeal({
+          entityKey: chatKanbanCard.entityKey,
+          outcome: chatKanbanCard.dealStatus || 'open',
+          value: chatKanbanCard.dealValue || 0,
+          note: chatKanbanCard.dealNote || '',
+          reminderAt: chatReminderDraft.at,
+          reminderNote: chatReminderDraft.note,
+        });
+        if (response?.success === false) throw new Error(response.error || 'Não foi possível salvar o lembrete.');
+        window.dispatchEvent(new CustomEvent('sigma:deal-updated', { detail: { board: response.board } }));
+      } else {
+        const key = getChatPhone(chatReminderTarget) || chatReminderTarget?.jid || '';
+        if (!key) throw new Error('Não foi possível identificar este contato.');
+        const reminders = (() => { try { const raw = JSON.parse(localStorage.getItem('sigma_whatsapp_reminders') || '[]'); return Array.isArray(raw) ? raw : []; } catch { return []; } })();
+        const next = reminders.filter((item) => item.key !== key && item.jid !== chatReminderTarget?.jid);
+        if (chatReminderDraft.at) {
+          next.push({
+            id: `wa-reminder-${key}`,
+            key,
+            jid: chatReminderTarget?.jid || '',
+            phone: getChatPhone(chatReminderTarget),
+            name: chatReminderTarget?.name || chatReminderTarget?.phone || key,
+            reminderAt: Date.parse(chatReminderDraft.at) || 0,
+            note: String(chatReminderDraft.note || '').slice(0, 200),
+            createdAt: Date.now(),
+          });
+        }
+        localStorage.setItem('sigma_whatsapp_reminders', JSON.stringify(next));
+        window.dispatchEvent(new Event('sigma:reminders-updated'));
+      }
+      setChatReminderTarget(null);
+      addLog?.(chatKanbanCard ? '[KANBAN] Lembrete atualizado pelo WhatsApp.' : '[WHATSAPP] Lembrete salvo para o contato.');
+    } catch (error) {
+      alert(error?.message || 'Não foi possível salvar o lembrete.');
+    } finally {
+      setChatKanbanBusy(false);
+    }
+  };
+
+  const changeChatKanbanStage = async (event) => {
+    const toColumnId = event.target.value;
+    const target = chatKanbanColumns.find((column) => column.id === toColumnId);
+    if (!chatKanbanCard || !target || !window.kanbanAPI) return;
+    if (target.dealOutcome === 'won') {
+      setChatKanbanValue(chatKanbanCard.dealValue ? String(chatKanbanCard.dealValue) : '');
+      setChatContextMenu((current) => current ? { ...current, awaitingValue: true } : current);
+      return;
+    }
+    setChatKanbanBusy(true);
+    try {
+      const response = target.dealOutcome === 'lost'
+        ? await window.kanbanAPI.recordDeal({ entityKey: chatKanbanCard.entityKey, outcome: 'lost', value: chatKanbanCard.dealValue || 0, note: chatKanbanCard.dealNote || '' })
+        : await window.kanbanAPI.moveCard({ entityKey: chatKanbanCard.entityKey, toColumnId, expectedRevision: chatKanbanCard.revision, manual: true });
+      if (response?.success === false) throw new Error(response.error || 'Não foi possível mudar a etapa.');
+      window.dispatchEvent(new CustomEvent('sigma:deal-updated', { detail: { board: response.board } }));
+      setChatContextMenu(null);
+      addLog?.(`[KANBAN] Conversa movida para ${target.name}.`);
+    } catch (error) {
+      alert(error?.message || 'Não foi possível mudar a etapa.');
+    } finally {
+      setChatKanbanBusy(false);
+    }
+  };
+
+  const saveChatWonStage = async () => {
+    if (!chatKanbanCard || !window.kanbanAPI?.recordDeal) return;
+    const value = Number(String(chatKanbanValue).replace(/\./g, '').replace(',', '.').replace(/[^\d.-]/g, '')) || 0;
+    if (value <= 0) return;
+    setChatKanbanBusy(true);
+    try {
+      const response = await window.kanbanAPI.recordDeal({ entityKey: chatKanbanCard.entityKey, outcome: 'won', value, note: chatKanbanCard.dealNote || '' });
+      if (response?.success === false) throw new Error(response.error || 'Não foi possível registrar o negócio.');
+      window.dispatchEvent(new CustomEvent('sigma:deal-updated', { detail: { board: response.board } }));
+      setChatContextMenu(null);
+      addLog?.(`[KANBAN] Venda registrada para ${chatContextMenu?.chat?.name || 'a conversa'}.`);
+    } catch (error) {
+      alert(error?.message || 'Não foi possível registrar o negócio.');
+    } finally {
+      setChatKanbanBusy(false);
+    }
+  };
+
   // Chat Actions
   const handleSelectChat = async (chat) => {
     if (!window.chatAPI) return;
@@ -1526,7 +1674,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     try {
       const res = await window.chatAPI.openFile({
         filters: [
-          { name: 'Mídia', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf', 'mp3', 'ogg', 'opus', 'wav', 'm4a', 'mp4'] },
+          { name: 'Mídia e arquivos', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'm4v', 'mov', 'avi', 'mkv', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'zip', 'rar', '7z', 'tar', 'gz', 'mp3', 'ogg', 'opus', 'wav', 'm4a', 'webm'] },
         ],
       });
       const file = normalizeOpenFileResult(res);
@@ -1598,7 +1746,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     try {
       const res = await window.chatAPI.openFile({
         filters: [
-          { name: 'Mídia', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf', 'mp3', 'ogg', 'opus', 'wav', 'm4a'] },
+          { name: 'Mídia e arquivos', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'zip', 'rar', '7z', 'tar', 'gz', 'mp3', 'ogg', 'opus', 'wav', 'm4a', 'webm', 'mp4', 'mov'] },
         ],
       });
       const file = normalizeOpenFileResult(res);
@@ -1873,12 +2021,36 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       }).sort((a, b) => b.withPhone - a.withPhone);
       setScrapeSearches(searchCards);
 
+      const localGroups = (() => {
+        try {
+          const raw = JSON.parse(localStorage.getItem('sigma_groups') || '[]');
+          return Array.isArray(raw) ? raw : [];
+        } catch { return []; }
+      })();
+
+      let serviceGroups = [];
       if (window.leadScoringAPI?.listGroups) {
-        const gRes = await window.leadScoringAPI.listGroups();
-        setScoringGroups(Array.isArray(gRes?.groups) ? gRes.groups : []);
-      } else {
-        setScoringGroups([]);
+        try {
+          const gRes = await window.leadScoringAPI.listGroups();
+          serviceGroups = Array.isArray(gRes?.groups) ? gRes.groups : [];
+        } catch { serviceGroups = []; }
       }
+
+      // A lista visível usa os dois lados sem duplicar: o grupo da Base manda.
+      const merged = new Map();
+      for (const group of [...localGroups, ...serviceGroups]) {
+        const key = String(group?.id || '');
+        if (!key || merged.has(key)) continue;
+        merged.set(key, group);
+      }
+      const groups = [...merged.values()];
+      // Cada grupo é resolvido contra a base atual para virar destinatários.
+      const resolved = new Map();
+      for (const group of groups) {
+        resolved.set(String(group.id), resolveGroupMembers(group, localLeads));
+      }
+      setScoringGroups(groups);
+      setGroupResolvedLeads(resolved);
 
       if (window.leadScoringAPI?.getAll) {
         const aRes = await window.leadScoringAPI.getAll({});
@@ -1910,25 +2082,19 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     addLog(`[CAMPAIGN] +${filtered.length} lead(s) do scraping.`);
   };
 
+  const groupLeads = (groupId) => groupResolvedLeads.get(String(groupId)) || [];
+  const groupLeadCount = (group) => groupLeads(group?.id).length || 0;
+
   const addLeadsFromScoringGroup = async (groupId) => {
-    if (!groupId || !window.leadScoringAPI?.getAll) {
-      alert('Não foi possível carregar o grupo. Abra o Lead Scoring e tente de novo.');
+    const leads = groupLeads(groupId);
+    const g = scoringGroups.find((x) => String(x.id) === String(groupId));
+    const mapped = leads.map(mapLocalLead).filter((lead) => lead.phone);
+    if (!mapped.length) {
+      alert(`O grupo “${g?.name || groupId}” não tem leads com telefone na base atual.`);
       return;
     }
-    try {
-      const res = await window.leadScoringAPI.getAll({ groupId });
-      const mapped = (res?.leads || [])
-        .map(mapScoringLead)
-        .filter((l) => l.phone);
-      mergeRecipients(mapped);
-      const g = scoringGroups.find((x) => x.id === groupId);
-      addLog(`[CAMPAIGN] +${mapped.length} lead(s) do grupo “${g?.name || groupId}”.`);
-      if (!mapped.length) {
-        alert('Nenhum lead com telefone neste grupo.');
-      }
-    } catch (e) {
-      alert('Erro ao carregar grupo: ' + e.message);
-    }
+    mergeRecipients(mapped);
+    addLog(`[CAMPAIGN] +${mapped.length} lead(s) do grupo “${g?.name || groupId}”.`);
   };
 
   const scoringLeadsFiltered = useMemo(() => {
@@ -2081,7 +2247,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectedSessions, activeConnectionId, campaignConnectionId]);
 
-  // Carrega scrapings + grupos do scoring ao abrir passo de destinatários
+  // Carrega scrapings + grupos da base ao abrir passo de destinatários
   useEffect(() => {
     if (!isCreatingCampaign) return;
     if (campaignWizardStep === 0 || editingCampaignId) {
@@ -2089,6 +2255,15 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCreatingCampaign, campaignWizardStep, editingCampaignId]);
+
+  // Grupo criado ou alterado na Base de Leads aparece aqui sem reabrir o wizard.
+  useEffect(() => {
+    if (!isCreatingCampaign) return undefined;
+    const refresh = () => loadRecipientSources();
+    window.addEventListener('sigma:groups-updated', refresh);
+    return () => window.removeEventListener('sigma:groups-updated', refresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCreatingCampaign]);
 
   useEffect(() => {
     if (!isCreatingCampaign || editingCampaignId || campaignWizardStep !== 0) return;
@@ -2478,7 +2653,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         onDragEnd={() => setDraggingKanbanCard(null)}
                       >
                         <strong>{lead.name || lead.company || lead.phone || 'Lead sem nome'}</strong>
-                        <span className="campaign-kanban-card-phone">{lead.phoneRaw || lead.phone || lead.jid || '—'}</span>
+                        <span className="campaign-kanban-card-phone" data-sensitive-phone="true">{lead.phoneRaw || lead.phone || lead.jid || '—'}</span>
                         <div className="campaign-kanban-card-meta">
                           <span>{delivery}</span>
                           {lead.category && <span>{lead.category}</span>}
@@ -2549,13 +2724,13 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       setCampaignRecipients((items) => items.filter((item) => item.source !== source));
       return;
     }
-    try {
-      const result = await window.leadScoringAPI?.getAll?.({ groupId: group.id });
-      const mapped = (result?.leads || []).map(mapScoringLead).filter((lead) => lead.phone).map((lead) => ({ ...lead, source }));
-      mergeRecipients(mapped);
-    } catch (error) {
-      addLog(`[CAMPAIGN] Erro ao carregar grupo “${group.name}”: ${error.message}`);
+    const leads = groupLeads(group.id);
+    const mapped = leads.map(mapLocalLead).filter((lead) => lead.phone).map((lead) => ({ ...lead, source }));
+    if (!mapped.length) {
+      addLog(`[CAMPAIGN] Grupo “${group.name}” não tem leads com telefone na base atual.`);
+      return;
     }
+    mergeRecipients(mapped);
   };
 
   const updateCampaignManualText = (value) => {
@@ -2674,7 +2849,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                 <label key={key} className={`camp-browse-row ${on ? 'on' : ''}`}>
                   <input type="checkbox" checked={on} onChange={() => toggleBrowseSelect(key)} />
                   <span className="camp-browse-name">{l.name || 'Sem nome'}</span>
-                  <span className="camp-browse-meta">{l.phone}</span>
+                  <span className="camp-browse-meta" data-sensitive-phone="true">{l.phone}</span>
                 </label>
               );
             })}
@@ -2687,17 +2862,27 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         </div>
       )}
 
-      {/* GRUPOS LEAD SCORING */}
+      {/* GRUPOS DA BASE DE LEADS */}
       {recipientSourceTab === 'groups' && (
         <div className="camp-rcp-pane">
           <p className="camp-hint" style={{ marginBottom: 8 }}>
-            Grupos salvos em “Quem ligar primeiro” (Lead Scoring).
+            Grupos criados na Base de Leads. Toque para adicionar os contatos com telefone.
           </p>
           {scoringGroups.length === 0 ? (
             <div className="camp-empty-mini">
               <Users size={20} />
               <p>Nenhum grupo ainda</p>
-              <span>Analise leads no Lead Scoring e salve em um grupo.</span>
+              <span>Crie um grupo na Base de Leads — ele aparece aqui na hora.</span>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => {
+                  window.location.hash = '#base';
+                  window.dispatchEvent(new CustomEvent('sigma:open-groups'));
+                }}
+              >
+                Criar grupo agora
+              </button>
             </div>
           ) : (
             <div className="camp-source-grid">
@@ -2710,7 +2895,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   onClick={() => addLeadsFromScoringGroup(g.id)}
                 >
                   <strong>{g.name}</strong>
-                  <span>{g.count || (g.leadIds || []).length} leads · toque para adicionar</span>
+                  <span>{groupLeadCount(g)} lead(s) · toque para adicionar</span>
                   {g.description ? <em>{g.description}</em> : null}
                 </button>
               ))}
@@ -2759,7 +2944,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                 <label key={key} className={`camp-browse-row ${on ? 'on' : ''}`}>
                   <input type="checkbox" checked={on} onChange={() => toggleBrowseSelect(key)} disabled={!l.company?.phone && !l.company?.whatsapp} />
                   <span className="camp-browse-name">{l.company?.name || 'Lead'}</span>
-                  <span className="camp-browse-meta">
+                  <span className="camp-browse-meta" data-sensitive-phone="true">
                     {phone}
                     {l.score?.priority ? ` · ${l.score.priority}` : ''}
                     {l.score?.value != null ? ` · ${l.score.value}pts` : ''}
@@ -2814,7 +2999,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                       source: 'contact',
                     }])}
                   >
-                    <User size={12} /> {c.name || c.phone}
+                    <User size={12} /> <span data-sensitive-phone={!c.name && c.phone ? 'true' : undefined}>{c.name || c.phone}</span>
                   </button>
                 ))}
               </div>
@@ -2889,11 +3074,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           ) : campaignRecipients.map((r) => (
             <div key={recipientKey(r)} className="camp-recipient-row">
               <div style={{ minWidth: 0 }}>
-                <strong style={{ display: 'block' }}>
+                <strong style={{ display: 'block' }} data-sensitive-phone={!r.name && !r.isGroup && r.phone ? 'true' : undefined}>
                   {r.isGroup ? '👥 ' : '👤 '}
                   {r.name || r.phone || r.jid}
                 </strong>
-                <span className="camp-hint" style={{ margin: 0 }}>
+                <span className="camp-hint" style={{ margin: 0 }} data-sensitive-phone="true">
                   {r.isGroup ? (r.jid || r.phone) : r.phone}
                   {r.source ? ` · ${r.source}` : ''}
                   {r.prioridade ? ` · ${r.prioridade}` : ''}
@@ -3257,6 +3442,15 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         return `<a class="wa-link" href="${clean}" target="_blank" rel="noreferrer noopener">${clean}</a>${trail}`;
       },
     );
+    // Protege números escritos no corpo da conversa durante lives.
+    html = html.split(/(<[^>]+>)/g).map((part) => {
+      if (part.startsWith('<')) return part;
+      return part.replace(/(?:\+?\d[\d\s().-]{8,}\d)/g, (candidate) => (
+        candidate.replace(/\D/g, '').length >= 10
+          ? `<span data-sensitive-phone="true">${candidate}</span>`
+          : candidate
+      ));
+    }).join('');
     html = html.replace(/\n/g, '<br/>');
     return html;
   };
@@ -3328,9 +3522,25 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     storedLeads.forEach(append);
 
     const query = newChatSearch.trim().toLowerCase();
-    return candidates
+    const filtered = candidates
       .filter((item) => !query || `${item.name} ${item.phone} ${item.jid}`.toLowerCase().includes(query))
       .slice(0, 100);
+
+    // Permite iniciar conversa com um número que ainda não existe na agenda,
+    // sem exigir importação/sincronização prévia. O backend normaliza o país
+    // quando o candidato não traz um JID pronto.
+    const manualDigits = newChatSearch.replace(/\D/g, '');
+    if (manualDigits.length >= 10 && !candidates.some((item) => item.phone.replace(/\D/g, '') === manualDigits)) {
+      filtered.unshift({
+        leadId: `manual_${manualDigits}`,
+        name: 'Número informado',
+        phone: newChatSearch.trim(),
+        jid: '',
+        phoneJid: '',
+        isManual: true,
+      });
+    }
+    return filtered.slice(0, 100);
   }, [chats, waContacts, scrapeLeadPool, newChatSearch]);
 
   const openNewChat = () => {
@@ -3339,6 +3549,58 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     setIsNewChatOpen(true);
     loadWaDirectory(activeConnectionId).catch(() => {});
   };
+
+  useEffect(() => {
+    let pending = null;
+    try {
+      pending = JSON.parse(localStorage.getItem('sigma_wa_pending') || 'null');
+      if (pending) localStorage.removeItem('sigma_wa_pending');
+    } catch {}
+    if (!pending?.tel) return;
+    if (pending.direct) {
+      setDirectChatPending(pending);
+      return;
+    }
+    setNewChatSearch(String(pending.tel));
+    setNewChatError('');
+    setIsNewChatOpen(true);
+    loadWaDirectory(activeConnectionId).catch(() => {});
+  }, [activeConnectionId]);
+
+  useEffect(() => {
+    if (!directChatPending?.tel || !window.chatAPI?.startChat || newChatBusy) return undefined;
+    let cancelled = false;
+    const open = async () => {
+      setNewChatBusy(true);
+      setNewChatError('');
+      try {
+        const result = await window.chatAPI.startChat(directChatPending.tel, directChatPending.name || 'Lead');
+        if (!result?.success || !result.jid) throw new Error(result?.error || 'Não foi possível abrir esta conversa.');
+        const nextChat = {
+          name: result.name || directChatPending.name || directChatPending.tel,
+          phone: result.phone || directChatPending.tel,
+          jid: result.jid,
+          phoneJid: result.jid,
+          lastMessage: '',
+        };
+        setChats((current) => current.some((chat) => chat.jid === nextChat.jid) ? current : [nextChat, ...current]);
+        if (!cancelled) await handleSelectChat(nextChat);
+      } catch (error) {
+        if (!cancelled) {
+          setNewChatSearch(String(directChatPending.tel));
+          setNewChatError(error?.message || 'Não foi possível abrir esta conversa.');
+          setIsNewChatOpen(true);
+        }
+      } finally {
+        if (!cancelled) {
+          setDirectChatPending(null);
+          setNewChatBusy(false);
+        }
+      }
+    };
+    open();
+    return () => { cancelled = true; };
+  }, [directChatPending]);
 
   const handleStartNewChat = async (candidate) => {
     if (!window.chatAPI?.startChat || newChatBusy) return;
@@ -3660,7 +3922,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         }}
       >
         <div
-          className={`chat-bubble ${fromMe ? 'out' : 'in'}${isSticker ? ' sticker-bubble' : ''}${menuOpen ? ' menu-open' : ''}`}
+          className={`chat-bubble ${fromMe ? 'out' : 'in'}${isSticker ? ' sticker-bubble' : ''}${media?.kind === 'audio' ? ' voice-bubble' : ''}${menuOpen ? ' menu-open' : ''}`}
           onClick={() => { if (menuOpen) setMsgMenuId(null); }}
         >
           {renderMessageBody(m)}
@@ -3716,7 +3978,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   };
 
   return (
-    <div className="wa-open-design">
+    <div className="wa-open-design" onClick={() => setChatContextMenu(null)}>
       <header className="wa-top wa-open-design-top" data-od-id="wa-header">
         <nav className="wa-tabs wa-open-design-tabs" role="tablist" aria-label="WhatsApp" data-od-id="wa-tabs">
           <button
@@ -3745,7 +4007,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
             >
               <span className="dot" id="waAcctDot" aria-hidden="true" />
               <span id="waConnTxt">
-                {connections.find((c) => c.id === activeConnectionId)?.phoneNumber || connections[0]?.phoneNumber || '+55 21 90000-0001'}
+                <span data-sensitive-phone="true">{connections.find((c) => c.id === activeConnectionId)?.phoneNumber || connections[0]?.phoneNumber || '+55 21 90000-0001'}</span>
               </span>
               <span className="caret" aria-hidden="true">▾</span>
             </button>
@@ -3777,7 +4039,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                       setIsAcctMenuOpen(false);
                     }}
                   >
-                    {connection.phoneNumber || connection.id}
+                    <span data-sensitive-phone="true">{connection.phoneNumber || connection.id}</span>
                   </button>
                 ))}
                 {connections.length > 0 && <div className="wa-menu-sep" />}
@@ -3943,7 +4205,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                     {renderAvatar(candidate.jid, candidate.name, 40, false)}
                     <span style={{ minWidth: 0 }}>
                       <b>{candidate.name}</b>
-                      <span>{candidate.phone || candidate.jid}</span>
+                      <span data-sensitive-phone="true">{candidate.phone || candidate.jid}</span>
                     </span>
                   </button>
                 ))}
@@ -3997,7 +4259,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
             <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
               <div className="field"><label htmlFor="profileName">Nome</label><input id="profileName" value={sessionProfile.name} onChange={(event) => setSessionProfile((profile) => ({ ...profile, name: event.target.value }))} /></div>
               <div className="field"><label htmlFor="profileAbout">Recado</label><input id="profileAbout" value={sessionProfile.about} onChange={(event) => setSessionProfile((profile) => ({ ...profile, about: event.target.value }))} /></div>
-              <div className="field"><label htmlFor="profilePhone">Telefone</label><input id="profilePhone" value={sessionProfile.phone} onChange={(event) => setSessionProfile((profile) => ({ ...profile, phone: event.target.value }))} /></div>
+              <div className="field"><label htmlFor="profilePhone">Telefone</label><input id="profilePhone" data-sensitive-phone="true" value={sessionProfile.phone} onChange={(event) => setSessionProfile((profile) => ({ ...profile, phone: event.target.value }))} /></div>
             </div>
             <div className="modal-foot">
               <button type="button" className="btn btn-ghost" onClick={() => setIsSessionProfileOpen(false)}>Cancelar</button>
@@ -4022,7 +4284,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                 ) : connections.map((connection) => (
                   <div key={connection.id} className={`acct-row ${connection.status === 'connected' ? '' : 'off'}`}>
                     <span className="dot" aria-hidden="true" />
-                    <b>{connection.phoneNumber || connection.id}{connection.id === activeConnectionId ? ' · ativo' : ''}</b>
+                    <b data-sensitive-phone="true">{connection.phoneNumber || connection.id}{connection.id === activeConnectionId ? ' · ativo' : ''}</b>
                     {connection.id !== activeConnectionId && <button type="button" onClick={() => handleSwitchConnection(connection.id)}>Ativar</button>}
                     <button type="button" onClick={() => handleRemoveConnection(connection.id)}>Remover</button>
                   </div>
@@ -4050,7 +4312,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                 ) : forwardCandidates.map((candidate) => (
                   <button key={candidate.jid} type="button" role="option" disabled={forwardBusy} onClick={() => handleForwardMessage(candidate)}>
                     {renderAvatar(candidate.jid, candidate.name || candidate.phone, 40, !!candidate.isGroup)}
-                    <span style={{ minWidth: 0 }}><b>{candidate.name || candidate.phone}</b><span>{candidate.phone || candidate.jid}</span></span>
+                    <span style={{ minWidth: 0 }}><b>{candidate.name || candidate.phone}</b><span data-sensitive-phone="true">{candidate.phone || candidate.jid}</span></span>
                   </button>
                 ))}
               </div>
@@ -4153,7 +4415,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         <span className={`wa-presence-dot ${connected ? 'on' : 'off'}`} title={connected ? 'Conectado' : 'Desconectado'} />
                         <div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <strong style={{ fontSize: '13px' }}>{c.phoneNumber || c.id}</strong>
+                    <strong style={{ fontSize: '13px' }} data-sensitive-phone="true">{c.phoneNumber || c.id}</strong>
                             {isActive && <span className="wa-active-badge">Ativo</span>}
                             {connected && <span className="wa-connected-badge">Conectado</span>}
                           </div>
@@ -4454,7 +4716,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                               <label key={group.id}>
                                 <input type="checkbox" checked={campaignSelectedGroupIds.has(group.id)} onChange={(event) => toggleCampaignGroup(group, event.target.checked)} />
                                 <span>{group.name}</span>
-                                <span className="cnt">{group.count || (group.leadIds || []).length || 0} leads</span>
+                                <span className="cnt">{groupLeadCount(group)} leads</span>
                               </label>
                             ))}
                           </div>
@@ -4751,6 +5013,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         key={c.jid}
                         className={`chat-thread ${activeChatJid === c.jid ? 'active' : ''}${unread > 0 ? ' unread' : ''}`}
                         onClick={() => handleSelectChat(c)}
+                        onContextMenu={(event) => openChatContextMenu(event, c)}
                       >
                         <div className="chat-avatar-wrap">
                           {renderAvatar(c.jid, name, 44, !!c.isGroup)}
@@ -4758,7 +5021,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         </div>
                         <div className="chat-thread-details">
                           <div className="top-row">
-                            <strong>
+                            <strong data-sensitive-phone={/^\+?[\d\s().-]{10,}$/.test(String(name)) ? 'true' : undefined}>
                               {c.pinned ? <Pin size={11} className="chat-pin-icon" /> : null}
                               {name}
                             </strong>
@@ -4767,7 +5030,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             </span>
                           </div>
                           <div className="chat-thread-preview-row">
-                            <p>{c.lastMessage || (c.isGroup ? 'Grupo' : c.phone || 'Sem mensagens')}</p>
+                          <p data-sensitive-phone={!c.lastMessage && !c.isGroup && c.phone ? 'true' : undefined}>{c.lastMessage || (c.isGroup ? 'Grupo' : c.phone || 'Sem mensagens')}</p>
                             {unread > 0 && <span className="chat-unread-badge">{unread > 99 ? '99+' : unread}</span>}
                             {c.archived && <Archive size={12} className="chat-archived-icon" />}
                           </div>
@@ -4813,10 +5076,10 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                     >
                       {renderAvatar(activeChatJid, activeChatName, 40, !!activeChatMeta?.isGroup)}
                       <div style={{ textAlign: 'left' }}>
-                        <strong>{activeChatName}</strong>
+                        <strong data-sensitive-phone={/^\+?[\d\s().-]{10,}$/.test(String(activeChatName)) ? 'true' : undefined}>{activeChatName}</strong>
                         <div className={`chat-presence ${chatPresence?.online ? '' : 'offline'}`}>
                           {chatPresence?.online && <span className="dot" />}
-                          <span>
+                          <span data-sensitive-phone={!chatPresence?.online && !activeChatMeta?.isGroup && activeChatMeta?.phone ? 'true' : undefined}>
                             {chatPresence?.online
                               ? 'online'
                               : chatPresence?.statusText
@@ -5144,8 +5407,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                     >
                       {renderAvatar(activeChatJid, activeChatName, 96, !!activeChatMeta?.isGroup)}
                     </button>
-                    <h3>{profileInfo?.name || activeChatName}</h3>
-                    <p className="chat-profile-phone">
+                    <h3 data-sensitive-phone={!profileInfo?.name && !activeChatMeta?.isGroup && (profileInfo?.phone || activeChatMeta?.phone || activeChatJid) ? 'true' : undefined}>{profileInfo?.name || activeChatName}</h3>
+                    <p className="chat-profile-phone" data-sensitive-phone="true">
                       {profileInfo?.phone || activeChatMeta?.phone || activeChatJid}
                     </p>
                     {(profileInfo?.business?.description || profileInfo?.notify) && (
@@ -5353,7 +5616,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         : (settings.campaigns?.dailyLimit || 10);
                       return (
                         <span key={id} className="camp-phone-chip">
-                          {cn?.phoneNumber || id.slice(0, 8)}: {used}/{lim}
+                          <span data-sensitive-phone="true">{cn?.phoneNumber || id.slice(0, 8)}</span>: {used}/{lim}
                         </span>
                       );
                     })}
@@ -5496,6 +5759,45 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   onChange={(e) => updateSetting({ previews: { links: e.target.checked } })}
                 />
               </div>
+            </div>
+          </div>
+        )}
+
+        {chatContextMenu && (
+          <div
+            className="wa-chat-context-menu"
+            role="menu"
+            style={{ left: Math.max(8, Math.min(chatContextMenu.x, window.innerWidth - 272)), top: Math.max(8, Math.min(chatContextMenu.y, window.innerHeight - 230)) }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="wa-chat-context-title">{chatContextMenu.chat?.name || chatContextMenu.chat?.phone || 'Conversa'}</div>
+            <button type="button" role="menuitem" disabled={chatContextMenu.loading} onClick={openChatReminder}><Bell size={14} /> Ativar lembrete</button>
+            <label className="wa-chat-context-field">
+              <span>Mudar estado no Kanban</span>
+              <select value={chatKanbanCard?.columnId || ''} disabled={chatContextMenu.loading || chatKanbanBusy || !chatKanbanCard} onChange={changeChatKanbanStage}>
+                {!chatKanbanCard && <option value="">Lead fora do Kanban</option>}
+                {chatKanbanColumns.map((column) => <option key={column.id} value={column.id}>{column.name}</option>)}
+              </select>
+            </label>
+            {chatContextMenu.awaitingValue && (
+              <div className="wa-chat-context-closed">
+                <input type="text" inputMode="decimal" value={chatKanbanValue} onChange={(event) => setChatKanbanValue(event.target.value)} placeholder="Valor fechado · R$ 0,00" aria-label="Valor do negócio fechado" autoFocus />
+                <button type="button" className="btn btn-primary btn-compact" disabled={chatKanbanBusy || !chatKanbanValue.trim()} onClick={saveChatWonStage}>Salvar venda</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {chatReminderTarget && (
+          <div className="overlay on modal-overlay" role="presentation" onClick={() => setChatReminderTarget(null)}>
+            <div className="modal modal-content wa-reminder-modal" role="dialog" aria-modal="true" aria-labelledby="waReminderTitle" onClick={(event) => event.stopPropagation()}>
+              <div className="modal-head"><div><span className="eyebrow">WhatsApp · Kanban</span><h2 id="waReminderTitle">Agendar lembrete</h2></div><button type="button" className="icon-btn" aria-label="Fechar" onClick={() => setChatReminderTarget(null)}><X size={17} /></button></div>
+              <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+                <p className="wa-reminder-lead">{chatReminderTarget.name || chatReminderTarget.phone || 'Lead selecionado'}</p>
+                <label className="field"><span>Quando</span><input type="datetime-local" value={chatReminderDraft.at} onChange={(event) => setChatReminderDraft((current) => ({ ...current, at: event.target.value }))} /></label>
+                <label className="field"><span>Nota (opcional)</span><input maxLength={200} value={chatReminderDraft.note} placeholder="Ex.: retornar sobre a proposta" onChange={(event) => setChatReminderDraft((current) => ({ ...current, note: event.target.value }))} /></label>
+              </div>
+              <div className="modal-foot"><button type="button" className="btn btn-ghost" onClick={() => setChatReminderTarget(null)}>Cancelar</button><button type="button" className="btn btn-primary" disabled={chatKanbanBusy || !chatReminderDraft.at} onClick={saveChatReminder}>Salvar lembrete</button></div>
             </div>
           </div>
         )}
@@ -5818,7 +6120,7 @@ function CampaignMonitorView({ campaign, onBack, connections = [] }) {
               >
                 <div style={{ minWidth: 0 }}>
                   <strong style={{ display: 'block' }}>{lead.name || lead.company || 'Destinatário'}</strong>
-                  <span style={{ color: 'var(--muted)' }}>{lead.phone || lead.jid || 'sem destino'}</span>
+                  <span style={{ color: 'var(--muted)' }} data-sensitive-phone="true">{lead.phone || lead.jid || 'sem destino'}</span>
                   {lead.connectionId ? (
                     <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 2 }}>
                       via {phoneLabel(lead.connectionId)}

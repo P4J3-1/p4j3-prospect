@@ -5,7 +5,10 @@ import {
   Globe,
   Instagram,
   Mail,
+  MessageCircle,
   Search,
+  ChevronDown,
+  ChevronUp,
   ChevronLeft,
   ChevronRight,
   Sparkles,
@@ -20,6 +23,25 @@ import {
   FileSpreadsheet
 } from 'lucide-react';
 import { dedupeLeads, normalizeLeadCategory, normalizeLeadCollection, readLocalArray } from '../leadData';
+import { DEFAULT_SCORE_THRESHOLDS, buildScoringIndex, findScoringLead, resolveGroupMembers, scoreBand } from '../leadMatch.mjs';
+import { normalizeLeadLinks } from '../leadLinks.mjs';
+import {
+  CHANNELS,
+  CHANNEL_STATES,
+  FILTER_PRESETS,
+  applyPreset,
+  createGroup,
+  emptyFilters,
+  filterLeads,
+  hasActiveFilters,
+  leadChannels,
+  matchesLeadFilters,
+  membersFromLeads,
+  membershipKeys,
+  notifyGroupsChanged,
+  presetActive,
+  syncGroupsToService,
+} from '../leadGroups.mjs';
 import { useNotifications } from './NotificationCenter';
 
 const DEFAULT_COLS = [
@@ -97,14 +119,18 @@ function makeImportedLead(row, index, batchId, fileName) {
   const name = readImportValue(row, IMPORT_FIELDS.name);
   if (!name) return null;
   const safeRaw = Object.fromEntries(Object.entries(row || {}).slice(0, 80));
+  const links = normalizeLeadLinks({
+    website: readImportValue(row, IMPORT_FIELDS.website),
+    instagram: readImportValue(row, IMPORT_FIELDS.instagram),
+  });
   return {
     id: `import_${batchId}_${index}`,
     name,
     category: readImportValue(row, IMPORT_FIELDS.category) || 'Sem categoria',
     phone: readImportValue(row, IMPORT_FIELDS.phone),
     email: readImportValue(row, IMPORT_FIELDS.email),
-    website: readImportValue(row, IMPORT_FIELDS.website),
-    instagram: readImportValue(row, IMPORT_FIELDS.instagram),
+    website: links.website,
+    instagram: links.instagram,
     address: readImportValue(row, IMPORT_FIELDS.address),
     neighborhood: readImportValue(row, IMPORT_FIELDS.neighborhood),
     city: readImportValue(row, IMPORT_FIELDS.city),
@@ -118,74 +144,128 @@ function makeImportedLead(row, index, batchId, fileName) {
   };
 }
 
+function describeFilters(filters) {
+  const parts = [];
+  for (const [key, state] of Object.entries(filters?.channels || {})) {
+    if (state !== 'with' && state !== 'without') continue;
+    const channel = CHANNELS.find((item) => item.key === key);
+    if (channel) parts.push(`${state === 'with' ? 'com' : 'sem'} ${channel.label}`);
+  }
+  if (Number(filters?.minRating || 0) > 0) parts.push(`nota ≥ ${filters.minRating}`);
+  if (filters?.category) parts.push(filters.category);
+  if (filters?.city) parts.push(filters.city);
+  if (filters?.state) parts.push(filters.state);
+  return parts.join(' · ').slice(0, 240);
+}
+
 export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   const { addNotification } = useNotifications();
   const importInputRef = useRef(null);
-  // Load data from localStorage
-  const [leads, setLeads] = useState(() => {
-    const raw = readLocalArray('sigma_leads');
-    const initialized = localStorage.getItem('sigma_leads_initialized') === 'true';
-    if (raw.length > 0 || initialized) return normalizeLeadCollection(raw);
-    return [
-      { id: 'lead-1', name: 'Odonto Lume', category: 'Odontologia', neighborhood: 'Copacabana', city: 'Rio de Janeiro', state: 'RJ', rating: '4,8', reviews: 126, phone: '+55 21 98765-0142', website: 'odonto-lume.com.br', email: 'contato@odonto-lume.com.br', searchQuery: 'dentistas · Copacabana' },
-      { id: 'lead-2', name: 'Café Aurora', category: 'Cafeteria', neighborhood: 'Ipanema', city: 'Rio de Janeiro', state: 'RJ', rating: '4,6', reviews: 89, instagram: '@cafe.aurora', website: 'cafeaurora.com', searchQuery: 'cafés · Ipanema' },
-      { id: 'lead-3', name: 'Almeida Advocacia', category: 'Advocacia', neighborhood: 'Centro', city: 'Rio de Janeiro', state: 'RJ', rating: '4,9', reviews: 211, email: 'contato@almeidaadv.com.br', searchQuery: 'advogados · Centro' },
-      { id: 'lead-4', name: 'Studio Prisma', category: 'Design', neighborhood: 'Botafogo', city: 'Rio de Janeiro', state: 'RJ', rating: '4,7', reviews: 64, phone: '+55 21 97654-8890', website: 'studioprisma.design', searchQuery: 'designers · Botafogo' },
-    ];
-  });
+  // A base é sempre o que existe em localStorage; nada é semeado.
+  const [leads, setLeads] = useState(() => normalizeLeadCollection(readLocalArray('sigma_leads')));
 
-  const [groups, setGroups] = useState(() => {
-    try {
-      const g = JSON.parse(localStorage.getItem('sigma_groups') || 'null');
-      if (Array.isArray(g) && g.length > 0) return g;
-    } catch {}
-    if (localStorage.getItem('sigma_leads_initialized') === 'true') return [];
-    return [
-      { id: 'g1', name: 'Com WhatsApp', members: ['lead-1', 'lead-4'], created: new Date(2026, 8, 1, 9, 0).getTime() },
-      { id: 'g-demo', name: 'Teste Scoring — RJ', members: ['lead-1', 'lead-2', 'lead-3'], created: new Date(2026, 8, 2, 10, 0).getTime() }
-    ];
-  });
+  const [groups, setGroups] = useState(() => readLocalArray('sigma_groups'));
 
   const [hist, setHist] = useState(() => {
     try {
       const h = JSON.parse(localStorage.getItem('sigma_history') || 'null');
       if (h && typeof h === 'object') return h;
     } catch {}
-    return {
-      'lead-1': [
-        { k: 'sent', ts: new Date(2026, 8, 3, 14, 32).getTime(), text: 'Olá, tudo bem? Vi que o site da Odonto Lume está sem HTTPS — consigo resolver isso e ativar o botão de WhatsApp em 1 dia. Posso te mostrar?', wa: 'Sigma · +55 21 90000-0001', camp: 'Lançamento Setembro' },
-        { k: 'reply', ts: new Date(2026, 8, 3, 15, 4).getTime(), text: 'Olá! Pode me explicar melhor?' }
-      ],
-      'lead-2': [
-        { k: 'sent', ts: new Date(2026, 8, 2, 10, 15).getTime(), text: 'Oi! Aqui é da Sigma — percebi que o site do Café Aurora não tem botão de WhatsApp. Coloco isso no ar hoje. Quer ver?', wa: 'Sigma · +55 21 90000-0001', camp: 'Cafés Zona Sul' }
-      ]
-    };
+    return {};
   });
 
-  const [analysis, setAnalysis] = useState(() => {
-    try {
-      const a = JSON.parse(localStorage.getItem('sigma_analysis') || 'null');
-      if (a && typeof a === 'object') return a;
-    } catch {}
-    return {
-      'lead-1': {
-        score: 92,
-        band: 'alta',
-        pos: ['Tem WhatsApp (+12)', 'Site ativo (+15)', 'Avaliação 4,8 (+15)', '126 avaliações (+12)', 'Já respondeu mensagem (+18)', 'Layout adaptável (+5)'],
-        neg: ['Site sem HTTPS — sinal negativo para buscadores'],
-        opp: ['Ativar HTTPS', 'Otimizar performance'],
-        ts: new Date(2026, 8, 2, 16, 20).getTime(),
-        provider: 'openrouter',
-        model: 'anthropic/claude-3.5-sonnet',
-        preset: 'sites',
-        sections: [
-          { t: 'SEO', items: ['Site sem HTTPS — sinal negativo para buscadores'] },
-          { t: 'Performance', items: ['Carregamento dentro do esperado'] },
-          { t: 'Conversão', items: ['Botão de WhatsApp presente', 'Telefone visível para contato'] }
-        ]
+  // Score real vem do serviço de Lead Scoring, casado por identidade do lead.
+  const [scoringLeads, setScoringLeads] = useState([]);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadScores = async () => {
+      if (!window.leadScoringAPI?.getAll) return;
+      try {
+        const response = await window.leadScoringAPI.getAll({});
+        if (!disposed && response?.success) setScoringLeads(response.leads || []);
+      } catch {
+        // sem serviço, a aba Scoring mostra o estado vazio real
       }
     };
-  });
+    loadScores();
+    const unsubscribe = window.leadScoringAPI?.onProgress?.((payload) => {
+      if (payload?.event === 'saved' || payload?.event === 'auto-completed' || payload?.event === 'completed') loadScores();
+    });
+    return () => {
+      disposed = true;
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
+  const scoringIndex = useMemo(() => buildScoringIndex(scoringLeads), [scoringLeads]);
+  const [scoringBusyId, setScoringBusyId] = useState('');
+
+  const painLabel = (pain) => ({
+    https: 'Site sem HTTPS (cadeado)',
+    mobile: 'Site não adaptado ao celular',
+    whatsapp: 'Sem WhatsApp visível no site',
+    pixel: 'Sem pixel de anúncio',
+    slow: 'Site carrega devagar',
+    form: 'Sem formulário de contato',
+    errors: 'Erros de carregamento no site',
+    analytics: 'Sem medição de visitas',
+  }[pain] || pain);
+
+  // Score real do Lead Scoring para um lead da base (casado por identidade).
+  const baseScoreFor = (lead) => {
+    if (!lead) return null;
+    const saved = findScoringLead(scoringIndex, lead, leads.indexOf(lead));
+    if (!saved?.score || !Number.isFinite(Number(saved.score.value))) return null;
+    const score = Number(saved.score.value);
+    const band = scoreBand(score, DEFAULT_SCORE_THRESHOLDS);
+    const site = saved.siteAnalysis || {};
+    const ai = saved.aiAnalysis || {};
+    const company = saved.company || {};
+    const positive = [
+      company.whatsapp || site.conversion?.hasWhatsappButton ? 'WhatsApp confirmado' : '',
+      company.phone ? 'Telefone confirmado' : '',
+      company.email ? 'E-mail confirmado' : '',
+      site.hasHttps ? 'Site com HTTPS' : '',
+      site.mobile?.isResponsive ? 'Layout responsivo' : '',
+      Number(company.reviewCount || 0) >= 50 ? 'Bom volume de avaliações no Google' : '',
+    ].filter(Boolean);
+    const negative = [
+      ...(Array.isArray(saved.score.sitePains) ? saved.score.sitePains : []).map(painLabel),
+      ...(Array.isArray(ai.principais_dores) ? ai.principais_dores : []),
+    ];
+    const opportunities = Array.isArray(ai.principais_oportunidades) ? ai.principais_oportunidades : [];
+    return {
+      score,
+      band: band.key,
+      bandLabel: band.label,
+      pos: positive,
+      neg: negative.length ? negative : (Array.isArray(saved.score.reasons) ? saved.score.reasons : []),
+      opp: opportunities.length ? opportunities : (Array.isArray(saved.score.reasons) ? saved.score.reasons.slice(0, 3) : []),
+      ts: saved.updatedAt || saved.createdAt,
+      provider: ai.rawProvider || (saved.score.priority ? `prioridade: ${saved.score.priority}` : ''),
+      preset: 'Lead Scoring',
+    };
+  };
+
+  const handleAnalyzeLead = async (lead) => {
+    if (!lead || !window.leadScoringAPI?.analyzeLead) {
+      addNotification({ type: 'error', category: 'system', title: 'Scoring indisponível', message: 'Atualize o aplicativo para analisar leads daqui.' });
+      return;
+    }
+    setScoringBusyId(lead.id);
+    try {
+      const response = await window.leadScoringAPI.analyzeLead(lead);
+      if (!response?.success) throw new Error(response?.error || 'A análise falhou.');
+      const list = await window.leadScoringAPI.getAll({});
+      if (list?.success) setScoringLeads(list.leads || []);
+      addNotification({ type: 'success', category: 'system', title: 'Lead analisado', message: `${getLeadName(lead)} recebeu score ${response.lead?.score?.value ?? '—'}.` });
+    } catch (error) {
+      addNotification({ type: 'error', category: 'system', title: 'Falha na análise', message: error.message || 'Não foi possível analisar este lead.' });
+    } finally {
+      setScoringBusyId('');
+    }
+  };
 
   // State for visible columns
   const [visCols, setVisCols] = useState(['nome', 'tel', 'ig', 'av', 'status', 'city', 'hood']);
@@ -211,6 +291,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   const [bDim, setBDim] = useState('cat');
   const [bMet, setBMet] = useState('leads');
   const [bMode, setBMode] = useState('bars');
+  const [isBaseAnalysisExpanded, setIsBaseAnalysisExpanded] = useState(false);
 
   // Table pagination and sorting
   const [bSort, setBSort] = useState({ key: 'nome', dir: 1 });
@@ -220,7 +301,10 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   // Selected leads
   const [sel, setSel] = useState(new Set());
 
-  // Modals
+  // Filtros rápidos da lista: só com / sem cada canal, nota mínima e texto.
+  const [bSmart, setBSmart] = useState(() => emptyFilters());
+
+  // Modais
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [expFmt, setExpFmt] = useState('xlsx');
   const [expScope, setExpScope] = useState('filtered');
@@ -229,13 +313,18 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   const [importPreview, setImportPreview] = useState(null);
 
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const [isGroupsOpen, setIsGroupsOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
+  const [groupMode, setGroupMode] = useState('selection');
+  const [groupFilters, setGroupFilters] = useState(() => emptyFilters());
 
   const [isAddGroupOpen, setIsAddGroupOpen] = useState(false);
   const [groupSearch, setGroupSearch] = useState('');
 
   const [activeLead, setActiveLead] = useState(null);
   const [leadModalTab, setLeadModalTab] = useState('dados');
+  const [phonePromptLead, setPhonePromptLead] = useState(null);
+  const [kanbanSnapshot, setKanbanSnapshot] = useState({ cards: [], board: { columns: [] } });
 
   // Persist state
   useEffect(() => {
@@ -256,11 +345,37 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
 
   useEffect(() => {
     localStorage.setItem('sigma_groups', JSON.stringify(groups));
+    // Espelha no processo principal para os grupos aparecerem no Lead Scoring e
+    // nas campanhas, e avisa as telas abertas.
+    syncGroupsToService(groups);
+    notifyGroupsChanged();
   }, [groups]);
+
+  // Quem manda "criar grupo" de outra tela cai direto no modal certo.
+  useEffect(() => {
+    const openGroups = () => setIsGroupsOpen(true);
+    window.addEventListener('sigma:open-groups', openGroups);
+    return () => window.removeEventListener('sigma:open-groups', openGroups);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('sigma_history', JSON.stringify(hist));
   }, [hist]);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadKanban = async () => {
+      if (!window.kanbanAPI?.getBoard) return;
+      try {
+        const synced = await window.kanbanAPI.syncMapsLeads?.(normalizeLeadCollection(leads));
+        const response = await window.kanbanAPI.getBoard();
+        if (mounted) setKanbanSnapshot(response?.board || synced?.board || { cards: [], board: { columns: [] } });
+      } catch {}
+    };
+    loadKanban();
+    window.addEventListener('sigma:deal-updated', loadKanban);
+    return () => { mounted = false; window.removeEventListener('sigma:deal-updated', loadKanban); };
+  }, [leads]);
 
   // Normalized accessors
   const getLeadId = (l, idx) => l.id || `lead-${idx}`;
@@ -274,8 +389,43 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   const getLeadUf = (l) => l.state || l.uf || '';
   const getLeadHood = (l) => l.neighborhood || l.hood || '';
   const getLeadRating = (l) => l.rating || l.rn || '—';
-  const getLeadReviews = (l) => l.reviews || 0;
+  const getLeadReviews = (l) => l.reviews ?? l.totalReviews ?? l.reviewCount ?? l.numberOfReviews ?? 0;
   const getLeadOrig = (l) => l.searchQuery || l.orig || '—';
+
+  const kanbanIndex = useMemo(() => {
+    const index = new Map();
+    (kanbanSnapshot.cards || []).forEach((card) => {
+      const profile = card.entity?.profile || {};
+      const phone = String(profile.phone || '').replace(/\D/g, '');
+      if (phone) index.set(`phone:${phone}`, card);
+      const name = norm(profile.name || '');
+      if (name) index.set(`name:${name}`, card);
+    });
+    return index;
+  }, [kanbanSnapshot.cards]);
+
+  const kanbanCardFor = (lead) => {
+    const phone = String(getLeadTel(lead) || '').replace(/\D/g, '');
+    return (phone && kanbanIndex.get(`phone:${phone}`)) || kanbanIndex.get(`name:${norm(getLeadName(lead))}`) || null;
+  };
+
+  const statusPresentation = (lead, id) => {
+    const card = kanbanCardFor(lead);
+    const column = card && kanbanSnapshot.board?.columns?.find((item) => item.id === card.columnId);
+    if (column) return { label: column.name, color: column.color || '#94a3b8', symbol: column.dealOutcome === 'won' ? '✓' : column.dealOutcome === 'lost' ? '×' : column.id === 'contacted' ? '↩' : column.id === 'sent' ? '→' : '○' };
+    const fallback = leadStatus(id);
+    return { label: fallback === 'resp' ? 'Respondeu' : fallback === 'env' ? 'Mensagem enviada' : 'Novo lead', color: fallback === 'resp' ? '#2563eb' : fallback === 'env' ? '#10a37f' : '#94a3b8', symbol: fallback === 'resp' ? '↩' : fallback === 'env' ? '→' : '○' };
+  };
+
+  const askToMessage = (lead) => setPhonePromptLead(lead);
+  const startWhatsAppFromBase = () => {
+    if (!phonePromptLead) return;
+    const name = getLeadName(phonePromptLead);
+    const tel = getLeadTel(phonePromptLead);
+    try { localStorage.setItem('sigma_wa_pending', JSON.stringify({ name, tel })); } catch {}
+    setPhonePromptLead(null);
+    window.location.hash = '#whatsapp';
+  };
 
   const leadHasChan = (l, ch) => {
     if (ch === 'tel' || ch === 'wa') return Boolean(getLeadTel(l));
@@ -327,19 +477,20 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
       if (bHood && hood !== bHood) return false;
       if (bRate > 0 && rn < bRate) return false;
       if (bGrupo) {
-        const grp = groups.find((g) => g.id === bGrupo);
-        if (!grp || !grp.members.includes(id)) return false;
+        const members = groupLeadSets.get(String(bGrupo));
+        if (!members || !members.has(l)) return false;
       }
       for (const ch of bChans) {
         if (!leadHasChan(l, ch)) return false;
       }
+      if (!matchesLeadFilters(l, bSmart)) return false;
       if (q) {
         const fullText = norm(`${name} ${cat} ${city} ${uf} ${hood} ${tel} ${ig}`);
         if (!fullText.includes(q)) return false;
       }
       return true;
     });
-  }, [leads, bq, bCat, bUf, bCity, bHood, bRate, bGrupo, bChans, groups]);
+  }, [leads, bq, bCat, bUf, bCity, bHood, bRate, bGrupo, bChans, bSmart, groups]);
 
   // Stats calculation
   const stats = useMemo(() => {
@@ -454,8 +605,12 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
     if (bGrupo) n += 1;
     if (bRate > 0) n += 1;
     n += bChans.length;
+    n += Object.values(bSmart.channels || {}).filter((value) => value === 'with' || value === 'without').length;
+    if (Number(bSmart.minRating || 0) > 0) n += 1;
+    if (bSmart.city) n += 1;
+    if (bSmart.category) n += 1;
     return n;
-  }, [bq, bCat, bUf, bCity, bHood, bGrupo, bRate, bChans]);
+  }, [bq, bCat, bUf, bCity, bHood, bGrupo, bRate, bChans, bSmart]);
 
   // Sorted rows
   const sortedRows = useMemo(() => {
@@ -538,41 +693,104 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
     setBGrupo('');
     setBRate(0);
     setBChans([]);
+    setBSmart(emptyFilters());
   };
 
   // Group membership helpers
-  const leadGroups = (leadId) => groups.filter((g) => g.members.includes(leadId));
+  const groupLeadSets = useMemo(() => {
+    const map = new Map();
+    for (const group of groups) map.set(String(group.id), new Set(resolveGroupMembers(group, leads)));
+    return map;
+  }, [groups, leads]);
 
-  const removeLeadFromGroup = (leadId, groupId) => {
-    setGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, members: g.members.filter((m) => m !== leadId) } : g)));
+  const leadGroups = (lead) => groups.filter((g) => groupLeadSets.get(String(g.id))?.has(lead));
+
+  const removeLeadFromGroup = (lead, groupId) => {
+    const keys = new Set(membershipKeys(lead, leads.indexOf(lead)));
+    setGroups((prev) => prev.map((g) => (g.id === groupId
+      ? { ...g, members: (g.members || []).filter((m) => !keys.has(m)), updated: Date.now() }
+      : g)));
   };
 
-  const addLeadToGroup = (leadId, groupId) => {
-    setGroups((prev) => prev.map((g) => (g.id === groupId && !g.members.includes(leadId) ? { ...g, members: [...g.members, leadId] } : g)));
+  const addLeadToGroup = (lead, groupId) => {
+    const keys = membershipKeys(lead, leads.indexOf(lead));
+    setGroups((prev) => prev.map((g) => {
+      if (g.id !== groupId) return g;
+      return { ...g, members: [...new Set([...(g.members || []), ...keys])], updated: Date.now() };
+    }));
   };
 
-  // Create group from selection
+  // Abrir a criação de grupo já no modo útil: com leads marcados usa a seleção,
+  // sem seleção abre direto em "Filtrar a base" para não parecer que não há nada.
+  const openCreateGroup = (mode) => {
+    setNewGroupName('');
+    setGroupFilters(emptyFilters());
+    setGroupMode(mode || (sel.size > 0 ? 'selection' : 'filter'));
+    setIsCreateGroupOpen(true);
+  };
+
+  // Membros que o modal de criação vai usar, conforme o modo escolhido.
+  const groupCandidates = useMemo(() => {
+    if (groupMode !== 'filter') return [];
+    return filterLeads(leads, groupFilters);
+  }, [groupMode, leads, groupFilters]);
+
+  const groupSelectionCount = useMemo(() => {
+    if (groupMode !== 'filter') return sel.size;
+    return groupCandidates.length;
+  }, [groupMode, sel, groupCandidates]);
+
+  // Create group from selection or from the filter result
   const handleCreateGroup = () => {
-    const name = newGroupName.trim() || 'Novo grupo';
-    const newGroup = {
-      id: `g${Date.now()}`,
-      name,
-      members: [...sel],
-      created: Date.now()
-    };
+    const sourceLeads = groupMode === 'filter'
+      ? groupCandidates
+      : leads.filter((l, idx) => sel.has(getLeadId(l, idx)));
+    if (!sourceLeads.length) {
+      addNotification({
+        type: 'warning',
+        category: 'system',
+        title: 'Nenhum lead no grupo',
+        message: groupMode === 'filter'
+          ? 'Ajuste os filtros: nenhum lead da base atende a esta combinação.'
+          : 'Selecione ao menos um lead na tabela para criar o grupo.',
+      });
+      return;
+    }
+    const newGroup = createGroup({
+      name: newGroupName,
+      members: membersFromLeads(sourceLeads, leads),
+      description: groupMode === 'filter' ? describeFilters(groupFilters) : '',
+    });
     setGroups((prev) => [...prev, newGroup]);
     setIsCreateGroupOpen(false);
+    setIsGroupsOpen(false);
     setNewGroupName('');
+    setGroupFilters(emptyFilters());
+    setGroupMode('selection');
+    addLog?.(`[GRUPO] “${newGroup.name}” criado com ${sourceLeads.length} lead(s).`);
+    addNotification({
+      type: 'success',
+      category: 'system',
+      title: 'Grupo criado',
+      message: `“${newGroup.name}” tem ${sourceLeads.length} lead(s) e já aparece no Lead Scoring e nas campanhas.`,
+    });
   };
 
   // Add selection to existing group
   const handleAddToGroup = (groupId) => {
+    const selectedLeads = leads.filter((l, idx) => sel.has(getLeadId(l, idx)));
+    const keys = membersFromLeads(selectedLeads, leads);
     setGroups((prev) => prev.map((g) => {
       if (g.id !== groupId) return g;
-      const combined = new Set([...g.members, ...sel]);
-      return { ...g, members: [...combined] };
+      return { ...g, members: [...new Set([...(g.members || []), ...keys])], updated: Date.now() };
     }));
     setIsAddGroupOpen(false);
+    addNotification({
+      type: 'success',
+      category: 'system',
+      title: 'Leads adicionados',
+      message: `${selectedLeads.length} lead(s) entraram no grupo.`,
+    });
   };
 
   // Export Leads
@@ -604,7 +822,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
           const st = leadStatus(id);
           row[c.label] = st === 'resp' ? 'Respondeu' : st === 'env' ? 'Mensagem enviada' : 'Ainda não contatado';
         } else if (c.id === 'grupos') {
-          row[c.label] = leadGroups(id).map((g) => g.name).join('; ') || '—';
+          row[c.label] = leadGroups(l).map((g) => g.name).join('; ') || '—';
         }
       });
       return row;
@@ -754,6 +972,8 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
     return max;
   }, [displayChartGroups, bMet]);
 
+  const activeKanbanCard = activeLead ? kanbanCardFor(activeLead) : null;
+
   return (
     <div className="base-leads-view" style={{ display: 'flex', flexDirection: 'column', gap: '20px', width: '100%' }}>
       {/* HERO SECTION — LABORATÓRIO COMERCIAL */}
@@ -786,7 +1006,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
             <Phone size={17} /><b>{stats.withTel}</b>
           </span>
           <span className="hc" title="Com WhatsApp">
-            <span style={{ color: '#25D366', fontWeight: 'bold' }}>WA</span><b>{stats.withWa}</b>
+            <MessageCircle size={17} /><b>{stats.withWa}</b>
           </span>
           <span className="hc" title="Com Instagram">
             <Instagram size={17} /><b>{stats.withIg}</b>
@@ -837,10 +1057,13 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
       </section>
 
       {/* ANÁLISE DA BASE PANEL */}
-      <div className="panel" data-od-id="base-chart">
-        <div className="panel-head">
-          <h3>Análise da base</h3>
-          <div className="seg" role="group" aria-label="Modo de visualização" style={{ marginLeft: 'auto' }}>
+      <div className={`panel base-analysis-panel ${isBaseAnalysisExpanded ? 'is-expanded' : 'is-collapsed'}`} data-od-id="base-chart">
+        <div className="panel-head base-analysis-head">
+          <button type="button" className="base-analysis-toggle" onClick={() => setIsBaseAnalysisExpanded((expanded) => !expanded)} aria-expanded={isBaseAnalysisExpanded} aria-controls="base-analysis-content">
+            <span><h3>Análise da base</h3>{!isBaseAnalysisExpanded && <small>{filteredLeads.length} leads no recorte</small>}</span>
+            {isBaseAnalysisExpanded ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+          </button>
+          {isBaseAnalysisExpanded && <div className="seg" role="group" aria-label="Modo de visualização" style={{ marginLeft: 'auto' }}>
             <button
               type="button"
               aria-pressed={bMode === 'bars'}
@@ -865,9 +1088,10 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
             >
               ⋮
             </button>
-          </div>
+          </div>}
         </div>
 
+        {isBaseAnalysisExpanded && <div id="base-analysis-content">
         <div className="mxrow" role="group" aria-label="Dimensão" style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '6px 0 12px' }}>
           <div className="field" style={{ minWidth: '160px' }}>
             <select
@@ -956,6 +1180,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
             </div>
           )}
         </div>
+        </div>}
       </div>
 
       {/* TOOLBAR */}
@@ -1025,6 +1250,15 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
         <button
           type="button"
           className="btn"
+          data-od-id="base-groups"
+          onClick={() => setIsGroupsOpen(true)}
+        >
+          <Tag size={14} /> Grupos {groups.length > 0 ? <b className="bbar-count">{groups.length}</b> : null}
+        </button>
+
+        <button
+          type="button"
+          className="btn"
           data-od-id="base-import"
           onClick={() => importInputRef.current?.click()}
         >
@@ -1088,7 +1322,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
             <select value={bGrupo} onChange={(e) => setBGrupo(e.target.value)}>
               <option value="">Todos</option>
               {groups.map((g) => (
-                <option key={g.id} value={g.id}>{g.name} ({g.members.length})</option>
+                <option key={g.id} value={g.id}>{g.name} ({groupLeadSets.get(String(g.id))?.size || 0})</option>
               ))}
             </select>
           </div>
@@ -1126,6 +1360,49 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
             </div>
           </div>
 
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
+            <label>Filtros rápidos <span className="wa-hint">clique para incluir ou excluir</span></label>
+            <div className="grp-presets" data-od-id="base-presets">
+              {FILTER_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={`grp-chip ${presetActive(bSmart, preset) ? 'on' : ''}`}
+                  onClick={() => setBSmart((current) => applyPreset(current, preset))}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <div className="grp-channels">
+              {CHANNELS.map((channel) => {
+                const state = bSmart.channels?.[channel.key] || 'any';
+                return (
+                  <div className="grp-channel" key={channel.key}>
+                    <span className="grp-channel-name">{channel.label}</span>
+                    <div className="grp-seg" role="group" aria-label={`Filtro de ${channel.label}`}>
+                      {CHANNEL_STATES.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={state === option.value ? 'on' : ''}
+                          onClick={() => setBSmart((current) => {
+                            const channels = { ...(current.channels || {}) };
+                            if (option.value === 'any') delete channels[channel.key];
+                            else channels[channel.key] = option.value;
+                            return { ...current, channels };
+                          })}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="field" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-end', gridColumn: '1 / -1' }}>
             <button type="button" className="btn btn-sm btn-ghost" onClick={handleClearFilters}>
               Limpar tudo
@@ -1143,7 +1420,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
             Limpar
           </button>
           <span style={{ flex: 1 }} />
-          <button type="button" className="btn btn-sm" onClick={() => { setNewGroupName(''); setIsCreateGroupOpen(true); }}>
+          <button type="button" className="btn btn-sm" onClick={() => openCreateGroup('selection')}>
             Criar grupo
           </button>
           <button type="button" className="btn btn-sm" onClick={() => setIsAddGroupOpen(true)}>
@@ -1201,7 +1478,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
               paginatedRows.map((l, idx) => {
                 const id = getLeadId(l, idx);
                 const isSelected = sel.has(id);
-                const st = leadStatus(id);
+                const st = statusPresentation(l, id);
 
                 return (
                   <tr key={id} className={isSelected ? 'selrow' : ''}>
@@ -1234,16 +1511,17 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                         return (
                           <td key={colId}>
                             <span
-                              className={`st-ic ${st === 'resp' ? 'st-resp' : st === 'env' ? 'st-env' : 'st-novo'}`}
-                              title={st === 'resp' ? 'Respondeu' : st === 'env' ? 'Mensagem enviada' : 'Ainda não contatado'}
+                              className="st-ic"
+                              style={{ background: `${st.color}18`, borderColor: st.color, color: st.color }}
+                              title={`Kanban: ${st.label}`}
                             >
-                              {st === 'resp' ? '↩' : st === 'env' ? '→' : '○'}
+                              {st.symbol}
                             </span>
                           </td>
                         );
                       }
                       if (colId === 'grupos') {
-                        const myGrps = leadGroups(id);
+                        const myGrps = leadGroups(l);
                         return (
                           <td key={colId}>
                             {myGrps.length === 0 ? (
@@ -1254,7 +1532,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                                   <span>{g.name}</span>
                                   <button
                                     type="button"
-                                    onClick={() => removeLeadFromGroup(id, g.id)}
+                                    onClick={() => removeLeadFromGroup(l, g.id)}
                                     title="Remover deste grupo"
                                   >
                                     ×
@@ -1266,10 +1544,15 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                         );
                       }
                       if (colId === 'cat') return <td key={colId}>{getLeadCat(l)}</td>;
-                      if (colId === 'tel') return <td key={colId}>{getLeadTel(l) || '—'}</td>;
-                      if (colId === 'wa') return <td key={colId}>{getLeadTel(l) || '—'}</td>;
+                      if (colId === 'tel' || colId === 'wa') {
+                        const tel = getLeadTel(l);
+                        return <td key={colId} data-sensitive-phone="true">{tel ? <button type="button" className="phone-link-btn" onClick={(event) => { event.stopPropagation(); askToMessage(l); }} title="Enviar mensagem via WhatsApp"><Phone size={14} /><span>{tel}</span></button> : '—'}</td>;
+                      }
                       if (colId === 'ig') return <td key={colId}>{getLeadIg(l) || '—'}</td>;
-                      if (colId === 'site') return <td key={colId}>{getLeadSite(l) || '—'}</td>;
+                      if (colId === 'site') {
+                        const site = getLeadSite(l);
+                        return <td key={colId}>{site ? <button type="button" className="site-icon-btn" title={site} aria-label={`Abrir site ${site}`} onClick={(event) => { event.stopPropagation(); window.electronAPI?.openSite?.(site); }}><Globe size={15} /></button> : '—'}</td>;
+                      }
                       if (colId === 'mail') return <td key={colId}>{getLeadMail(l) || '—'}</td>;
                       if (colId === 'av') return <td key={colId} className="num">{getLeadRating(l)} ({getLeadReviews(l)})</td>;
                       if (colId === 'uf') return <td key={colId}>{getLeadUf(l) || '—'}</td>;
@@ -1428,10 +1711,84 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
         </div>
       )}
 
+      {/* MODAL GRUPOS */}
+      {isGroupsOpen && (
+        <div className="overlay on" onClick={() => setIsGroupsOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, 94vw)' }}>
+            <div className="modal-head">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <h2 style={{ flex: 1 }}>Grupos de leads</h2>
+                <span className="result-count">{groups.length} grupo{groups.length === 1 ? '' : 's'}</span>
+              </div>
+            </div>
+            <div className="modal-body" style={{ gridTemplateColumns: '1fr', gap: '12px' }}>
+              <p style={{ margin: 0, fontSize: 12.5, color: 'var(--muted)' }}>
+                Os grupos aparecem no Lead Scoring e no assistente de campanha automaticamente.
+              </p>
+              <button type="button" className="btn btn-primary" data-od-id="groups-create" onClick={() => openCreateGroup()}>
+                <Tag size={14} /> Criar grupo com filtros
+              </button>
+
+              {groups.length === 0 ? (
+                <div className="empty">
+                  <b>Nenhum grupo ainda</b>
+                  <span>Crie um grupo filtrando a base — por exemplo, só leads com WhatsApp e sem site.</span>
+                </div>
+              ) : (
+                <div className="grp-manage-list">
+                  {groups.map((g) => {
+                    const count = groupLeadSets.get(String(g.id))?.size || 0;
+                    return (
+                      <div className="grp-manage-row" key={g.id}>
+                        <div>
+                          <b>{g.name}</b>
+                          <span>
+                            {count} lead{count === 1 ? '' : 's'}
+                            {g.description ? ` · ${g.description}` : ''}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => {
+                            setBGrupo(g.id);
+                            setGroupsOpen(false);
+                          }}
+                        >
+                          Ver na base
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          aria-label={`Excluir grupo ${g.name}`}
+                          title="Excluir grupo"
+                          onClick={() => {
+                            setGroups((prev) => prev.filter((item) => item.id !== g.id));
+                            if (bGrupo === g.id) setBGrupo('');
+                            addLog?.(`[GRUPO] “${g.name}” excluído.`);
+                          }}
+                        >
+                          <X size={15} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="btn btn-ghost" onClick={() => setIsGroupsOpen(false)}>
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL CRIAR GRUPO */}
       {isCreateGroupOpen && (
         <div className="overlay on" onClick={() => setIsCreateGroupOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(440px, 94vw)' }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(620px, 94vw)' }}>
             <div className="modal-head">
               <h2>Criar grupo</h2>
             </div>
@@ -1440,22 +1797,148 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                 <label htmlFor="grpName">Nome do grupo</label>
                 <input
                   id="grpName"
-                  placeholder="Ex.: Advogados — Rio de Janeiro"
+                  placeholder="Ex.: Advogados sem site — Rio de Janeiro"
                   value={newGroupName}
                   onChange={(e) => setNewGroupName(e.target.value)}
                   autoFocus
                 />
               </div>
-              <div className="estimate full">
-                <b>{sel.size} leads serão adicionados a este grupo.</b>
+
+              <div className="grp-modes" role="tablist" aria-label="Como escolher os leads">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={groupMode === 'selection'}
+                  className={groupMode === 'selection' ? 'on' : ''}
+                  onClick={() => setGroupMode('selection')}
+                >
+                  Selecionados <b>{sel.size}</b>
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={groupMode === 'filter'}
+                  className={groupMode === 'filter' ? 'on' : ''}
+                  onClick={() => setGroupMode('filter')}
+                >
+                  Filtrar a base <b>{groupCandidates.length}</b>
+                </button>
               </div>
+
+              {groupMode === 'selection' ? (
+                <div className="estimate full">
+                  <b>{sel.size} lead(s) selecionado(s) na tabela entram neste grupo.</b>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <div className="grp-filters-title">Atalhos</div>
+                    <div className="grp-presets" data-od-id="group-presets">
+                      {FILTER_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className={`grp-chip ${presetActive(groupFilters, preset) ? 'on' : ''}`}
+                          onClick={() => setGroupFilters((current) => applyPreset(current, preset))}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="grp-filters-title">Refinar por canal</div>
+                    <div className="grp-channels" id="grpChannels">
+                      {CHANNELS.map((channel) => {
+                        const state = groupFilters.channels?.[channel.key] || 'any';
+                        return (
+                          <div className="grp-channel" key={channel.key}>
+                            <span className="grp-channel-name">{channel.label}</span>
+                            <div className="grp-seg" role="group" aria-label={`Filtro de ${channel.label}`}>
+                              {CHANNEL_STATES.map((option) => (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  className={state === option.value ? 'on' : ''}
+                                  onClick={() => setGroupFilters((current) => {
+                                    const channels = { ...(current.channels || {}) };
+                                    if (option.value === 'any') delete channels[channel.key];
+                                    else channels[channel.key] = option.value;
+                                    return { ...current, channels };
+                                  })}
+                                >
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grp-extra">
+                    <label className="field">
+                      <span>Nota mínima</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="5"
+                        step="0.5"
+                        value={groupFilters.minRating || ''}
+                        placeholder="0"
+                        onChange={(e) => setGroupFilters((current) => ({ ...current, minRating: Number(e.target.value) || 0 }))}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Cidade</span>
+                      <input
+                        value={groupFilters.city || ''}
+                        placeholder="Qualquer"
+                        onChange={(e) => setGroupFilters((current) => ({ ...current, city: e.target.value }))}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Categoria</span>
+                      <input
+                        value={groupFilters.category || ''}
+                        placeholder="Qualquer"
+                        onChange={(e) => setGroupFilters((current) => ({ ...current, category: e.target.value }))}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-compact"
+                      disabled={!hasActiveFilters(groupFilters)}
+                      onClick={() => setGroupFilters(emptyFilters())}
+                    >
+                      Limpar filtros
+                    </button>
+                  </div>
+
+                  <div className="grp-preview" data-od-id="group-preview">
+                    <b>{groupCandidates.length} lead(s) entram neste grupo.</b>
+                    {groupCandidates.length > 0 ? (
+                      <span>{groupCandidates.slice(0, 6).map((l) => getLeadName(l)).join(' · ')}{groupCandidates.length > 6 ? ` +${groupCandidates.length - 6}` : ''}</span>
+                    ) : (
+                      <span>Nenhum lead da base atende esta combinação — ajuste os filtros.</span>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
             <div className="modal-foot">
               <button type="button" className="btn btn-ghost" onClick={() => setIsCreateGroupOpen(false)}>
                 Cancelar
               </button>
-              <button type="button" className="btn btn-primary" onClick={handleCreateGroup}>
-                Criar grupo
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={groupSelectionCount === 0}
+                onClick={handleCreateGroup}
+              >
+                Criar grupo com {groupSelectionCount} lead{groupSelectionCount === 1 ? '' : 's'}
               </button>
             </div>
           </div>
@@ -1490,7 +1973,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                       onClick={() => handleAddToGroup(g.id)}
                     >
                       <b>{g.name}</b>
-                      <span>{g.members.length} leads</span>
+                      <span>{groupLeadSets.get(String(g.id))?.size || 0} leads</span>
                     </button>
                   ))}
               </div>
@@ -1505,14 +1988,30 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
       )}
 
       {/* MODAL DETALHES DO LEAD */}
+      {phonePromptLead && (
+        <div className="overlay on modal-overlay" role="presentation" onClick={() => setPhonePromptLead(null)}>
+          <div className="modal modal-content phone-message-modal" role="dialog" aria-modal="true" aria-labelledby="phoneMessageTitle" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head"><div className="eyebrow">WhatsApp</div><h2 id="phoneMessageTitle">Enviar mensagem?</h2></div>
+            <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+              <p>Deseja abrir uma nova conversa com <b>{getLeadName(phonePromptLead)}</b>?</p>
+              <p className="phone-message-number" data-sensitive-phone="true">{getLeadTel(phonePromptLead)}</p>
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="btn btn-ghost" onClick={() => setPhonePromptLead(null)}>Não agora</button>
+              <button type="button" className="btn btn-primary" onClick={startWhatsAppFromBase}>Sim, abrir WhatsApp</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeLead && (
         <div className="overlay on" onClick={() => setActiveLead(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, 94vw)' }}>
             <div className="modal-head">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <h2 style={{ flex: 1 }}>{getLeadName(activeLead)}</h2>
-                <span className={`st-ic ${leadStatus(getLeadId(activeLead, 0)) === 'resp' ? 'st-resp' : leadStatus(getLeadId(activeLead, 0)) === 'env' ? 'st-env' : 'st-novo'}`}>
-                  {leadStatus(getLeadId(activeLead, 0)) === 'resp' ? '↩' : leadStatus(getLeadId(activeLead, 0)) === 'env' ? '→' : '○'}
+                <span className="st-ic" style={{ background: `${statusPresentation(activeLead, getLeadId(activeLead, 0)).color}18`, borderColor: statusPresentation(activeLead, getLeadId(activeLead, 0)).color, color: statusPresentation(activeLead, getLeadId(activeLead, 0)).color }} title={`Kanban: ${statusPresentation(activeLead, getLeadId(activeLead, 0)).label}`}>
+                  {statusPresentation(activeLead, getLeadId(activeLead, 0)).symbol}
                 </span>
               </div>
             </div>
@@ -1548,7 +2047,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                     </div>
                     <div>
                       <div className="lb">Telefone</div>
-                      <div className="v">{getLeadTel(activeLead) || '—'}</div>
+                      <div className="v" data-sensitive-phone="true">{getLeadTel(activeLead) || '—'}</div>
                     </div>
                     <div>
                       <div className="lb">Instagram</div>
@@ -1568,17 +2067,29 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                     </div>
                   </div>
 
+                  {activeKanbanCard && (
+                    <section className="lead-crm-summary" aria-labelledby="lead-crm-title">
+                      <div className="exp-sec" id="lead-crm-title">Atividade comercial</div>
+                      <div className="lead-crm-grid">
+                        <div><span>Mensagem recebida</span><b>{activeKanbanCard.messageSentAt ? fmtDate(activeKanbanCard.messageSentAt) : '—'}</b></div>
+                        <div><span>Resposta</span><b>{activeKanbanCard.repliedAt ? fmtDate(activeKanbanCard.repliedAt) : '—'}</b></div>
+                        <div><span>Valor do negócio</span><b>{Number(activeKanbanCard.dealValue) > 0 ? `R$ ${Number(activeKanbanCard.dealValue).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '—'}</b></div>
+                        <div><span>Lembrete</span><b>{activeKanbanCard.reminderAt ? fmtDate(activeKanbanCard.reminderAt) : '—'}</b></div>
+                      </div>
+                    </section>
+                  )}
+
                   <div className="exp-sec" style={{ marginTop: '16px' }}>Grupos</div>
                   <div>
-                    {leadGroups(getLeadId(activeLead, 0)).length === 0 ? (
+                    {leadGroups(activeLead).length === 0 ? (
                       <span style={{ fontSize: '13px', color: 'var(--muted)' }}>Nenhum grupo atribuído.</span>
                     ) : (
-                      leadGroups(getLeadId(activeLead, 0)).map((g) => (
+                      leadGroups(activeLead).map((g) => (
                         <span key={g.id} className="gchip">
                           <span>{g.name}</span>
                           <button
                             type="button"
-                            onClick={() => removeLeadFromGroup(getLeadId(activeLead, 0), g.id)}
+                            onClick={() => removeLeadFromGroup(activeLead, g.id)}
                           >
                             ×
                           </button>
@@ -1592,13 +2103,13 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                       value=""
                       onChange={(e) => {
                         if (e.target.value) {
-                          addLeadToGroup(getLeadId(activeLead, 0), e.target.value);
+                          addLeadToGroup(activeLead, e.target.value);
                         }
                       }}
                     >
                       <option value="">Adicionar a grupo…</option>
                       {groups
-                        .filter((g) => !g.members.includes(getLeadId(activeLead, 0)))
+                        .filter((g) => !groupLeadSets.get(String(g.id))?.has(activeLead))
                         .map((g) => (
                           <option key={g.id} value={g.id}>{g.name}</option>
                         ))}
@@ -1642,16 +2153,15 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
               ) : (
                 <div>
                   <div className="exp-sec">Por que esse score?</div>
-                  {analysis[getLeadId(activeLead, 0)] ? (
+                  {baseScoreFor(activeLead) ? (
                     (() => {
-                      const a = analysis[getLeadId(activeLead, 0)];
-                      const bandCls = a.score >= 80 ? 'high' : a.score >= 50 ? 'mid' : 'low';
-                      const bandTxt = a.score >= 80 ? 'Alta' : a.score >= 50 ? 'Média' : 'Baixa';
+                      const a = baseScoreFor(activeLead);
+                      const band = a.band;
                       return (
                         <div>
                           <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '6px' }}>
                             <span style={{ fontFamily: 'var(--font-display)', fontSize: '40px', lineHeight: 1 }}>{a.score}</span>
-                            <span className={`ftag ${bandCls}`}>{bandTxt}</span>
+                            <span className={`ftag ${band}`}>{a.bandLabel}</span>
                           </div>
                           <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '10px' }}>
                             {a.preset || 'Auditoria'} · {fmtDate(a.ts)} {a.provider ? `· ${a.provider}` : ''}
@@ -1701,7 +2211,15 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                   ) : (
                     <div className="empty">
                       <b>Não analisado</b>
-                      <span>Execute a análise do grupo deste lead em Lead Scoring.</span>
+                      <span>Sem score salvo para este lead. A análise investiga site, contato e reputação no Google.</span>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-compact"
+                        disabled={scoringBusyId === activeLead.id}
+                        onClick={() => handleAnalyzeLead(activeLead)}
+                      >
+                        {scoringBusyId === activeLead.id ? 'Analisando…' : 'Analisar agora'}
+                      </button>
                     </div>
                   )}
                 </div>

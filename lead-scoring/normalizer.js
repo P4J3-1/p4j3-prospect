@@ -2,13 +2,17 @@ const { createLeadId } = require("./prospecting-store");
 const { classifyUrl, VERSION: CLASSIFIER_VERSION } = require("./url-classifier");
 const { normalizeAddress } = require("../utils/address-normalizer");
 const { normalizeText } = require("../utils/text-normalizer");
+const { normalizeLeadLinks, normalizePhoneDisplay } = require("../utils/lead-links");
 
 function normalizeLead(raw, options = {}) {
   const lead = raw || {};
   const address = normalizeAddress(lead.address);
   const parsed = parseLocation(address, options.query || "");
-  const phone = clean(lead.phone);
-  const website = clean(lead.website);
+  // O lead pode chegar direto do renderer (análise avulsa do grupo). Sem esta
+  // passagem, link do Maps e URL de Instagram entrariam como se fossem site.
+  const links = normalizeLeadLinks(lead);
+  const phone = normalizePhoneDisplay(lead.phone) || clean(lead.phone);
+  const website = links.website;
   const whatsapp = inferWhatsapp(phone, website);
   const digitalPresence = classifyUrl(website);
   const company = {
@@ -21,7 +25,7 @@ function normalizeLead(raw, options = {}) {
     whatsapp,
     email: clean(lead.email),
     website,
-    instagram: clean(lead.instagram),
+    instagram: links.instagram,
     rating: Number(lead.rating || 0),
     totalReviews: clean(lead.totalReviews || lead.reviews || lead.reviewCount),
     reviewCount: Number(lead.reviewCount || lead.reviews || onlyDigits(lead.totalReviews) || 0),
