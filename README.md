@@ -18,34 +18,38 @@ O app combina scraping, tratamento de dados, análise comercial e execução de 
 ### Pesquisa e base de leads
 
 - Pesquisa por nicho, bairro ou cidade no Google Maps, com paginação e coleta dos dados públicos disponíveis.
+- O modal de extração separa nicho, município digitado e UF selecionada, deixando a busca mais rápida de revisar.
 - Campos de negócio como nome, categoria, telefone, site, Instagram, e-mail, avaliação, endereço e coordenadas.
 - Deduplicação por negócio e normalização de categorias; variações como “dentista”, “clínica odontológica” e “ortodontia” são agrupadas em **Odontologia**.
 - Extrações de planilhas/CSV/XLSX ficam fora da lista de extrações reais do Maps.
 - Visualização em tabela ou mapa Leaflet com camada **Ruas**, pins com coordenadas e indicador de precisão.
-- Filtros, seleção em lote e exportação CSV/XLSX.
+- Filtros, seleção em lote, exportação CSV/XLSX e filtros rápidos nas últimas extrações (**Todos**, **com site**, **com telefone** e **com e-mail**).
+- Site aparece como ícone web (com URL no hover e abertura em janela interna); telefone pode iniciar uma conversa mesmo fora da lista de contatos.
 
 ### Lead Scoring
 
 - Auditoria do site do lead para sinais técnicos e comerciais: HTTPS, responsividade, pixel, WhatsApp, presença digital e qualidade do site.
 - Score, prioridade, argumentos de abordagem e mensagem sugerida para WhatsApp.
 - Grupos salvos por pesquisa/filtro para trabalhar a lista por etapas.
-- Análise opcional com provedores OpenCode/OpenRouter, com fallback local quando não há chave configurada.
+- Análise opcional com **OpenRouter como padrão**, NVIDIA Build como alternativa e OpenCode/custom API quando configurados; há fallback local quando não existe chave disponível.
 
 ### WhatsApp
 
 - Conexão de múltiplos números por QR Code usando Baileys ou Meta Cloud API.
 - Conversas, contatos, grupos, etiquetas, mensagens, mídia, áudio e gatilhos.
+- Nova conversa por telefone digitado, mesmo que o número ainda não esteja na lista; envio de texto, áudio, vídeo, PDF, documentos e arquivos ZIP/RAR/7Z.
+- Modo streaming opcional para borrar números de telefone na interface, inclusive em contatos salvos.
 - Campanhas com mensagem variável, intervalo, agendamento e limite diário por conexão.
 - Uma campanha pode ser criada como **rascunho** mesmo sem WhatsApp conectado; a conexão é exigida apenas para iniciar os disparos.
 
 ### Campanhas e Kanban
 
 - Campanhas por lista de leads, com relatório de envio, entrega, leitura, respostas e tempo de resposta.
-- Kanban individual por campanha com três etapas persistentes:
-  - **Novos**
-  - **Em conversa**
-  - **Finalizados**
-- Mova cards por drag-and-drop ou pelo seletor acessível; a etapa continua preservada quando a lista é editada.
+- Kanban configurável com regras simples para eventos como mensagem enviada, resposta, venda e recusa.
+- Adição manual de lead por telefone ou conversa do WhatsApp, com etapa inicial e valor do negócio.
+- Lembretes podem ser criados para qualquer contato, com ou sem cartão no Kanban; quando há cartão, a etapa e o lembrete são sincronizados.
+- Valores ganhos e pendentes, vendas fechadas, datas de mensagem/resposta e lembretes aparecem no resumo comercial da Visão Geral.
+- Mova cards por drag-and-drop ou seletor; leads apagados da base autoritativa não voltam para o quadro.
 
 ![Kanban por campanha](docs/qa/open-design-lote1/whatsapp-campaign-kanban-1440x900.png)
 
@@ -53,8 +57,8 @@ O app combina scraping, tratamento de dados, análise comercial e execução de 
 
 ### Interface e operação
 
-- Shell visual baseado no Open Design do produto, com visão geral, Scraper Maps, Base de Leads, Lead Scoring, WhatsApp, Dashboard e Configurações.
-- Dashboard com cobertura da base e distribuição por categoria.
+- Shell visual baseado no Open Design do produto, com Visão Geral, Scraper Maps, Base de Leads, Lead Scoring, Kanban, WhatsApp e Configurações.
+- Painel administrativo com navegação por ícones, análise da base iniciando minimizada e visão geral minimalista com métricas e sino de pendências.
 - Atualizações automáticas na versão instalada via GitHub Releases.
 - Dados da aplicação e sessões do WhatsApp ficam no perfil local do Electron; chamadas externas acontecem apenas para Maps, sites analisados, WhatsApp e provedores de IA configurados.
 
@@ -62,15 +66,15 @@ O app combina scraping, tratamento de dados, análise comercial e execução de 
 
 Baixe a [release mais recente](https://github.com/olucianobotelho/google-maps-sigma-scrapper/releases).
 
-Na release `v1.1.4`, os arquivos são:
+Na release `v1.1.9`, os arquivos são:
 
-- `Sigma-GMaps-Scraper-1.1.4-x64.exe` — instalador NSIS recomendado.
-- `Sigma-GMaps-Scraper-1.1.4-x64.zip` — versão portátil.
+- `Sigma-GMaps-Scraper-1.1.9-x64.exe` — instalador NSIS recomendado.
+- `Sigma-GMaps-Scraper-1.1.9-x64-complete.zip` — pacote portátil completo.
 - `latest.yml` e `.blockmap` — metadados usados pelo atualizador automático.
 
 Após instalar, abra o Sigma e comece por **Nova Extração**. Para campanhas, conecte um número em **WhatsApp → Sessão** ou salve primeiro um rascunho e conecte depois.
 
-> O atualizador automático funciona na versão instalada pelo NSIS. `win-unpacked` é uma saída de teste local e não deve ser usada para validar atualização in-place.
+> O atualizador automático funciona na versão instalada pelo NSIS. Quem ainda estiver em uma versão anterior precisa instalar a `v1.1.9` uma vez; depois, as próximas releases podem ser aplicadas pelo próprio app. `win-unpacked` é uma saída de teste local e não deve ser usada para validar atualização in-place.
 
 ## Desenvolvimento
 
@@ -116,6 +120,14 @@ whatsapp/                          Providers, autenticação e normalização
 scripts/capture-open-design-ui.js  QA visual determinístico
 test/                              Testes unitários e de integração local
 ```
+
+## Apoie o projeto
+
+Se o Sigma GMaps Scraper for útil para você, qualquer contribuição ajuda a manter o projeto:
+
+- **Pix:** `0501fe37-1008-43d1-9db1-1a4bc7ce6953`
+- **Nome:** Luciano Paiva Botelho
+- **Banco:** Nubank
 
 ## Contribuir e reportar problemas
 
