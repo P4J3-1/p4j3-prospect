@@ -104,6 +104,9 @@ class CampaignStore {
       provider: data.provider,
       connectionId: primaryConnectionId,
       connectionIds,
+      groupId: data.groupId || null,
+      groupName: data.groupName || '',
+      groupIds: Array.isArray(data.groupIds) ? [...data.groupIds] : [],
       template: data.template,
       media: (data.template && data.template.media) || null,
       leads: (data.leadIds || []).map((lid, idx) => {

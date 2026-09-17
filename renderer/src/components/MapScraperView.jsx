@@ -1017,7 +1017,7 @@ export default function MapScraperView({
         type: 'info',
         category: 'scraper',
         title: 'Cancelamento solicitado',
-        message: 'A busca atual será encerrada sem adicionar resultados parciais.',
+        message: 'A busca atual será encerrada mantendo os resultados já salvos na base.',
       });
     } catch (error) {
       addNotification({

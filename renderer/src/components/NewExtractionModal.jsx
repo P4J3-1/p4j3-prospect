@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { splitBatchInput } from '../batchSplit.mjs';
 
 const NICHOS = [
   'Dentistas', 'Clínica odontológica', 'Ortodontista', 'Odontologia', 'Aparelho ortodôntico',
@@ -140,11 +141,15 @@ export default function NewExtractionModal({
   };
 
   const addBairro = () => {
-    const v = bairroInput.trim();
-    if (!v) return;
-    if (!bairros.some((b) => b.toLowerCase() === v.toLowerCase())) {
-      setBairros([...bairros, v]);
-    }
+    const items = splitBatchInput(bairroInput, { max: 50, maxLen: 80 });
+    if (!items.length) return;
+    setBairros((prev) => {
+      const next = [...prev];
+      for (const item of items) {
+        if (!next.some((b) => b.toLowerCase() === item.toLowerCase())) next.push(item);
+      }
+      return next;
+    });
     setBairroInput('');
   };
 
@@ -177,16 +182,22 @@ export default function NewExtractionModal({
       return;
     }
     // Step 3 - Start extraction!
+    const niches = splitBatchInput(nicho, { max: 20, maxLen: 80 });
     const neigh = bairros.length > 0 ? bairros.join(', ') : '';
     const city = `${cidadeObj?.n || cidadeInput.trim()}, ${cidadeObj?.uf || cidadeUf}`;
     onStartExtraction?.({
-      niche: nicho.trim(),
+      niche: niches[0] || nicho.trim(),
+      niches,
       neigh,
+      neighborhoods: [...bairros],
       city,
       limit: 1000
     });
     onClose();
   };
+
+  const detectedNiches = splitBatchInput(nicho, { max: 20, maxLen: 80 });
+  const matrixCount = detectedNiches.length * Math.max(1, bairros.length);
 
   return (
     <div className="overlay on modal-overlay" onClick={onClose} style={{ display: 'grid' }}>
@@ -241,6 +252,16 @@ export default function NewExtractionModal({
                   )}
                 </div>
                 {nichoError && <span className="field-err" style={{ display: 'block' }}>Diga o nicho para continuar.</span>}
+                {detectedNiches.length > 1 && (
+                  <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
+                    {detectedNiches.length} nichos detectados: {detectedNiches.slice(0, 5).join(' · ')}{detectedNiches.length > 5 ? '…' : ''} — cada um vira uma busca.
+                  </span>
+                )}
+                {!nichoError && detectedNiches.length <= 1 && (
+                  <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>
+                    Dica: cole vários nichos separados por vírgula.
+                  </span>
+                )}
               </div>
 
               <div className="car" style={{ marginTop: '14px' }}>
@@ -335,6 +356,9 @@ export default function NewExtractionModal({
             <div className="wz-step">
               <div className="field">
                 <label htmlFor="wzBairro">Bairros (opcional — deixe em branco para o município inteiro)</label>
+                <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>
+                  Pode colar vários de uma vez separados por vírgula.
+                </span>
                 <div className="hood-add">
                   <input
                     id="wzBairro"
@@ -368,8 +392,11 @@ export default function NewExtractionModal({
               </div>
 
               <div className="wz-review" style={{ marginTop: '12px' }}>
-                <b>{nicho || '—'}</b>
+                <b>{detectedNiches.length > 1 ? `${detectedNiches.length} nichos` : (nicho || '—')}</b>
                 <span> · {cidadeLabel()} · {bairros.length ? `${bairros.length} bairro(s)` : 'município inteiro'}</span>
+                {matrixCount > 1 && (
+                  <span style={{ display: 'block', marginTop: 4 }}>Uma extração gigante: {matrixCount} buscas em sequência, com retomada automática.</span>
+                )}
               </div>
             </div>
           )}

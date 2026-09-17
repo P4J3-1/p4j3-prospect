@@ -425,8 +425,7 @@ class CampaignScheduler {
     if (!enabled) return true;
     if (!start && !end) return true;
 
-    const d = new Date(now);
-    const minutes = d.getHours() * 60 + d.getMinutes();
+    const minutes = this._zonedMinutes(now, sc.timeZone || schedule?.timeZone || null);
     const startM = this._hhmmToMinutes(start);
     const endM = this._hhmmToMinutes(end);
     if (startM == null || endM == null) return true;
@@ -441,6 +440,27 @@ class CampaignScheduler {
   // on a perfectly periodic cadence (anti-ban).
   _intervalWithJitter(baseInterval) {
     return Math.round(baseInterval * (1 + Math.random() * 0.4));
+  }
+
+  // Minutos (0–1439) do instante na região configurada ('system' = relógio local).
+  _zonedMinutes(nowMs, timeZone) {
+    if (timeZone && timeZone !== 'system') {
+      try {
+        const parts = new Intl.DateTimeFormat('en-US', {
+          timeZone,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        }).formatToParts(new Date(nowMs));
+        const h = Number(parts.find((p) => p.type === 'hour')?.value);
+        const m = Number(parts.find((p) => p.type === 'minute')?.value);
+        if (Number.isFinite(h) && Number.isFinite(m)) return (h % 24) * 60 + (m % 60);
+      } catch {
+        /* zona inválida: cai para o relógio local */
+      }
+    }
+    const d = new Date(nowMs);
+    return d.getHours() * 60 + d.getMinutes();
   }
 
   _hhmmToMinutes(value) {

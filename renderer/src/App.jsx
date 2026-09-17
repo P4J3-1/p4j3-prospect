@@ -26,6 +26,36 @@ import { NotificationProvider, useNotifications } from './components/Notificatio
 import UpdateBanner from './components/UpdateBanner';
 import UpdateSettingsCard from './components/UpdateSettingsCard';
 import { dedupeLeads, normalizeLeadCollection, readLocalArray } from './leadData';
+import { splitBatchInput, buildExtractionTargets, MAX_MATRIX_TARGETS } from './batchSplit.mjs';
+
+const EXTRACTION_JOBS_KEY = 'sigma_extraction_jobs';
+
+function readExtractionJobs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(EXTRACTION_JOBS_KEY) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeExtractionJobs(jobs) {
+  try {
+    localStorage.setItem(EXTRACTION_JOBS_KEY, JSON.stringify(Array.isArray(jobs) ? jobs : []));
+  } catch {}
+}
+
+function updateExtractionJob(id, patch) {
+  const jobs = readExtractionJobs();
+  writeExtractionJobs(jobs.map((job) => (
+    String(job?.id) === String(id) ? { ...job, ...patch, updatedAt: Date.now() } : job
+  )));
+}
+
+function remainingJobTargets(job) {
+  const done = new Set([...(job?.completedKeys || []), ...(job?.failedKeys || [])]);
+  return (job?.targets || []).filter((target) => !done.has(target.key));
+}
 
 const CLEAR_DATA_OPTIONS = [
   { id: 'leads', label: 'Leads da base', hint: 'Empresas e contatos salvos' },
@@ -377,130 +407,142 @@ function AppInner() {
     setIsClearLeadBaseOpen(false);
   };
 
-  const handleStartExtraction = async ({ niche, neigh, city, limit }) => {
-    if (activeExtraction) {
-      addNotification({
-        type: 'info',
-        category: 'scraper',
-        title: 'Extração em andamento',
-        message: 'Aguarde a busca atual terminar ou cancele-a antes de iniciar outra.',
-      });
-      return;
-    }
-    setActiveTab('scraper');
-    const neighborhoods = String(neigh || '')
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .filter((item, index, items) => items.findIndex((candidate) => candidate.localeCompare(item, 'pt-BR', { sensitivity: 'accent' }) === 0) === index);
-    const hasNeighborhoodPlan = neighborhoods.length > 0;
-    const targets = hasNeighborhoodPlan ? neighborhoods : [city || 'Pesquisa regional'];
-    const qstr = [niche, neigh, city].filter(Boolean).join(' ').trim();
-    const cityParts = String(city || '').split(',').map((part) => part.trim()).filter(Boolean);
-    const uf = cityParts.find((part) => /^[A-Z]{2}$/i.test(part))?.toUpperCase() || '';
-    const municipality = cityParts.filter((part) => !/^[A-Z]{2}$/i.test(part)).join(', ');
-    const searchId = `scrape_${Date.now()}`;
-    addNotification({
-      type: 'info',
-      category: 'scraper',
-      title: 'Iniciando Extração',
-      message: `Buscando ${niche} em ${neigh}, ${city}...`
-    });
+  const extractionRunningRef = useRef(false);
 
+  const saveExtractionPartial = ({ searchId, newLeads, job }) => {
+    const withIds = (Array.isArray(newLeads) ? newLeads : []).map((lead) => ({
+      ...lead,
+      searchId,
+      id: lead.id || Math.random().toString(36).slice(2),
+    }));
+    const current = dedupeLeads(normalizeLeadCollection(readLocalArray('sigma_leads')));
+    const combined = dedupeLeads(normalizeLeadCollection([...current, ...withIds]));
+    const addedCount = Math.max(0, combined.length - current.length);
+    const currentSearches = readLocalArray('sigma_searches');
+    const record = {
+      id: searchId,
+      query: job.qstr,
+      niche: job.niches[0] || '',
+      niches: job.niches,
+      neighborhoods: job.neighborhoods,
+      municipality: job.municipality,
+      uf: job.uf,
+      label: job.label,
+      source: 'maps',
+      timestamp: Date.now(),
+    };
+    const nextSearches = currentSearches.some((search) => String(search?.id) === String(searchId))
+      ? currentSearches.map((search) => (String(search?.id) === String(searchId) ? { ...search, timestamp: Date.now() } : search))
+      : [...currentSearches, record];
+    localStorage.setItem('sigma_leads', JSON.stringify(combined));
+    localStorage.setItem('sigma_searches', JSON.stringify(nextSearches));
+    setLeadsCount(dedupeLeads(combined).length);
+    window.dispatchEvent(new CustomEvent('sigma:leads-updated', {
+      detail: { leads: combined, searches: nextSearches },
+    }));
+    return addedCount;
+  };
+
+  const runExtractionJob = async (job, { navigate = true } = {}) => {
+    const searchId = job.id;
+    if (extractionRunningRef.current) return;
     if (!window.electronAPI || typeof window.electronAPI.startScrape !== 'function') {
       addNotification({ type: 'error', category: 'scraper', title: 'Extração indisponível', message: 'A ponte do desktop não está disponível. Reinicie o aplicativo.' });
       return;
     }
-
+    extractionRunningRef.current = true;
+    if (navigate) setActiveTab('scraper');
+    const remaining = remainingJobTargets(job);
+    const displayNeighborhoods = job.neighborhoods.length ? job.neighborhoods : [job.city || 'Pesquisa regional'];
     setActiveExtraction({
       id: searchId,
-      query: qstr,
-      startedAt: Date.now(),
-      neighborhoods: targets,
-      hasNeighborhoodPlan,
+      query: job.qstr,
+      startedAt: job.createdAt,
+      niches: job.niches,
+      neighborhoods: displayNeighborhoods,
+      targets: job.targets,
+      hasNeighborhoodPlan: job.neighborhoods.length > 0,
       completedNeighborhoods: [],
+      completedKeys: [...(job.completedKeys || [])],
       failedNeighborhoods: [],
-      currentNeighborhood: targets[0],
-      foundCount: 0,
+      failedKeys: [...(job.failedKeys || [])],
+      currentNeighborhood: '',
+      foundCount: job.foundCount || 0,
     });
+    const warnings = [];
+    let addedThisRun = 0;
+    let cancelled = false;
     try {
-      const resultLeads = [];
-      const warnings = [];
-
-      for (let index = 0; index < targets.length; index += 1) {
-        const neighborhood = targets[index];
-        const targetQuery = [niche, hasNeighborhoodPlan ? neighborhood : '', city].filter(Boolean).join(' ').trim();
-        setActiveExtraction((current) => current && current.id === searchId
-          ? { ...current, currentNeighborhood: neighborhood }
-          : current);
-
-        const res = await window.electronAPI.startScrape(targetQuery, limit, searchId, {
-          neighborhood,
-          neighborhoodIndex: index,
-          totalNeighborhoods: targets.length,
-          batchComplete: index === targets.length - 1,
-        });
+      for (const target of remaining) {
+        const display = target.neighborhood ? `${target.niche} — ${target.neighborhood}` : target.niche;
+        const targetQuery = [target.niche, target.neighborhood, job.city].filter(Boolean).join(' ').trim();
+        const flatIndex = Math.max(0, job.targets.findIndex((item) => item.key === target.key));
+        setActiveExtraction((current) => (current && current.id === searchId
+          ? { ...current, currentNeighborhood: display }
+          : current));
+        let res = null;
+        try {
+          res = await window.electronAPI.startScrape(targetQuery, job.limit, searchId, {
+            neighborhood: display,
+            neighborhoodIndex: flatIndex,
+            totalNeighborhoods: job.targets.length,
+            batchComplete: flatIndex === job.targets.length - 1,
+          });
+        } catch (err) {
+          res = { success: false, error: err?.message || 'Falha na busca.' };
+        }
         if (!res?.success) {
           if (res?.cancelled) {
-            addNotification({ type: 'info', category: 'scraper', title: 'Extração cancelada', message: 'Nenhum resultado parcial foi adicionado à base.' });
-            return;
+            cancelled = true;
+            break;
           }
-          warnings.push(`${neighborhood}: ${res?.error || 'sem resultados válidos'}`);
-          setActiveExtraction((current) => current && current.id === searchId
-            ? { ...current, failedNeighborhoods: [...new Set([...current.failedNeighborhoods, neighborhood])] }
-            : current);
+          warnings.push(`${display}: ${res?.error || 'sem resultados válidos'}`);
+          const failedKeys = [...new Set([...(readExtractionJobs().find((item) => String(item?.id) === String(searchId))?.failedKeys || []), target.key])];
+          updateExtractionJob(searchId, { failedKeys });
+          setActiveExtraction((current) => (current && current.id === searchId
+            ? { ...current, failedNeighborhoods: [...new Set([...current.failedNeighborhoods, display])], failedKeys: [...new Set([...current.failedKeys, target.key])] }
+            : current));
           continue;
         }
-
         const targetLeads = Array.isArray(res.data) ? res.data : [];
-        resultLeads.push(...targetLeads);
         if (res.partial && Array.isArray(res.warnings)) warnings.push(...res.warnings);
-        setActiveExtraction((current) => current && current.id === searchId
+        addedThisRun += saveExtractionPartial({ searchId, newLeads: targetLeads, job });
+        const stored = readExtractionJobs().find((item) => String(item?.id) === String(searchId)) || {};
+        const completedKeys = [...new Set([...(stored.completedKeys || []), target.key])];
+        const foundCount = (stored.foundCount || 0) + targetLeads.length;
+        updateExtractionJob(searchId, { completedKeys, foundCount });
+        setActiveExtraction((current) => (current && current.id === searchId
           ? {
-              ...current,
-              completedNeighborhoods: [...new Set([...current.completedNeighborhoods, neighborhood])],
-              foundCount: resultLeads.length,
-            }
-          : current);
+            ...current,
+            completedNeighborhoods: [...new Set([...current.completedNeighborhoods, display])],
+            completedKeys: [...new Set([...current.completedKeys, target.key])],
+            foundCount,
+          }
+          : current));
       }
 
-      if (!resultLeads.length) {
+      if (cancelled) {
+        updateExtractionJob(searchId, { status: 'cancelled' });
+        addNotification({
+          type: 'info',
+          category: 'scraper',
+          title: 'Extração pausada',
+          message: `O que já foi coletado continua salvo na base (${addedThisRun} novos leads nesta sessão).`,
+        });
+        return;
+      }
+      const hadPriorProgress = (job.completedKeys || []).length > 0;
+      if (addedThisRun === 0 && !hadPriorProgress) {
         throw new Error(warnings[0] || 'A busca foi concluída, mas não retornou leads válidos.');
       }
-
-      const current = dedupeLeads(normalizeLeadCollection(readLocalArray('sigma_leads')));
-      const combined = dedupeLeads(normalizeLeadCollection([
-        ...current,
-        ...resultLeads.map((lead) => ({ ...lead, searchId, id: lead.id || Math.random().toString(36).slice(2) })),
-      ]));
-      const addedCount = Math.max(0, combined.length - current.length);
-      const currentSearches = readLocalArray('sigma_searches');
-      const nextSearches = [
-        ...currentSearches.filter((search) => String(search?.id) !== searchId),
-        {
-        id: searchId,
-        query: qstr,
-        niche: String(niche || '').trim(),
-        municipality,
-        uf,
-        label: `${niche} · ${neigh}${city ? ` · ${city}` : ''}`,
-          source: 'maps',
-          timestamp: Date.now(),
-        },
-      ];
-      localStorage.setItem('sigma_leads', JSON.stringify(combined));
-      localStorage.setItem('sigma_searches', JSON.stringify(nextSearches));
-      setLeadsCount(dedupeLeads(combined).length);
-      window.dispatchEvent(new CustomEvent('sigma:leads-updated', {
-        detail: { leads: combined, searches: nextSearches },
-      }));
+      updateExtractionJob(searchId, { status: 'done' });
       addNotification({
         type: warnings.length ? 'info' : 'success',
         category: 'scraper',
         title: warnings.length ? 'Extração concluída parcialmente' : 'Extração concluída',
         message: warnings.length
-          ? `${addedCount} novos leads adicionados. ${warnings[0]}`
-          : `${addedCount} novos leads adicionados à base.`,
+          ? `${addedThisRun} novos leads adicionados. ${warnings[0]}`
+          : `${addedThisRun} novos leads adicionados à base.`,
         duration: 5000,
       });
     } catch (err) {
@@ -511,9 +553,100 @@ function AppInner() {
         message: err?.message || 'Não foi possível concluir a busca. Tente novamente.',
       });
     } finally {
+      extractionRunningRef.current = false;
       setActiveExtraction(null);
     }
   };
+
+  const handleStartExtraction = async ({ niche, niches, neigh, neighborhoods, city, limit }) => {
+    if (activeExtraction || extractionRunningRef.current) {
+      addNotification({
+        type: 'info',
+        category: 'scraper',
+        title: 'Extração em andamento',
+        message: 'Aguarde a busca atual terminar ou cancele-a antes de iniciar outra.',
+      });
+      return;
+    }
+    const nicheList = (Array.isArray(niches) && niches.length ? niches : splitBatchInput(niche, { max: 20 })).slice(0, 20);
+    const neighList = (Array.isArray(neighborhoods) && neighborhoods.length
+      ? neighborhoods
+      : splitBatchInput(neigh, { max: 50 })).slice(0, 50);
+    if (!nicheList.length) {
+      addNotification({ type: 'error', category: 'scraper', title: 'Falta o nicho', message: 'Informe ao menos um nicho para iniciar a extração.' });
+      return;
+    }
+    const rawCount = nicheList.length * Math.max(1, neighList.length);
+    const targets = buildExtractionTargets(nicheList, neighList);
+    if (!targets.length) {
+      addNotification({ type: 'error', category: 'scraper', title: 'Nada para buscar', message: 'Confira nichos e bairros e tente novamente.' });
+      return;
+    }
+    if (rawCount > targets.length) {
+      addNotification({
+        type: 'info',
+        category: 'scraper',
+        title: 'Extração limitada',
+        message: `São ${rawCount} buscas no total; começando pelas ${targets.length} primeiras.`,
+      });
+    }
+    const cityParts = String(city || '').split(',').map((part) => part.trim()).filter(Boolean);
+    const uf = cityParts.find((part) => /^[A-Z]{2}$/i.test(part))?.toUpperCase() || '';
+    const municipality = cityParts.filter((part) => !/^[A-Z]{2}$/i.test(part)).join(', ');
+    const searchId = `scrape_${Date.now()}`;
+    const qstr = [nicheList.join(', '), neighList.join(', '), city].filter(Boolean).join(' ').trim();
+    const job = {
+      id: searchId,
+      niches: nicheList,
+      neighborhoods: neighList,
+      city: String(city || ''),
+      municipality,
+      uf,
+      qstr,
+      label: `${nicheList.length > 1 ? `${nicheList.length} nichos` : nicheList[0]} · ${neighList.length ? `${neighList.length} bairro(s)` : 'município inteiro'}${city ? ` · ${city}` : ''}`,
+      limit: Number.isFinite(Number(limit)) ? Number(limit) : 1000,
+      targets,
+      status: 'running',
+      completedKeys: [],
+      failedKeys: [],
+      foundCount: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    // Uma extração nova aposenta jobs interrompidos anteriores.
+    writeExtractionJobs([
+      job,
+      ...readExtractionJobs().map((item) => (item?.status === 'running' && String(item?.id) !== searchId
+        ? { ...item, status: 'cancelled', updatedAt: Date.now() }
+        : item)),
+    ]);
+    addNotification({
+      type: 'info',
+      category: 'scraper',
+      title: 'Iniciando extração gigante',
+      message: targets.length > 1 ? `${job.label} — ${targets.length} buscas em sequência.` : `Buscando ${job.label}...`,
+    });
+    await runExtractionJob(job, { navigate: true });
+  };
+
+  // Retomada automática: se o app fechou no meio de uma extração gigante,
+  // volta de onde parou ao abrir.
+  useEffect(() => {
+    try {
+      const jobs = readExtractionJobs();
+      const pending = jobs.find((item) => item?.status === 'running' && remainingJobTargets(item).length > 0);
+      if (pending && window.electronAPI?.startScrape) {
+        const doneCount = (pending.completedKeys || []).length;
+        addNotification({
+          type: 'info',
+          category: 'scraper',
+          title: 'Extração retomada',
+          message: `Continuando de onde parou (${doneCount}/${pending.targets.length} buscas prontas, resultados já salvos).`,
+        });
+        runExtractionJob(pending, { navigate: false });
+      }
+    } catch {}
+  }, []);
 
   const renderContent = () => {
     switch (activeTab) {

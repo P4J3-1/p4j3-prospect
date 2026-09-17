@@ -70,15 +70,18 @@ contextBridge.exposeInMainWorld("campaignAPI", {
   update: (id, updates) =>
     ipcRenderer.invoke("campaign-update", { id, updates }),
   delete: (id) => ipcRenderer.invoke("campaign-delete", { id }),
-  start: (id, connectionId, confirmRecovery = false) =>
-    ipcRenderer.invoke("campaign-start", { id, connectionId, confirmRecovery }),
+  start: (id, connectionId, confirmRecovery = false, forceNow = false) =>
+    ipcRenderer.invoke("campaign-start", { id, connectionId, confirmRecovery, forceNow }),
   pause: (id) => ipcRenderer.invoke("campaign-pause", { id }),
-  resume: (id, connectionId) =>
-    ipcRenderer.invoke("campaign-resume", { id, connectionId }),
+  resume: (id, connectionId, forceNow = false) =>
+    ipcRenderer.invoke("campaign-resume", { id, connectionId, forceNow }),
   retryFailed: (id, connectionId) =>
     ipcRenderer.invoke("campaign-retry-failed", { id, connectionId }),
   getAll: () => ipcRenderer.invoke("campaign-get-all"),
   get: (id) => ipcRenderer.invoke("campaign-get", { id }),
+  recoveryList: () => ipcRenderer.invoke("campaign-recovery-list"),
+  recoveryResolve: (id, choice, connectionId) =>
+    ipcRenderer.invoke("campaign-recovery-resolve", { id, choice, connectionId }),
   export: (id, format) => ipcRenderer.invoke("campaign-export", { id, format }),
   preview: (template, leadId) =>
     ipcRenderer.invoke("template-preview", { template, leadId }),

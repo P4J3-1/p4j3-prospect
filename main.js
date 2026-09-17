@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage, screen, powerSaveBlocker, Notification } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -70,6 +70,8 @@ const resultStore = new Map();
 const allowedMediaPaths = new Set();
 const activeScrapes = new Map();
 const { LIMIT_TIERS } = require("./campaigns/daily-quota");
+const { shouldPreventSuspension } = require("./utils/background-holds");
+let powerBlockerId = null;
 let tray = null;
 let isExitInProgress = false;
 let closePromptInFlight = false;
@@ -134,6 +136,8 @@ const defaultWhatsAppSettings = {
     workingHoursEnabled: true,
     workingHoursStart: "07:00",
     workingHoursEnd: "18:00",
+    // Região do agendamento: 'system' (padrão) ou IANA (ex.: America/Sao_Paulo)
+    timeZone: "system",
   },
 };
 let cachedWhatsAppSettings = null;
@@ -287,6 +291,71 @@ function updateTray() {
     { type: "separator" },
     { label: "Sair do Sigma Scraper", click: () => quitApplication() },
   ]));
+}
+
+function currentCampaignList() {
+  try {
+    return campaignManager?.getAll?.() || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Autonomia em segundo plano: enquanto houver campanha disparando/
+ * agendada ou extração rodando, segura o app acordado (o usuário pode
+ * usar outros programas) e solta quando tudo termina.
+ */
+function refreshBackgroundHolds() {
+  let want = false;
+  try {
+    want = shouldPreventSuspension({ campaigns: currentCampaignList(), activeScrapes: activeScrapes.size });
+  } catch {
+    want = false;
+  }
+  try {
+    const alive = powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId);
+    if (want && !alive) {
+      powerBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+      console.log("[POWER] hold ativo: trabalho em segundo plano.");
+    } else if (!want && powerBlockerId !== null) {
+      try {
+        powerSaveBlocker.stop(powerBlockerId);
+      } catch {}
+      powerBlockerId = null;
+      console.log("[POWER] hold liberado: nada em andamento.");
+    }
+  } catch (error) {
+    console.warn("[POWER] hold:", error.message);
+  }
+  updateTray();
+}
+
+/** Avisa no Windows (respeita Configurações → notificações). */
+function notifyUser({ title, body }) {
+  const cleanTitle = limitString(title || "Sigma Scraper", 120, "Sigma Scraper");
+  const cleanBody = limitString(body || "", 220, "");
+  if (!cleanBody) return;
+  let desktop = true;
+  let sound = true;
+  try {
+    const current = cachedWhatsAppSettings || loadWhatsAppSettings();
+    desktop = current?.notifications?.desktop !== false;
+    sound = current?.notifications?.sound !== false;
+  } catch {}
+  if (!desktop) return;
+  try {
+    if (tray && (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible())) {
+      tray.displayBalloon({ title: cleanTitle, content: cleanBody.slice(0, 200), iconType: "info" });
+    }
+  } catch {}
+  try {
+    if (Notification.isSupported()) {
+      new Notification({ title: cleanTitle, body: cleanBody, silent: !sound }).show();
+    }
+  } catch (error) {
+    console.warn("[NOTIFY]:", error.message);
+  }
 }
 
 function initializeTray() {
@@ -475,6 +544,15 @@ function normalizeCampaignSettings(raw) {
     const s = String(v || "").trim();
     return /^\d{1,2}:\d{2}$/.test(s) ? s.padStart(5, "0") : fallback;
   };
+  let timeZone = "system";
+  if (typeof input.timeZone === "string" && input.timeZone !== "system") {
+    try {
+      new Intl.DateTimeFormat("pt-BR", { timeZone: input.timeZone });
+      timeZone = input.timeZone;
+    } catch {
+      timeZone = "system";
+    }
+  }
   return {
     dailyLimit,
     unlockedLimits: unlocked,
@@ -482,6 +560,7 @@ function normalizeCampaignSettings(raw) {
     workingHoursEnabled: input.workingHoursEnabled !== false,
     workingHoursStart: hhmm(input.workingHoursStart, "07:00"),
     workingHoursEnd: hhmm(input.workingHoursEnd, "18:00"),
+    timeZone,
   };
 }
 
@@ -793,6 +872,14 @@ function sanitizeCampaignData(data) {
       end: limitString(wh.end || "18:00", 8, "18:00"),
     };
   }
+  const scheduleTimeZone =
+    typeof input.schedule?.timeZone === "string" && input.schedule.timeZone
+      ? limitString(input.schedule.timeZone, 80)
+      : null;
+
+  const groupIds = Array.isArray(input.groupIds)
+    ? [...new Set(input.groupIds.map((g) => limitString(String(g || ""), 80)).filter(Boolean))].slice(0, 20)
+    : [];
 
   return {
     ...input,
@@ -801,6 +888,9 @@ function sanitizeCampaignData(data) {
     provider: input.provider === "meta" ? "meta" : "baileys",
     connectionId,
     connectionIds,
+    groupIds,
+    groupId: input.groupId ? limitString(String(input.groupId), 80) : (groupIds[0] || null),
+    groupName: input.groupName ? limitString(String(input.groupName), 160) : "",
     template: sanitizeTemplate(input.template),
     leadIds: leadsWithConn,
     schedule: {
@@ -808,10 +898,11 @@ function sanitizeCampaignData(data) {
         ? input.schedule.mode
         : "interval",
       intervalMs,
-      startAt: Number.isFinite(Number(input.schedule?.startAt))
-        ? Number(input.schedule.startAt)
-        : null,
+      startAt: input.schedule?.startAt == null || input.schedule.startAt === ""
+        ? null
+        : (Number.isFinite(Number(input.schedule.startAt)) ? Number(input.schedule.startAt) : null),
       workingHours,
+      timeZone: scheduleTimeZone,
     },
   };
 }
@@ -819,14 +910,72 @@ function sanitizeCampaignData(data) {
 function sanitizeCampaignUpdates(updates) {
   const input = updates && typeof updates === "object" ? { ...updates } : {};
   if (input.connectionId) input.connectionId = assertConnectionId(input.connectionId);
+  if (Array.isArray(input.connectionIds)) {
+    const ids = [];
+    for (const rawId of input.connectionIds) {
+      try {
+        const id = assertConnectionId(rawId);
+        if (!ids.includes(id)) ids.push(id);
+      } catch {
+        /* skip invalid */
+      }
+    }
+    input.connectionIds = ids;
+    if (input.connectionId && !ids.includes(input.connectionId)) {
+      input.connectionIds = [input.connectionId, ...ids];
+    }
+  } else if (input.connectionId) {
+    input.connectionIds = [input.connectionId];
+  }
   if (input.template) input.template = sanitizeTemplate(input.template);
+  // Grupo vinculado (1 campanha = 1 grupo). Só toca quando a chave vem no
+  // payload — atualizações parciais (ex.: mover card no Kanban) preservam.
+  if ("groupId" in input) input.groupId = input.groupId ? limitString(String(input.groupId), 80) : null;
+  if ("groupName" in input) input.groupName = input.groupName ? limitString(String(input.groupName), 160) : "";
+  if ("groupIds" in input) {
+    input.groupIds = Array.isArray(input.groupIds)
+      ? [...new Set(input.groupIds.map((g) => limitString(String(g || ""), 80)).filter(Boolean))].slice(0, 20)
+      : [];
+  }
   if (input.media && input.media.filePath) {
     const mediaPath = resolveSelectedMediaPath(input.media.filePath, MAX_MEDIA_BYTES, "Media file");
     input.media = { ...input.media, filePath: mediaPath, fileName: path.basename(mediaPath) };
   }
   if (input.name) input.name = limitString(input.name, 160);
-  if (input.status && !["ready", "scheduled", "running", "paused", "completed", "cancelled"].includes(input.status)) {
+  if (input.status && ["running", "scheduled"].includes(input.status)) {
+    throw new Error("Use Iniciar/Retomar para ativar a campanha em vez de editar o status.");
+  }
+  if (input.status && !["ready", "paused", "completed", "cancelled"].includes(input.status)) {
     throw new Error("Invalid campaign status");
+  }
+  // Agendamento: mesmo padrão do create (modo / intervalo / início / janela).
+  // Permite editar campanha pausada/pronta e reagendar disparo direto.
+  if (input.schedule && typeof input.schedule === "object") {
+    const s = input.schedule;
+    const mode = ["immediate", "interval", "scheduled"].includes(s.mode) ? s.mode : "interval";
+    const intervalMs = clampInteger(s.intervalMs, 5000, 60 * 60 * 1000, 30000);
+    let startAt = s.startAt == null || s.startAt === ""
+      ? null
+      : (Number.isFinite(Number(s.startAt)) ? Number(s.startAt) : null);
+    // Disparo direto (immediate/interval) nunca carrega startAt residual.
+    if (mode !== "scheduled") startAt = null;
+    let workingHours = null;
+    if (s.workingHours === null) {
+      workingHours = null;
+    } else if (s.workingHours && typeof s.workingHours === "object") {
+      workingHours = {
+        enabled: s.workingHours.enabled !== false,
+        start: limitString(s.workingHours.start || "07:00", 8, "07:00"),
+        end: limitString(s.workingHours.end || "18:00", 8, "18:00"),
+      };
+    }
+    input.schedule = {
+      mode,
+      intervalMs,
+      startAt,
+      workingHours,
+      timeZone: typeof s.timeZone === "string" && s.timeZone ? limitString(s.timeZone, 80) : null,
+    };
   }
   // Permite editar a lista de destinatários (leadIds ou leads)
   if (Array.isArray(input.leadIds) || Array.isArray(input.leads)) {
@@ -1286,9 +1435,16 @@ app.whenReady().then(() => {
     const s = loadWhatsAppSettings();
     return s?.campaigns || defaultWhatsAppSettings.campaigns;
   });
-  const interruptedCampaigns = campaignManager.interruptForRestart();
-  if (interruptedCampaigns > 0) {
-    console.log(`[CAMPAIGN] Recovery confirmation required for ${interruptedCampaigns} campaign(s).`);
+  const bootRecovery = campaignManager.interruptForRestart();
+  if (bootRecovery.interruptedCount > 0) {
+    console.log(`[CAMPAIGN] Recovery confirmation required for ${bootRecovery.interruptedCount} campaign(s).`);
+  }
+  if (bootRecovery.missedCount > 0) {
+    console.log(`[CAMPAIGN] ${bootRecovery.missedCount} campaign(s) paused for missed schedule (recovery popup on UI).`);
+  }
+  const rearmed = campaignManager.rearmScheduled();
+  if (rearmed > 0) {
+    console.log(`[CAMPAIGN] ${rearmed} future scheduled campaign(s) re-armed automatically.`);
   }
   leadScoringService = new LeadScoringService(app.getPath("userData"), (payload) => {
     safeSend("lead-scoring-progress", payload);
@@ -1301,7 +1457,20 @@ app.whenReady().then(() => {
       event,
       data,
     });
-    updateTray();
+    try {
+      const campaign = campaignManager?.get?.(campaignId);
+      const name = campaign?.name || "Campanha";
+      if (event === "completed") {
+        notifyUser({ title: "Campanha concluída", body: `“${name}” terminou os disparos.` });
+      } else if (event === "daily-limit") {
+        notifyUser({ title: "Limite diário atingido", body: `“${name}” pausada. A cota renova amanhã — ou retome quando quiser.` });
+      } else if (event === "waiting" && data?.reason === "no_provider") {
+        notifyUser({ title: "WhatsApp desconectado", body: `“${name}” aguardando conexão para continuar.` });
+      } else if (event === "waiting" && data?.reason === "outside_hours") {
+        notifyUser({ title: "Fora do horário", body: `“${name}” em espera e retoma na janela de disparo.` });
+      }
+    } catch {}
+    refreshBackgroundHolds();
   });
 
   // Auto-reconnect saved WhatsApp sessions after renderer loads
@@ -1428,6 +1597,10 @@ app.on("before-quit", async () => {
   isExitInProgress = true;
   if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer);
   persistWindowState();
+  try {
+    if (powerBlockerId !== null) powerSaveBlocker.stop(powerBlockerId);
+  } catch {}
+  powerBlockerId = null;
   try { tray?.destroy(); } catch {}
   tray = null;
   try { autoUpdaterMod.shutdown(); } catch {}
@@ -1528,14 +1701,16 @@ function maybeAutoAnalyzeScrapedLeads(leads, query) {
   leadScoringService
     .analyzeBatch(leads, { query, searchLabel: query })
     .then((result) => {
-      console.log(`[SCORING] automático: ${result.analyzedCount}/${result.count}`);
+      console.log(`[SCORING] automático: ${result.analyzedCount}/${result.count} (${result.skipped || 0} sem site)`);
       safeSend("lead-scoring-progress", {
         event: "auto-completed",
         analyzed: result.analyzedCount,
         failures: result.failures,
+        skipped: result.skipped || 0,
         total: result.count,
         query,
-        message: `Scoring automático concluído: ${result.analyzedCount} de ${result.count} lead(s).`,
+        message: `Scoring automático concluído: ${result.analyzedCount} de ${result.count} lead(s).` +
+          (result.skipped ? ` ${result.skipped} ignorado(s) (sem site).` : ""),
       });
     })
     .catch((error) => {
@@ -1687,6 +1862,7 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId, progressC
   };
   const cancelToken = { cancelled: false };
   activeScrapes.set(key, cancelToken);
+  refreshBackgroundHolds();
   const emitProgress = (payload) => sendProgress({ queryId: key, ...scrapeProgressContext, ...payload });
   try {
     if (!cleanQuery) throw new Error("A consulta da extração é obrigatória.");
@@ -1766,6 +1942,7 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId, progressC
     });
 
     emitProgress({ status: "completed", current: data.length, total: data.length, message: `Extração concluída: ${data.length} resultado(s).` });
+    notifyUser({ title: "Extração concluída", body: `${data.length} resultado(s) para “${cleanQuery}”.` });
     try { appMetrics.track("scrape_completed", { count: data.length, queryLen: cleanQuery.length }); } catch {}
     maybeAutoAnalyzeScrapedLeads(data, cleanQuery);
 
@@ -1781,10 +1958,12 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId, progressC
   } catch (err) {
     const cancelled = err?.code === "SCRAPE_CANCELLED" || cancelToken.cancelled;
     emitProgress({ status: cancelled ? "cancelled" : "failed", current: null, total: cleanMaxResults, message: cancelled ? "Extração cancelada." : `Erro na extração: ${err.message}`, error: err.message });
+    if (!cancelled) notifyUser({ title: "Extração falhou", body: `“${cleanQuery}”: ${err.message}` });
     try { appMetrics.track("scrape_failed", { error: String(err.message).slice(0, 120) }); } catch {}
     return { success: false, error: err.message, cancelled, warnings: Array.isArray(err.warnings) ? err.warnings : [] };
   } finally {
     activeScrapes.delete(key);
+    refreshBackgroundHolds();
   }
 });
 
@@ -1834,6 +2013,7 @@ ipcMain.handle("cancel-scrape", async (_, { queryId } = {}) => {
   const key = limitString(queryId, 80, "");
   if (key && activeScrapes.has(key)) {
     activeScrapes.get(key).cancelled = true;
+    refreshBackgroundHolds();
     return { success: true, cancelled: 1 };
   }
   let cancelled = 0;
@@ -1841,6 +2021,7 @@ ipcMain.handle("cancel-scrape", async (_, { queryId } = {}) => {
     token.cancelled = true;
     cancelled++;
   }
+  refreshBackgroundHolds();
   return { success: true, cancelled };
 });
 
@@ -3188,6 +3369,7 @@ ipcMain.handle("lead-scoring-analyze-lead", async (_, { lead, options } = {}) =>
     const result = await leadScoringService.analyzeLead(lead, options || {});
     return { success: true, lead: result };
   } catch (err) {
+    if (err?.code === "NO_WEBSITE") return { success: false, skipped: true, error: err.message };
     return { success: false, error: err.message };
   }
 });
@@ -3502,6 +3684,9 @@ ipcMain.handle("campaign-create", async (_, data) => {
 ipcMain.handle("campaign-update", async (_, { id, updates }) => {
   try {
     const campaign = campaignManager.update(id, sanitizeCampaignUpdates(updates));
+    try { kanbanStore?.syncCampaigns(campaignManager?.getAll?.() || [], { replace: true, existingOnly: true }); } catch {}
+    safeSend("campaign-progress", { campaignId: id, event: "updated", data: { campaign } });
+    updateTray();
     return { success: true, campaign };
   } catch (err) {
     return { success: false, error: err.message };
@@ -3511,13 +3696,14 @@ ipcMain.handle("campaign-update", async (_, { id, updates }) => {
 ipcMain.handle("campaign-delete", async (_, { id }) => {
   try {
     campaignManager.delete(id);
+    refreshBackgroundHolds();
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
   }
 });
 
-ipcMain.handle("campaign-start", async (_, { id, connectionId, confirmRecovery = false } = {}) => {
+ipcMain.handle("campaign-start", async (_, { id, connectionId, confirmRecovery = false, forceNow = false } = {}) => {
   try {
     if (!campaignManager) throw new Error("Campaign manager não inicializado");
     // Garante mapa de providers atualizado
@@ -3553,10 +3739,12 @@ ipcMain.handle("campaign-start", async (_, { id, connectionId, confirmRecovery =
     const result = campaignManager.start(id, {
       activeConnectionId: preferred,
       confirmRecovery: confirmRecovery === true,
+      forceNow: forceNow === true,
     });
     if (result?.connectionId) {
       activeWhatsAppId = result.connectionId;
     }
+    refreshBackgroundHolds();
     return { success: true, connectionId: result?.connectionId || campaign.connectionId };
   } catch (err) {
     console.error("[CAMPAIGN] start falhou:", err.message);
@@ -3573,13 +3761,24 @@ ipcMain.handle("campaign-start", async (_, { id, connectionId, confirmRecovery =
 ipcMain.handle("campaign-pause", async (_, { id }) => {
   try {
     campaignManager.pause(id);
+    try { kanbanStore?.syncCampaigns(campaignManager?.getAll?.() || [], { replace: true, existingOnly: true }); } catch {}
+    refreshBackgroundHolds();
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
   }
 });
 
-ipcMain.handle("campaign-resume", async (_, { id, connectionId } = {}) => {
+ipcMain.handle("campaign-recovery-list", async () => {
+  try {
+    if (!campaignManager) return { success: true, missed: [] };
+    return { success: true, missed: campaignManager.getMissedSchedules() };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("campaign-recovery-resolve", async (_, { id, choice, connectionId } = {}) => {
   try {
     if (!campaignManager) throw new Error("Campaign manager não inicializado");
     campaignManager.setProvidersMap(whatsappProviders);
@@ -3587,8 +3786,30 @@ ipcMain.handle("campaign-resume", async (_, { id, connectionId } = {}) => {
       (connectionId && whatsappProviders.has(connectionId) && connectionId) ||
       activeWhatsAppId ||
       null;
-    const result = campaignManager.resume(id, { activeConnectionId: preferred });
+    const result = campaignManager.resolveMissedSchedule(id, choice, {
+      activeConnectionId: preferred,
+      confirmRecovery: true,
+    });
     if (result?.connectionId) activeWhatsAppId = result.connectionId;
+    try { kanbanStore?.syncCampaigns(campaignManager?.getAll?.() || [], { replace: true, existingOnly: true }); } catch {}
+    updateTray();
+    return { success: true, ...result };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("campaign-resume", async (_, { id, connectionId, forceNow = false } = {}) => {
+  try {
+    if (!campaignManager) throw new Error("Campaign manager não inicializado");
+    campaignManager.setProvidersMap(whatsappProviders);
+    const preferred =
+      (connectionId && whatsappProviders.has(connectionId) && connectionId) ||
+      activeWhatsAppId ||
+      null;
+    const result = campaignManager.resume(id, { activeConnectionId: preferred, forceNow: forceNow === true });
+    if (result?.connectionId) activeWhatsAppId = result.connectionId;
+    refreshBackgroundHolds();
     return { success: true, connectionId: result?.connectionId || null };
   } catch (err) {
     return { success: false, error: err.message };

@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Search,
   Users,
+  Plus,
   X,
   Eye,
   EyeOff
@@ -261,7 +262,7 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
 
   // Estado de execução do scoring
   const [isRunning, setIsRunning] = useState(false);
-  const [runStates, setRunStates] = useState({}); // { [leadId]: 'wait' | 'run' | 'done' | 'fail' | 'nosite' }
+  const [runStates, setRunStates] = useState({}); // { [leadId]: 'wait' | 'run' | 'done' | 'fail' | 'nosite' | 'skipped' }
   const [progressCount, setProgressCount] = useState({ current: 0, total: 0 });
   const [progressText, setProgressText] = useState('');
 
@@ -506,10 +507,24 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
       if (!response?.success) throw new Error(response?.error || 'A análise em lote falhou.');
 
       const savedLeads = (response.results || []).filter((row) => row?.success && row.lead).map((row) => row.lead);
+      const skippedRows = (response.results || []).filter((row) => row?.skipped);
+      const skippedIds = new Set(skippedRows.map((row) => String(row?.lead?.id || '')).filter(Boolean));
+      const skippedPhones = new Set(skippedRows
+        .map((row) => String(row?.lead?.phone || row?.lead?.company?.phone || '').replace(/\D/g, ''))
+        .filter(Boolean));
+      const isSkipped = (lead) => {
+        if (skippedIds.has(String(lead?.id || ''))) return true;
+        const phone = String(lead?.phone || lead?.company?.phone || '').replace(/\D/g, '');
+        return !!phone && skippedPhones.has(phone);
+      };
       const savedIndex = buildScoringIndex(savedLeads);
       const nextStates = { ...initialStates };
       const nextAnalyses = {};
       groupLeads.forEach((lead, position) => {
+        if (isSkipped(lead)) {
+          nextStates[lead.id] = 'skipped';
+          return;
+        };
         const saved = findScoringLead(savedIndex, lead, basePositions.get(lead) ?? position);
         if (!saved) {
           nextStates[lead.id] = 'fail';
@@ -521,9 +536,12 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
       });
       setAnalysisMap((previous) => ({ ...previous, ...nextAnalyses }));
       setRunStates(nextStates);
-      const completed = Object.values(nextStates).filter((state) => state === 'done' || state === 'nosite').length;
+      const skippedCount = Object.values(nextStates).filter((state) => state === 'skipped').length;
+      const completed = Object.values(nextStates).filter((state) => state === 'done' || state === 'nosite' || state === 'skipped').length;
       setProgressCount({ current: completed, total });
-      setProgressText(response.failures ? `Concluída com ${response.failures} falha(s).` : 'Análise concluída.');
+      setProgressText(skippedCount
+        ? `Concluída: ${completed - skippedCount} analisados, ${skippedCount} ignorados (sem site).`
+        : (response.failures ? `Concluída com ${response.failures} falha(s).` : 'Análise concluída.'));
       // A IA pode falhar e o lote continuar com as regras locais. Isso precisa
       // aparecer: antes o usuário via "concluído" sem saber que a IA caiu.
       setAiWarning(response.aiWarning || '');
@@ -545,6 +563,11 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
     setRunStates((previous) => ({ ...previous, [lead.id]: 'run' }));
     try {
       const response = await window.leadScoringAPI.analyzeLead(lead, { jobId });
+      if (response?.skipped) {
+        setRunStates((previous) => ({ ...previous, [lead.id]: 'skipped' }));
+        setProgressText('Ignorado: lead sem site próprio.');
+        return;
+      }
       if (!response?.success || !response.lead) throw new Error(response?.error || 'A reanálise falhou.');
       const analysis = saveServiceAnalysis(lead.id, response.lead);
       setRunStates((previous) => ({ ...previous, [lead.id]: analysis?.noSite ? 'nosite' : 'done' }));
@@ -586,6 +609,8 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
         const analysis = analysisFromService(payload.lead, aiConfig.preset);
         setAnalysisMap((previous) => ({ ...previous, [uiLeadId]: analysis }));
         setRunStates((previous) => ({ ...previous, [uiLeadId]: analysis.noSite ? 'nosite' : 'done' }));
+      } else if (payload.event === 'skipped' && uiLeadId) {
+        setRunStates((previous) => ({ ...previous, [uiLeadId]: 'skipped' }));
       } else if (payload.event === 'failed' && uiLeadId) {
         setRunStates((previous) => ({ ...previous, [uiLeadId]: 'fail' }));
       }
@@ -631,7 +656,6 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
     : 0;
 
   const currentPresetName = AUDITS[aiConfig.preset]?.name || aiConfig.preset;
-  const currentProviderName = PROVIDERS[aiConfig.provider]?.name || aiConfig.provider;
 
   return (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -681,66 +705,72 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
       ) : (
         /* Quando grupo está selecionado: Área de Trabalho (#scWork) */
         <div id="scWork" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Top 3 Steps */}
-          <div className="sc-steps" data-od-id="scoring-steps">
-            {/* Step 1: Grupo */}
-            <div className="sc-step">
-              <div className="lb">1 · Grupo</div>
-              <button
-                type="button"
-                className="sc-pick"
-                id="scGroupBtn"
-                title="Clique para trocar de grupo"
-                onClick={() => handleSelectGroup('')}
-              >
-                {currentGroup.name}
-              </button>
-              <span className="result-count" id="scGroupN">
-                {groupLeads.length} leads
-              </span>
-            </div>
+           {/* Top 3 Steps */}
+           <div className="sc-steps" data-od-id="scoring-steps">
+             {/* Step 1: Grupo */}
+             <div className="sc-step sc-group-step">
+               <div className="lb">1 · Grupo</div>
+               <div className="sc-group-picker">
+                 <select
+                   className="sc-pick sc-group-select"
+                   id="scGroupBtn"
+                   aria-label="Escolher grupo para analisar"
+                   value={selectedGroupId}
+                   onChange={(event) => handleSelectGroup(event.target.value)}
+                 >
+                   {groups.map((group) => (
+                     <option key={group.id} value={group.id}>
+                       {group.name}
+                     </option>
+                   ))}
+                 </select>
+                 <button
+                   type="button"
+                   className="icon-btn sc-group-add"
+                   title="Criar ou gerenciar grupos"
+                   aria-label="Criar ou gerenciar grupos"
+                   onClick={() => {
+                     window.location.hash = '#base';
+                     window.dispatchEvent(new CustomEvent('sigma:open-groups'));
+                   }}
+                 >
+                   <Plus size={16} />
+                 </button>
+               </div>
+               <span className="result-count" id="scGroupN">
+                 {groupLeads.length} leads
+               </span>
+             </div>
 
-            {/* Step 2: IA e Análise */}
-            <div className="sc-step">
-              <div className="lb">2 · IA e análise</div>
-              <div className="sc-cfg" id="scCfgLine">
-                IA: {currentProviderName} · {aiConfig.model || 'modelo padrão'} · {currentPresetName}
-                <br />
-                Faixas: alta ≥ {thresholds.highFrom} · boa ≥ {thresholds.goodFrom} · ignorar &lt; {thresholds.ignoreBelow}
-                {autoAnalyze ? ' · análise automática ligada' : ''}
-              </div>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                id="scCfgBtn"
-                onClick={handleOpenAiModal}
-              >
-                Configurar
-              </button>
-            </div>
+             {/* Step 2: IA e Análise */}
+             <div className="sc-step">
+               <div className="lb">2 · IA</div>
+               <div className="sc-cfg" id="scCfgLine">
+                 <span className="sc-cfg-line"><b>IA</b> · {aiConfig.model || 'modelo padrão'}</span>
+                 <span className="sc-cfg-line"><b>Foco</b> · {currentPresetName}</span>
+               </div>
+               <button
+                 type="button"
+                 className="btn btn-sm btn-primary sc-configure-btn"
+                 id="scCfgBtn"
+                 onClick={handleOpenAiModal}
+               >
+                 <Settings size={14} /> Configurar
+               </button>
+             </div>
 
-            {/* Step 3: Ação */}
-            <div className="sc-step">
-              <div className="lb">3 · Ação</div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  id="scRunBtn"
-                  onClick={handleRunScoring}
-                >
-                  {isRunning ? 'Pausar análise' : 'Analisar grupo'}
-                </button>
-                <span className="result-count" id="scRunN">
-                  {isRunning
-                    ? `${progressCount.current}/${progressCount.total}`
-                    : groupLeads.length
-                      ? `${groupLeads.length} leads serão analisados.`
-                      : 'Este grupo não tem leads na base atual.'}
-                </span>
-              </div>
-            </div>
-          </div>
+             {/* Step 3: Ação */}
+             <div className="sc-step sc-action-step">
+               <button
+                 type="button"
+                 className="btn btn-primary"
+                 id="scRunBtn"
+                 onClick={handleRunScoring}
+               >
+                 {isRunning ? 'Pausar análise' : 'Analisar grupo'}
+               </button>
+             </div>
+           </div>
 
           {aiWarning ? (
             <div className="kanban-feedback error" role="alert" id="scAiWarning">
@@ -790,7 +820,8 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                     run: { label: 'Analisando', cls: 'st-run' },
                     done: { label: 'Concluído', cls: 'st-ok' },
                     fail: { label: 'Falhou', cls: 'st-fail' },
-                    nosite: { label: 'Sem site', cls: 'st-nosite' }
+                    nosite: { label: 'Sem site', cls: 'st-nosite' },
+                    skipped: { label: 'Ignorado · sem site', cls: 'st-nosite' }
                   }[st] || { label: 'Aguardando', cls: 'st-wait' };
 
                   return (

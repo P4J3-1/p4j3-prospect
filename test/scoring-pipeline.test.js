@@ -39,7 +39,7 @@ test('liga a análise automática pelas configurações', () => withService((ser
 }));
 
 test('lote devolve todos os leads salvos, com ou sem etapa de IA', () => withService(async (service) => {
-  const result = await service.analyzeBatch([SCRAPED_LEAD], { query: 'dentistas' });
+  const result = await service.analyzeBatch([SCRAPED_LEAD], { query: 'dentistas', skipNoWebsite: false });
   assert.equal(result.count, 1);
   assert.equal(result.analyzedCount, 1);
   assert.equal(result.failures, 0);
@@ -59,7 +59,7 @@ test('site e instagram do lead extraído chegam ao scoring sem lixo', () => with
     name: 'Café Aurora',
     website: 'https://maps.app.goo.gl/abc123',
     instagram: 'https://www.instagram.com/cafe.aurora/?igsh=xyz',
-  }], {});
+  }], { skipNoWebsite: false });
 
   const [lead] = service.getAll({}).leads;
   assert.equal(lead.company.website, '');
@@ -67,8 +67,28 @@ test('site e instagram do lead extraído chegam ao scoring sem lixo', () => with
   assert.equal(lead.score.components.digitalPain > 0, true);
 }));
 
+test('lote ignora leads sem site em vez de avaliar', () => withService(async (service) => {
+  const events = [];
+  const skipping = new LeadScoringService(service.userDataPath, (payload) => events.push(payload));
+  const result = await skipping.analyzeBatch([{ ...SCRAPED_LEAD, id: 'sem-site' }], { query: 'dentistas' });
+  assert.equal(result.count, 1);
+  assert.equal(result.analyzedCount, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.failures, 0);
+  assert.equal(result.results[0].skipped, true);
+  assert.ok(events.some((event) => event.event === 'skipped'));
+  assert.equal(skipping.getAll({}).leads.length, 0);
+}));
+
+test('análise avulsa recusa lead sem site com erro codificado', () => withService(async (service) => {
+  await assert.rejects(
+    service.analyzeLead({ ...SCRAPED_LEAD }, {}),
+    (err) => err.code === 'NO_WEBSITE',
+  );
+}));
+
 test('score salvo é reencontrado por identidade depois de reimportar a base', () => withService(async (service) => {
-  await service.analyzeBatch([SCRAPED_LEAD], {});
+  await service.analyzeBatch([SCRAPED_LEAD], { skipNoWebsite: false });
   const [saved] = service.getAll({}).leads;
 
   // O id do renderer muda a cada importação; o telefone é o que amarra o score.

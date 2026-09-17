@@ -13,6 +13,18 @@ class LeadScoringService {
     this.lastAiWarning = "";
   }
 
+  /** Sem site próprio não há o que avaliar: regra global, salvo opt-out explícito. */
+  _shouldSkipNoWebsite(normalized, options = {}) {
+    if (options.skipNoWebsite === false) return false;
+    return !normalized?.company?.website;
+  }
+
+  _noWebsiteError(normalized) {
+    const err = new Error(`Sem site — análise ignorada: ${normalized?.company?.name || "lead"}`);
+    err.code = "NO_WEBSITE";
+    return err;
+  }
+
   getSettings() {
     const settings = this.store.getSettings();
     return maskSettings(settings);
@@ -56,6 +68,7 @@ class LeadScoringService {
   async analyzeLead(rawLead, options = {}) {
     const settings = this.store.getSettings();
     const normalized = normalizeLead(rawLead, options);
+    if (this._shouldSkipNoWebsite(normalized, options)) throw this._noWebsiteError(normalized);
     const jobId = options.jobId || `ls_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const cancelToken = { cancelled: false };
     this.activeJobs.set(jobId, cancelToken);
@@ -95,6 +108,19 @@ class LeadScoringService {
         });
         try {
           const normalized = normalizeLead(lead, options);
+          if (this._shouldSkipNoWebsite(normalized, options)) {
+            results.push({ success: false, skipped: true, reason: "no-website", lead });
+            this.onProgress({
+              event: "skipped",
+              jobId,
+              index: index + 1,
+              total: leads.length,
+              leadId: normalized.id,
+              name: normalized.company?.name,
+              message: `Ignorado (sem site): ${normalized.company?.name || "lead"}`,
+            });
+            continue;
+          }
           const { siteAnalysis, baseScore } = await this._analyzeLeadBase(normalized, settings, jobId, token);
           const baseSaved = this._saveAnalyzedLead(normalized, siteAnalysis, baseScore, null, settings);
           // Todo lead salvo entra no relatório do lote, mesmo sem a etapa de IA.
@@ -173,8 +199,9 @@ class LeadScoringService {
       jobId,
       results,
       count: results.length,
-      analyzedCount: results.filter((r) => r.success).length,
-      failures: results.filter((r) => !r.success).length,
+      analyzedCount: results.filter((r) => r.success && !r.skipped).length,
+      skipped: results.filter((r) => r.skipped).length,
+      failures: results.filter((r) => !r.success && !r.skipped).length,
       aiWarning: this.lastAiWarning || "",
     };
   }

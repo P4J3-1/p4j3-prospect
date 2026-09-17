@@ -457,6 +457,15 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
     return e.ts >= periodRange[0] && e.ts <= periodRange[1];
   };
 
+  // Resolve os grupos antes de qualquer filtro que possa usá-los. Manter este
+  // memo acima de `filteredLeads` evita acessar a constante durante o primeiro
+  // render, quando o JavaScript ainda está na zona temporal de inicialização.
+  const groupLeadSets = useMemo(() => {
+    const map = new Map();
+    for (const group of groups) map.set(String(group.id), new Set(resolveGroupMembers(group, leads)));
+    return map;
+  }, [groups, leads]);
+
   // Filtered rows
   const filteredLeads = useMemo(() => {
     const q = norm(bq).trim();
@@ -697,12 +706,6 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   };
 
   // Group membership helpers
-  const groupLeadSets = useMemo(() => {
-    const map = new Map();
-    for (const group of groups) map.set(String(group.id), new Set(resolveGroupMembers(group, leads)));
-    return map;
-  }, [groups, leads]);
-
   const leadGroups = (lead) => groups.filter((g) => groupLeadSets.get(String(g.id))?.has(lead));
 
   const removeLeadFromGroup = (lead, groupId) => {
@@ -1752,7 +1755,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                           className="btn btn-sm"
                           onClick={() => {
                             setBGrupo(g.id);
-                            setGroupsOpen(false);
+                            setIsGroupsOpen(false);
                           }}
                         >
                           Ver na base

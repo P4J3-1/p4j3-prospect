@@ -155,11 +155,130 @@ describe('campaign tracking', () => {
   it('requires explicit recovery after restart and never restarts cancelled campaigns', () => {
     const camp = makeCampaign();
     manager.update(camp.id, { status: 'running' });
-    assert.equal(manager.interruptForRestart(), 1);
+    const boot = manager.interruptForRestart();
+    assert.equal(boot.interruptedCount, 1);
     assert.equal(manager.get(camp.id).status, 'interrupted');
     assert.equal(manager.autoResume().requiresConfirmation, true);
 
     manager.update(camp.id, { status: 'cancelled' });
     assert.throws(() => manager.start(camp.id), /cancelada é terminal/i);
+  });
+
+  it('future schedules come back as scheduled and re-arm automatically', () => {
+    const camp = manager.create({
+      name: 'Future',
+      provider: 'baileys',
+      connectionId: 'c1',
+      template: { text: 'Oi' },
+      leadIds: [{ leadId: 'l1', name: 'Ana', phone: '5511999990001' }],
+      schedule: { mode: 'scheduled', intervalMs: 30000, startAt: Date.now() + 3600000 },
+    });
+    manager.update(camp.id, { status: 'running' });
+    const boot = manager.interruptForRestart();
+    assert.equal(boot.rescheduledCount, 1);
+    assert.equal(boot.interruptedCount, 0);
+    assert.equal(manager.get(camp.id).status, 'scheduled');
+    assert.equal(manager.rearmScheduled(), 1);
+    assert.equal(manager.scheduler.activeCampaigns.has(camp.id), true);
+    manager.shutdown();
+  });
+
+  it('past schedules pause as missed instead of interrupting', () => {
+    const camp = manager.create({
+      name: 'MissedBoot',
+      provider: 'baileys',
+      connectionId: 'c1',
+      template: { text: 'Oi' },
+      leadIds: [{ leadId: 'l1', name: 'Ana', phone: '5511999990001' }],
+      schedule: { mode: 'scheduled', intervalMs: 30000, startAt: Date.now() - 3600000 },
+    });
+    manager.update(camp.id, { status: 'scheduled' });
+    const boot = manager.interruptForRestart();
+    assert.equal(boot.missedCount, 1);
+    const after = manager.get(camp.id);
+    assert.equal(after.status, 'paused');
+    assert.equal(after.pauseReason, 'missed_schedule');
+    assert.equal(manager.rearmScheduled(), 0);
+    assert.equal(manager.getMissedSchedules().length, 1);
+    manager.shutdown();
+  });
+
+  it('lists schedules missed while the PC was off and reschedules to tomorrow', () => {
+    const past = Date.now() - 2 * 60 * 60 * 1000;
+    const camp = manager.create({
+      name: 'Missed',
+      provider: 'baileys',
+      connectionId: 'c1',
+      template: { text: 'Oi {{name}}' },
+      leadIds: [{ leadId: 'l1', name: 'Ana', phone: '5511999990001' }],
+      schedule: { mode: 'scheduled', intervalMs: 30000, startAt: past },
+    });
+    manager.update(camp.id, { status: 'running' });
+    const bootRecovery = manager.interruptForRestart();
+    assert.equal(bootRecovery.missedCount, 1);
+    assert.equal(manager.get(camp.id).status, 'paused');
+    const missed = manager.getMissedSchedules();
+    assert.equal(missed.length, 1);
+    assert.equal(missed[0].id, camp.id);
+    assert.equal(missed[0].pending, 1);
+
+    manager.setProvidersMap(new Map([['c1', { getStatus: () => 'connected', isReady: () => true }]]));
+    const res = manager.resolveMissedSchedule(camp.id, 'tomorrow', { activeConnectionId: 'c1', confirmRecovery: true });
+    assert.ok(res.rescheduledTo > Date.now());
+    const after = manager.get(camp.id);
+    assert.equal(after.status, 'scheduled');
+    assert.ok(Math.abs(after.schedule.startAt - (past + 24 * 60 * 60 * 1000)) < 5 * 60 * 1000);
+    assert.equal(manager.getMissedSchedules().length, 0);
+    manager.shutdown();
+  });
+
+  it('missed schedule resolved as now clears the slot and starts', () => {
+    const camp = manager.create({
+      name: 'MissedNow',
+      provider: 'baileys',
+      connectionId: 'c1',
+      template: { text: 'Oi' },
+      leadIds: [{ leadId: 'l1', name: 'Ana', phone: '5511999990001' }],
+      schedule: { mode: 'scheduled', intervalMs: 30000, startAt: Date.now() - 3600000 },
+    });
+    manager.update(camp.id, { status: 'running' });
+    manager.interruptForRestart();
+    manager.setProvidersMap(new Map([['c1', {
+      getStatus: () => 'connected',
+      isReady: () => true,
+      sendMessage: async () => ({ success: true, messageId: 'm1', jid: '5511999990001@s.whatsapp.net' }),
+    }]]));
+    const res = manager.resolveMissedSchedule(camp.id, 'now', { activeConnectionId: 'c1', confirmRecovery: true });
+    assert.equal(res.status, 'running');
+    const after = manager.get(camp.id);
+    assert.equal(after.schedule.startAt, null);
+    assert.equal(after.status, 'running');
+    manager.shutdown();
+  });
+
+  it('future schedules are not listed as missed', () => {
+    manager.create({
+      name: 'Future',
+      provider: 'baileys',
+      connectionId: 'c1',
+      template: { text: 'Oi' },
+      leadIds: [{ leadId: 'l1', name: 'Ana', phone: '5511999990001' }],
+      schedule: { mode: 'scheduled', intervalMs: 30000, startAt: Date.now() + 3600000 },
+    });
+    assert.equal(manager.getMissedSchedules().length, 0);
+    manager.shutdown();
+  });
+
+  it('working-hours window follows the configured time zone', () => {
+    const { CampaignScheduler } = require('../campaigns/campaign-scheduler');
+    const scheduler = new CampaignScheduler(null, manager.store, null, manager);
+    const morning = Date.UTC(2026, 0, 15, 10, 0, 0); // 07:00 em SP · 06:00 em Manaus
+    const settings = { workingHoursEnabled: true, workingHoursStart: '07:00', workingHoursEnd: '18:00' };
+    assert.equal(scheduler._withinWorkingHours(null, { ...settings, timeZone: 'America/Sao_Paulo' }, morning), true);
+    assert.equal(scheduler._withinWorkingHours(null, { ...settings, timeZone: 'America/Manaus' }, morning), false);
+    assert.equal(
+      scheduler._withinWorkingHours(null, { ...settings, timeZone: 'bogus/zone' }, morning),
+      scheduler._withinWorkingHours(null, settings, morning),
+    );
   });
 });

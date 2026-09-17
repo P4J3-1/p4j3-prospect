@@ -101,6 +101,157 @@ function buildDefaultCampaignName(date = new Date()) {
   return `Campanha ${dd}/${mm}/${yyyy} ${hh}:${min}`;
 }
 
+/** Converte timestamp (ms) em valor datetime-local (horário local). */
+function toDatetimeLocalValue(ts) {
+  const d = new Date(Number(ts));
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Extrai {{variáveis}} do texto do template. */
+function extractTemplateVariables(text) {
+  const vars = new Set();
+  const re = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+  let m;
+  while ((m = re.exec(String(text || '')))) vars.add(m[1]);
+  if (!vars.size) vars.add('name');
+  return [...vars].slice(0, 20);
+}
+
+function parseHhmmToMinutes(value, fallback) {
+  const m = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return fallback;
+  return (parseInt(m[1], 10) % 24) * 60 + (parseInt(m[2], 10) % 60);
+}
+
+/**
+ * Estima quantos dias de campanha são necessários para zerar a lista.
+ * Considera divisão entre números, intervalo entre envios, limite diário
+ * por número (filtro anti-ban) e janela de horário de disparo.
+ */
+function estimateCampaignDuration({
+  totalLeads,
+  intervalSec,
+  connectionCount,
+  dailyLimit,
+  manualUnlimited,
+  workingHoursEnabled,
+  workingHoursStart,
+  workingHoursEnd,
+}) {
+  const total = Math.max(0, Math.floor(Number(totalLeads) || 0));
+  if (!total) return null;
+  const conns = Math.max(1, Math.floor(Number(connectionCount) || 1));
+  const interval = Math.max(5, Math.floor(Number(intervalSec) || 60));
+  let windowMin;
+  let windowLabel;
+  if (workingHoursEnabled === false) {
+    windowMin = 24 * 60;
+    windowLabel = '24h';
+  } else {
+    const s = parseHhmmToMinutes(workingHoursStart, 7 * 60);
+    const e = parseHhmmToMinutes(workingHoursEnd, 18 * 60);
+    windowMin = e > s ? e - s : (24 * 60 - s) + e;
+    if (!(windowMin > 0)) windowMin = 24 * 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    windowLabel = `${pad(Math.floor(s / 60))}:${pad(s % 60)}–${pad(Math.floor(e / 60))}:${pad(e % 60)}`;
+  }
+  // Capacidade da janela: 1º envio no minuto 0 + 1 a cada intervalo.
+  const windowCapacity = Math.max(1, Math.floor((windowMin * 60) / interval) + 1);
+  const quotaPerDay = manualUnlimited ? null : Math.max(1, Math.floor(Number(dailyLimit) || 10));
+  const perDayPerNumber = quotaPerDay == null ? windowCapacity : Math.max(1, Math.min(windowCapacity, quotaPerDay));
+  const limitedBy = quotaPerDay != null && quotaPerDay < windowCapacity ? 'daily-limit' : 'working-hours';
+  const perNumberLeads = Math.ceil(total / conns);
+  const days = Math.max(1, Math.ceil(perNumberLeads / perDayPerNumber));
+  return { days, perDayPerNumber, perNumberLeads, conns, total, intervalSec: interval, windowMin, windowLabel, quotaPerDay, limitedBy };
+}
+
+/** Regiões disponíveis para o agendamento (padrão = relógio do sistema). */
+const CAMPAIGN_TIMEZONES = [
+  { id: 'system', label: 'Sistema (padrão)' },
+  { id: 'America/Noronha', label: 'Fernando de Noronha (GMT-2)' },
+  { id: 'America/Sao_Paulo', label: 'Brasília (GMT-3)' },
+  { id: 'America/Manaus', label: 'Manaus (GMT-4)' },
+  { id: 'America/Rio_Branco', label: 'Rio Branco (GMT-5)' },
+];
+
+function campaignTimeZoneId(settings) {
+  const tz = settings?.campaigns?.timeZone;
+  return tz && tz !== 'system' ? tz : 'system';
+}
+
+function timeZoneShortLabel(tz) {
+  const found = CAMPAIGN_TIMEZONES.find((z) => z.id === tz);
+  if (found) return found.id === 'system' ? 'sistema' : found.label.split(' (')[0];
+  try {
+    return new Intl.DateTimeFormat('pt-BR', { timeZone: tz, timeZoneName: 'short' })
+      .formatToParts(new Date()).find((p) => p.type === 'timeZoneName')?.value || tz;
+  } catch {
+    return 'sistema';
+  }
+}
+
+/** Offset da zona num instante (ms): parede-da-zona-como-UTC menos o instante. */
+function timeZoneOffsetMs(timeZone, dateMs) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
+  const parts = Object.fromEntries(dtf.formatToParts(new Date(dateMs)).map((p) => [p.type, p.value]));
+  const asUTC = Date.UTC(+parts.year, +parts.month - 1, +parts.day, (+parts.hour) % 24, +parts.minute, +parts.second);
+  return asUTC - dateMs;
+}
+
+/** Interpreta "YYYY-MM-DDTHH:mm" como horário na zona indicada → epoch ms. */
+function zonedDateTimeToMs(localStr, timeZone) {
+  const m = String(localStr || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return NaN;
+  const Y = +m[1]; const Mo = +m[2]; const D = +m[3]; const H = +m[4]; const Mi = +m[5];
+  if (!timeZone || timeZone === 'system') return new Date(Y, Mo - 1, D, H, Mi).getTime();
+  const guess = Date.UTC(Y, Mo - 1, D, H, Mi);
+  return guess - timeZoneOffsetMs(timeZone, guess);
+}
+
+/** Epoch ms → "YYYY-MM-DDTHH:mm" na parede da zona indicada. */
+function msToZonedDateTimeLocal(ms, timeZone) {
+  if (!timeZone || timeZone === 'system') return toDatetimeLocalValue(ms);
+  const d = new Date(Number(ms) + timeZoneOffsetMs(timeZone, Number(ms)));
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+/** "DD/MM HH:mm" do instante na zona indicada. */
+function formatInZone(ms, timeZone) {
+  try {
+    if (!timeZone || timeZone === 'system') throw new Error('system');
+    return new Intl.DateTimeFormat('pt-BR', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone,
+    }).format(new Date(ms));
+  } catch {
+    return new Date(ms).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+}
+
+function CampaignDurationHint({ estimate }) {
+  if (!estimate) return null;
+  const dayLabel = estimate.days === 1 ? '≈ 1 dia de campanha' : `≈ ${estimate.days} dias de campanha`;
+  const reason = estimate.limitedBy === 'daily-limit'
+    ? `limite diário de ${estimate.quotaPerDay}/dia por número`
+    : `janela ${estimate.windowLabel} com intervalo de ${estimate.intervalSec}s`;
+  return (
+    <div className="camp-review-card" style={{ marginTop: 12 }} role="status" aria-live="polite">
+      <strong>⏱ Duração estimada: {dayLabel}</strong>
+      <div className="camp-hint" style={{ marginTop: 4, lineHeight: 1.5 }}>
+        {estimate.perNumberLeads} lead(s) por número · {estimate.perDayPerNumber} envio(s)/dia por número
+        {estimate.conns > 1 ? ` · ${estimate.conns} números em paralelo` : ''}.
+        <br />
+        Gargalo: {reason} (considera retomada a cada dia).
+      </div>
+    </div>
+  );
+}
+
 const CAMPAIGN_KANBAN_STAGES = [
   { id: 'new', label: 'Novos', hint: 'Ainda sem conversa' },
   { id: 'conversation', label: 'Em conversa', hint: 'Responderam ou estão em negociação' },
@@ -117,7 +268,10 @@ function resolveKanbanStage(lead) {
 function campaignStatusPresentation(campaign) {
   const status = campaign?.status || 'ready';
   if (status === 'paused' && campaign?.pauseReason === 'daily_limit') {
-    return { statusClass: 'paused', label: 'Limite diário' };
+    return { statusClass: 'paused', label: 'Limite de hoje esgotado' };
+  }
+  if (status === 'paused' && campaign?.pauseReason === 'missed_schedule') {
+    return { statusClass: 'paused', label: 'Horário perdido' };
   }
   if (status === 'running' && campaign?.waitReason === 'outside_hours') {
     return { statusClass: 'running', label: 'Fora do horário' };
@@ -222,13 +376,17 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [draggingKanbanCard, setDraggingKanbanCard] = useState(null);
   const [isCreatingCampaign, setIsCreatingCampaign] = useState(false);
   const [editingCampaignId, setEditingCampaignId] = useState(null);
+  // Recuperação pós-boot: campanhas cujo horário passou com o PC desligado.
+  const [recoveryMissed, setRecoveryMissed] = useState(null);
+  const [recoveryBusyId, setRecoveryBusyId] = useState(null);
   const [newCampaignName, setNewCampaignName] = useState('');
   const [campaignRecipients, setCampaignRecipients] = useState([]);
   const [customNumberInput, setCustomNumberInput] = useState('');
   const [customNameInput, setCustomNameInput] = useState('');
   const [recipientSearch, setRecipientSearch] = useState('');
   const [campaignManualText, setCampaignManualText] = useState('');
-  const [campaignSelectedGroupIds, setCampaignSelectedGroupIds] = useState(() => new Set());
+  /** Grupos vinculados — campanha soma grupos (adicionar, nunca substituir). */
+  const [campaignGroupIds, setCampaignGroupIds] = useState([]);
   const [waContacts, setWaContacts] = useState([]);
   const [waGroups, setWaGroups] = useState([]);
   /** Fonte de destinatários: scrape | groups | scoring | whatsapp | manual */
@@ -429,6 +587,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [limitTiers] = useState([10, 30, 60, 100]);
   const [campaignSearch, setCampaignSearch] = useState('');
   const [campaignSort, setCampaignSort] = useState('newest'); // newest | oldest | name
+  const [campaignStatusFilter, setCampaignStatusFilter] = useState('all'); // all | draft | active | done
 
   const loadLabels = async () => {
     if (!window.chatAPI?.getLabels) return;
@@ -473,6 +632,45 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const checkMissedSchedules = async () => {
+    if (!window.campaignAPI?.recoveryList) return;
+    try {
+      const res = await window.campaignAPI.recoveryList();
+      if (res?.success && Array.isArray(res.missed) && res.missed.length) {
+        setRecoveryMissed(res.missed);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleRecoveryResolve = async (id, choice) => {
+    if (!window.campaignAPI?.recoveryResolve) return;
+    setRecoveryBusyId(id);
+    try {
+      const connId =
+        activeConnectionId ||
+        campaignConnectionId ||
+        connectedSessions[0]?.id ||
+        null;
+      const res = await window.campaignAPI.recoveryResolve(id, choice, connId);
+      if (res && res.success === false) {
+        alert('Não foi possível: ' + (res.error || 'erro desconhecido'));
+        return;
+      }
+      setRecoveryMissed((list) => (list || []).filter((m) => m.id !== id));
+      loadCampaigns();
+      addLog(choice === 'now'
+        ? '[CAMPAIGN] Horário perdido: disparo iniciado agora.'
+        : '[CAMPAIGN] Horário perdido: reagendada para amanhã.');
+    } catch (e) {
+      console.error(e);
+      alert('Erro: ' + (e.message || e));
+    } finally {
+      setRecoveryBusyId(null);
     }
   };
 
@@ -577,6 +775,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     loadChats();
     loadSettings();
     loadLabels();
+    checkMissedSchedules();
   }, []);
 
   // Reload chats when active connection changes
@@ -2203,7 +2402,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     setNewCampaignName('');
     setCampaignRecipients([]);
     setCampaignManualText('');
-    setCampaignSelectedGroupIds(new Set());
+    setCampaignGroupIds([]);
+    hydratedGroupRef.current = null;
     setCustomNumberInput('');
     setCustomNameInput('');
     setRecipientSearch('');
@@ -2214,6 +2414,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     setCampaignWizardStep(0);
     setCreatingCampaignBusy(false);
     setCampaignFormError('');
+    // Reseta mensagem + agendamento para não vazar da campanha anterior.
+    setTemplateText('Olá {{name}}, tudo bem? Notamos que o seu site está com lentidão.');
+    setIntervalSec(60);
+    setScheduleMode('interval');
+    setScheduleStartAt('');
     const defaults = connectedSessions.map((c) => c.id);
     const initial =
       campaignConnectionIds.length
@@ -2237,8 +2442,14 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       const draft = event?.detail || {};
       openCreateCampaign();
       if (draft.name) setNewCampaignName(draft.name);
-      if (Array.isArray(draft.recipients)) setCampaignRecipients(draft.recipients);
       if (draft.template?.text) setTemplateText(draft.template.text);
+      // Draft com grupo vinculado resolve os membros no effect de hidratação.
+      if (draft.groupId) {
+        hydratedGroupRef.current = null;
+        setCampaignGroupIds([draft.groupId]);
+      } else if (Array.isArray(draft.recipients)) {
+        setCampaignRecipients(draft.recipients);
+      }
       setRecipientSourceTab('scoring');
     };
     window.addEventListener('sigma:open-campaign-draft', onLeadScoringDraft);
@@ -2267,11 +2478,23 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
   useEffect(() => {
     if (!isCreatingCampaign || editingCampaignId || campaignWizardStep !== 0) return;
-    if (campaignSelectedGroupIds.size || !scoringGroups.length) return;
-    toggleCampaignGroup(scoringGroups[0], true);
-    // toggleCampaignGroup is stable enough for this one-time Open Design default.
+    if (campaignGroupIds.length || !scoringGroups.length) return;
+    const first = scoringGroups.find((g) => groupLeadCount(g) > 0) || scoringGroups[0];
+    if (first) toggleCampaignGroup(first.id, true);
+    // toggleCampaignGroup/groupLeadCount resolvidos no momento do disparo.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCreatingCampaign, editingCampaignId, campaignWizardStep, scoringGroups]);
+  }, [isCreatingCampaign, editingCampaignId, campaignWizardStep, scoringGroups, campaignGroupIds]);
+
+  // Hidrata os membros quando os grupos chegam por fora (ex.: draft do scoring).
+  useEffect(() => {
+    if (!isCreatingCampaign || !campaignGroupIds.length || campaignRecipients.length) return;
+    if (!scoringGroups.length) return;
+    const key = [...campaignGroupIds].map(String).sort().join('|');
+    if (hydratedGroupRef.current === key) return;
+    hydratedGroupRef.current = key;
+    for (const id of campaignGroupIds) toggleCampaignGroup(id, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCreatingCampaign, campaignGroupIds, scoringGroups, campaignRecipients.length]);
 
   // Foco no nome ao abrir wizard (só uma vez por abertura)
   useEffect(() => {
@@ -2324,36 +2547,98 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const openEditCampaignList = async (campaign) => {
     if (!campaign) return;
     if (['running', 'scheduled'].includes(campaign.status)) {
-      alert('Pause a campanha antes de editar a lista de destinatários.');
+      alert('Pause a campanha antes de editar. Campanhas em disparo ou agendadas precisam ser pausadas.');
       return;
     }
-    setEditingCampaignId(campaign.id);
-    setNewCampaignName(campaign.name || '');
-    setTemplateText(campaign.template?.text || templateText);
-    setCampaignWizardStep(0);
-    setCampaignRecipients(
-      (campaign.leads || []).map((l) => ({
-        leadId: l.leadId,
-        name: l.name || '',
-        phone: l.phone || '',
-        phoneRaw: l.phoneRaw || l.phone || '',
-        jid: l.jid || '',
-        isGroup: !!l.isGroup,
-        source: l.source || 'manual',
-        company: l.company || '',
-        status: l.status,
-        errorMessage: l.errorMessage,
-        messageId: l.messageId,
-      })),
-    );
+    // Hidratação nunca pode travar o clique em silêncio: qualquer registro
+    // de lead corrompido (null, formato antigo) vira erro visível, não modal morto.
+    try {
+      setEditingCampaignId(campaign.id);
+      setNewCampaignName(campaign.name || '');
+      setTemplateText(campaign.template?.text || 'Olá {{name}}, tudo bem? Notamos que o seu site está com lentidão.');
+      // Hidrata agendamento atual para permitir reagendar + disparo direto.
+      const sch = campaign.schedule || {};
+      setScheduleMode(sch.mode || 'interval');
+      setIntervalSec(Math.max(5, Math.round((Number(sch.intervalMs) || 60000) / 1000)));
+      try {
+        setScheduleStartAt(sch.startAt ? msToZonedDateTimeLocal(sch.startAt, sch.timeZone || campaignTimeZoneId(settings)) : '');
+      } catch {
+        setScheduleStartAt('');
+      }
+      setCampaignWizardStep(0);
+      setCampaignFormError('');
+      setCreatingCampaignBusy(false);
+      // Grupos vinculados (se houver). Legadas sem grupo mantêm a lista atual.
+      const linkedIds = Array.isArray(campaign.groupIds) && campaign.groupIds.length
+        ? [...campaign.groupIds]
+        : (campaign.groupId ? [campaign.groupId] : []);
+      setCampaignGroupIds(linkedIds);
+      hydratedGroupRef.current = linkedIds.length ? linkedIds.map(String).sort().join('|') : 'legacy';
+      const rawLeads = Array.isArray(campaign.leads) ? campaign.leads : [];
+      const hydrated = [];
+      for (const item of rawLeads) {
+        if (!item || typeof item !== 'object') continue;
+        const l = item;
+        hydrated.push({
+          leadId: l.leadId,
+          name: l.name || '',
+          phone: l.phone || '',
+          phoneRaw: l.phoneRaw || l.phone || '',
+          jid: l.jid || '',
+          isGroup: !!l.isGroup,
+          source: l.source || 'manual',
+          company: l.company || '',
+          category: l.category || '',
+          website: l.website || '',
+          instagram: l.instagram || '',
+          email: l.email || '',
+          address: l.address || '',
+          connectionId: l.connectionId || null,
+          status: l.status,
+          errorMessage: l.errorMessage,
+          messageId: l.messageId,
+          sentAt: l.sentAt,
+          deliveredAt: l.deliveredAt,
+          readAt: l.readAt,
+          repliedAt: l.repliedAt,
+          lastReplyAt: l.lastReplyAt,
+          responseTimeMs: l.responseTimeMs,
+          openCount: l.openCount,
+          openedAt: l.openedAt,
+          lastOpenAt: l.lastOpenAt,
+          replyCount: l.replyCount,
+          replyTimestamps: l.replyTimestamps,
+          retryCount: l.retryCount,
+          kanbanStage: l.kanbanStage,
+          kanbanOrder: l.kanbanOrder,
+        });
+      }
+      setCampaignRecipients(hydrated);
+    } catch (err) {
+      console.error('[CAMPAIGN] falha ao abrir edição:', err);
+      alert('Não foi possível abrir a edição desta campanha: ' + (err?.message || err));
+      return;
+    }
     setIsCreatingCampaign(true);
     setRecipientSourceTab('scrape');
-    loadRecipientSources();
-    const conn = campaign.connectionId || campaignConnectionId || activeConnectionId;
+    loadRecipientSources().catch((err) => console.error('[CAMPAIGN] fontes:', err?.message || err));
+    // Preserva divisão multi-número original em vez de colapsar para 1.
+    const allConns = [
+      ...(Array.isArray(campaign.connectionIds) ? campaign.connectionIds : []),
+      campaign.connectionId,
+    ].filter(Boolean);
+    const uniqueConns = [...new Set(allConns)];
+    const conn = uniqueConns[0] || campaignConnectionId || activeConnectionId;
     if (conn) {
       setCampaignConnectionId(conn);
-      setCampaignConnectionIds([conn]);
-      await loadWaDirectory(conn);
+      setCampaignConnectionIds(uniqueConns.length ? uniqueConns : [conn]);
+      try {
+        await loadWaDirectory(conn);
+      } catch (err) {
+        console.error('[CAMPAIGN] diretório:', err?.message || err);
+      }
+    } else if (uniqueConns.length) {
+      setCampaignConnectionIds(uniqueConns);
     }
   };
 
@@ -2380,6 +2665,19 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       errorMessage: r.errorMessage,
       messageId: r.messageId,
       sentAt: r.sentAt,
+      deliveredAt: r.deliveredAt,
+      readAt: r.readAt,
+      repliedAt: r.repliedAt,
+      lastReplyAt: r.lastReplyAt,
+      responseTimeMs: r.responseTimeMs,
+      retryCount: r.retryCount,
+      openCount: r.openCount,
+      openedAt: r.openedAt,
+      lastOpenAt: r.lastOpenAt,
+      replyCount: r.replyCount,
+      replyTimestamps: r.replyTimestamps,
+      kanbanStage: r.kanbanStage,
+      kanbanOrder: r.kanbanOrder,
     }));
 
   // Create / update campaign — uma campanha pode ter vários números
@@ -2399,18 +2697,72 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         alert('Adicione ao menos um destinatário.');
         return;
       }
+      if (!templateText.trim()) {
+        alert('Escreva o template da mensagem.');
+        return;
+      }
+      if (scheduleMode === 'scheduled') {
+        if (!scheduleStartAt) {
+          setCampaignFormError('Escolha data e hora para agendar o disparo.');
+          return;
+        }
+        const ts = zonedDateTimeToMs(scheduleStartAt, campaignTimeZoneId(settings));
+        if (!Number.isFinite(ts)) {
+          setCampaignFormError('Data/hora de agendamento inválida.');
+          return;
+        }
+        if (ts <= Date.now()) {
+          setCampaignFormError('Agende um horário futuro ou use disparo direto (intervalo/imediato).');
+          return;
+        }
+      }
       try {
         setCreatingCampaignBusy(true);
+        const editing = campaigns.find((c) => c.id === editingCampaignId);
+        const editTz = campaignTimeZoneId(settings);
+        const schedule = {
+          mode: scheduleMode,
+          intervalMs: Math.max(5000, (Number(intervalSec) || 60) * 1000),
+          startAt: scheduleMode === 'scheduled' && scheduleStartAt
+            ? Math.floor(zonedDateTimeToMs(scheduleStartAt, editTz))
+            : null,
+          workingHours: editing?.schedule?.workingHours ?? null,
+          timeZone: editTz === 'system' ? null : editTz,
+        };
         const res = await window.campaignAPI.update(editingCampaignId, {
           name: baseName,
-          template: { text: templateText, variables: ['name'], media: null },
+          template: {
+            text: templateText,
+            variables: extractTemplateVariables(templateText),
+            // Preserva mídia existente — a edição não tem editor de mídia.
+            ...(editing?.template?.media ? { media: editing.template.media } : {}),
+          },
           leads: mapRecipientsToPayload(campaignRecipients, campaignConnectionIds),
+          schedule,
+          connectionId: campaignConnectionIds[0] || editing?.connectionId || null,
+          connectionIds: campaignConnectionIds.length
+            ? campaignConnectionIds
+            : (editing?.connectionIds || (editing?.connectionId ? [editing.connectionId] : [])),
+          // Vincula os grupos marcados (legadas sem grupo mantêm a lista).
+          ...(campaignGroupIds.length
+            ? {
+                groupIds: [...campaignGroupIds],
+                groupId: campaignGroupIds[0],
+                groupName: selectedCampaignGroups.map((g) => g.name).join(' + ') || editing?.groupName || '',
+              }
+            : {}),
         });
         if (res?.success) {
+          const savedId = editingCampaignId;
+          if (res.campaign) {
+            setCampaigns((current) => current.map((item) => item.id === savedId ? res.campaign : item));
+            setKanbanCampaign((current) => current && current.id === savedId ? res.campaign : current);
+            setMonitoringCampaign((current) => current && current.id === savedId ? res.campaign : current);
+          }
           closeCampaignModal();
           setCampaignRecipients([]);
           loadCampaigns();
-          addLog(`[CAMPAIGN] Lista da campanha atualizada (${campaignRecipients.length} destinatários).`);
+          addLog(`[CAMPAIGN] Campanha atualizada (${campaignRecipients.length} destinatários, ${schedule.mode === 'scheduled' ? 'agendada' : 'disparo direto'}).`);
         } else {
           setCampaignFormError('Erro ao salvar: ' + (res?.error || 'desconhecido'));
         }
@@ -2427,21 +2779,44 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       : [campaignConnectionId || activeConnectionId].filter(Boolean)
     ).filter((id) => connectedSessions.some((c) => c.id === id));
 
+    const groups = (scoringGroups || []).filter((g) => campaignGroupIds.some((id) => String(id) === String(g?.id)));
+    if (!groups.length) {
+      setCampaignFormError('Escolha ao menos um grupo de leads (passo 1).');
+      setCampaignWizardStep(0);
+      return;
+    }
     if (campaignRecipients.length === 0) {
-      alert('Adicione ao menos um destinatário (lead, contato, grupo ou número manual).');
+      setCampaignFormError(`Os grupos escolhidos não têm leads com telefone na base atual.`);
+      setCampaignWizardStep(0);
       return;
     }
     if (!templateText.trim()) {
       alert('Escreva o template da mensagem.');
       return;
     }
+    if (scheduleMode === 'scheduled') {
+      if (!scheduleStartAt) {
+        alert('Escolha data e hora para agendar o disparo.');
+        return;
+      }
+      const ts = zonedDateTimeToMs(scheduleStartAt, campaignTimeZoneId(settings));
+      if (!Number.isFinite(ts)) {
+        alert('Data/hora de agendamento inválida.');
+        return;
+      }
+      if (ts <= Date.now()) {
+        alert('Agende um horário futuro ou use disparo direto (intervalo/imediato).');
+        return;
+      }
+    }
 
     const campSettings = settings.campaigns || {};
+    const createTz = campaignTimeZoneId(settings);
     const schedule = {
       mode: scheduleMode,
       intervalMs: Math.max(5000, intervalSec * 1000),
       startAt: scheduleMode === 'scheduled' && scheduleStartAt
-        ? Math.floor(new Date(scheduleStartAt).getTime())
+        ? Math.floor(zonedDateTimeToMs(scheduleStartAt, createTz))
         : null,
       // Herda janela global (pode ser desligada nas configs)
       workingHours: campSettings.workingHoursEnabled === false
@@ -2451,8 +2826,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
             start: campSettings.workingHoursStart || '07:00',
             end: campSettings.workingHoursEnd || '18:00',
           },
+      timeZone: createTz === 'system' ? null : createTz,
     };
-    const template = { text: templateText, variables: ['name'], media: null };
+    const template = { text: templateText, variables: extractTemplateVariables(templateText), media: null };
     const leads = mapRecipientsToPayload(campaignRecipients, connIds);
 
     try {
@@ -2462,6 +2838,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         provider: providerType,
         connectionId: connIds[0],
         connectionIds: connIds,
+        groupIds: groups.map((g) => g.id),
+        groupId: groups[0].id,
+        groupName: groups.map((g) => g.name).join(' + '),
         template,
         leadIds: leads,
         schedule,
@@ -2487,9 +2866,25 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     }
   };
 
+  // Situação para organizar dezenas de campanhas: rascunho · ativas · finalizadas.
+  const campaignBucket = (c) => {
+    if (c?.status === 'ready') return 'draft';
+    if (['completed', 'cancelled'].includes(c?.status)) return 'done';
+    return 'active';
+  };
+
+  const campaignStatusCounts = useMemo(() => {
+    const counts = { all: (campaigns || []).length, draft: 0, active: 0, done: 0 };
+    for (const c of campaigns || []) counts[campaignBucket(c)] += 1;
+    return counts;
+  }, [campaigns]);
+
   const filteredCampaigns = useMemo(() => {
     const q = campaignSearch.trim().toLowerCase();
     let list = [...(campaigns || [])];
+    if (campaignStatusFilter !== 'all') {
+      list = list.filter((c) => campaignBucket(c) === campaignStatusFilter);
+    }
     if (q) {
       list = list.filter((c) => {
         const phones = [
@@ -2511,7 +2906,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       return campaignSort === 'oldest' ? da - db : db - da;
     });
     return list;
-  }, [campaigns, campaignSearch, campaignSort, connections]);
+  }, [campaigns, campaignSearch, campaignSort, campaignStatusFilter, connections]);
 
   const formatCampaignDate = (ts) => {
     if (!ts) return '—';
@@ -2597,6 +2992,16 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           </div>
           <div className="campaign-kanban-head-actions">
             <span className={`camp-status-badge ${presentation.statusClass}`}>{presentation.label}</span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-compact"
+              title="Editar campanha (lista, mensagem e agendamento)"
+              onClick={() => openEditCampaignList(
+                campaigns.find((x) => x.id === campaign?.id) || campaign,
+              )}
+            >
+              <Pencil size={13} /> Editar
+            </button>
             <button
               type="button"
               className="btn btn-secondary btn-compact"
@@ -2690,10 +3095,14 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
   const canWizardNext = () => {
     if (editingCampaignId) return true;
-    if (campaignWizardStep === 0) return campaignRecipients.length > 0;
+    if (campaignWizardStep === 0) return campaignGroupIds.length > 0 && campaignRecipients.length > 0;
     if (campaignWizardStep === 1) return !!templateText.trim();
     if (campaignWizardStep === 2) {
-      if (scheduleMode === 'scheduled' && !scheduleStartAt) return false;
+      if (scheduleMode === 'scheduled') {
+        if (!scheduleStartAt) return false;
+        const ts = zonedDateTimeToMs(scheduleStartAt, campaignTimeZoneId(settings));
+        if (!Number.isFinite(ts) || ts <= Date.now()) return false;
+      }
       return intervalSec >= 5;
     }
     return true;
@@ -2701,7 +3110,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
   const goWizardNext = () => {
     if (!canWizardNext()) {
-      if (campaignWizardStep === 0) alert('Adicione ao menos um destinatário.');
+      if (campaignWizardStep === 0) alert('Escolha o grupo de leads da campanha.');
       else if (campaignWizardStep === 1) alert('Escreva a mensagem da campanha.');
       else if (campaignWizardStep === 2) alert('Confira o intervalo e o agendamento.');
       return;
@@ -2713,24 +3122,63 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     setCampaignWizardStep((s) => Math.min(wizardSteps.length - 1, s + 1));
   };
 
-  const toggleCampaignGroup = async (group, checked) => {
-    const source = `scoring-group:${group.id}`;
-    setCampaignSelectedGroupIds((current) => {
-      const next = new Set(current);
-      if (checked) next.add(group.id); else next.delete(group.id);
-      return next;
-    });
-    if (!checked) {
+  // Estimativa ao vivo: quantos dias para zerar a lista com as regras atuais.
+  const durationEstimate = useMemo(() => estimateCampaignDuration({
+    totalLeads: campaignRecipients.length,
+    intervalSec,
+    connectionCount: campaignConnectionIds.length || 1,
+    dailyLimit: settings.campaigns?.dailyLimit || 10,
+    manualUnlimited: settings.campaigns?.manualUnlimited === true,
+    workingHoursEnabled: settings.campaigns?.workingHoursEnabled !== false,
+    workingHoursStart: settings.campaigns?.workingHoursStart || '07:00',
+    workingHoursEnd: settings.campaigns?.workingHoursEnd || '18:00',
+  }), [
+    campaignRecipients.length,
+    intervalSec,
+    campaignConnectionIds.length,
+    settings.campaigns?.dailyLimit,
+    settings.campaigns?.manualUnlimited,
+    settings.campaigns?.workingHoursEnabled,
+    settings.campaigns?.workingHoursStart,
+    settings.campaigns?.workingHoursEnd,
+  ]);
+
+  // Grupos vinculados (a campanha soma grupos) + campanha em edição.
+  const selectedCampaignGroups = useMemo(
+    () => (scoringGroups || []).filter((g) => (campaignGroupIds || []).some((id) => String(id) === String(g?.id))),
+    [scoringGroups, campaignGroupIds],
+  );
+  const editingCampaign = editingCampaignId
+    ? (campaigns || []).find((c) => c.id === editingCampaignId) || null
+    : null;
+  // Evita que o hidratador automático reencha a lista após limpeza manual.
+  const hydratedGroupRef = useRef(null);
+
+  /** Soma de grupos: marcar adiciona os membros; desmarcar remove só os dele. */
+  const toggleCampaignGroup = (groupId, checked) => {
+    const g = (scoringGroups || []).find((x) => String(x.id) === String(groupId));
+    if (!g) return;
+    const id = String(g.id);
+    const isChecked = typeof checked === 'boolean'
+      ? checked
+      : !campaignGroupIds.some((x) => String(x) === id);
+    const source = `scoring-group:${g.id}`;
+    if (!isChecked) {
+      const affected = campaignRecipients.filter((item) => item.source === source).length;
+      if (affected > 0 && !confirm(`Remover o grupo “${g.name}” tira ${affected} lead(s) da lista. Continuar?`)) return;
+      setCampaignGroupIds((prev) => prev.filter((x) => String(x) !== id));
       setCampaignRecipients((items) => items.filter((item) => item.source !== source));
       return;
     }
-    const leads = groupLeads(group.id);
-    const mapped = leads.map(mapLocalLead).filter((lead) => lead.phone).map((lead) => ({ ...lead, source }));
+    const mapped = groupLeads(g.id).map(mapLocalLead).filter((lead) => lead.phone)
+      .map((lead) => ({ ...lead, source }));
     if (!mapped.length) {
-      addLog(`[CAMPAIGN] Grupo “${group.name}” não tem leads com telefone na base atual.`);
+      addLog(`[CAMPAIGN] Grupo “${g.name}” não tem leads com telefone na base atual.`);
       return;
     }
+    setCampaignGroupIds((prev) => (prev.some((x) => String(x) === id) ? prev : [...prev, id]));
     mergeRecipients(mapped);
+    addLog(`[CAMPAIGN] Grupo “${g.name}” somado (${mapped.length} leads).`);
   };
 
   const updateCampaignManualText = (value) => {
@@ -3110,12 +3558,16 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     ).slice(0, 80);
   }, [waGroups, recipientSearch]);
 
-  const handleStartCampaign = async (id) => {
+  const handleStartCampaign = async (id, { forceNow = false } = {}) => {
     if (!window.campaignAPI) return;
     const campaign = campaigns.find((item) => item.id === id);
     const confirmRecovery = campaign?.status === 'interrupted';
     if (confirmRecovery && !confirm('Esta campanha foi interrompida ao fechar/reiniciar o app. Confirmar retomada manual?')) {
       return;
+    }
+    if (forceNow && campaign?.schedule?.startAt) {
+      const when = new Date(campaign.schedule.startAt).toLocaleString('pt-BR');
+      if (!confirm(`Disparar agora? O agendamento (${when}) será ignorado.`)) return;
     }
     // Preferência: número ativo na UI (o que o user está vendo como conectado)
     const connId =
@@ -3124,7 +3576,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       connectedSessions[0]?.id ||
       null;
     try {
-      const res = await window.campaignAPI.start(id, connId, confirmRecovery);
+      const res = await window.campaignAPI.start(id, connId, confirmRecovery, forceNow);
       if (res && res.success === false) {
         alert('Não foi possível iniciar: ' + (res.error || 'erro desconhecido'));
         addLog(`[CAMPAIGN] Falha ao iniciar: ${res.error || 'erro'}`);
@@ -3133,7 +3585,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       loadCampaigns();
       window.dispatchEvent(new CustomEvent('sigma:campaign-started', { detail: { campaignId: id } }));
       addLog(
-        `[CAMPAIGN] Campanha iniciada` +
+        `[CAMPAIGN] Campanha ${forceNow ? 'disparada agora' : 'iniciada'}` +
           (res?.connectionId ? ` no ${res.connectionId}` : '') +
           `. Acompanhe em Monitorar.`,
       );
@@ -4443,12 +4895,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         {waTab === 'campaigns' && (
           <div className={`sigma-campaign-overlay${isCreatingCampaign ? ' wizard-active' : ''}`} role="presentation" onClick={() => setWaTab('chats')}>
           <section className="sigma-campaign-dialog" role="dialog" aria-modal="true" aria-labelledby="sigma-campaign-title" onClick={(event) => event.stopPropagation()}>
-          <div className="camp-hub">
-            <div className="camp-hub-hero camp-hub-hero-compact">
-              <div>
-                <span className="camp-hub-kicker">Sigma</span>
+          <div className="camp-hub od-camp">
+            <div className="camp-hub-hero camp-hub-hero-compact od-camp-head">
+              <div className="od-camp-head-titles">
                 <h2 id="sigma-campaign-title" style={{ margin: 0 }}>Campanhas</h2>
-                <p>Organize envios, acompanhe respostas e abra o relatório de cada campanha.</p>
+                <p className="od-camp-sub">Organize envios, acompanhe respostas e abra o relatório de cada campanha.</p>
               </div>
               <div className="sigma-campaign-head-actions">
                 <button className="btn btn-primary" onClick={openCreateCampaign}>
@@ -4497,34 +4948,61 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
               </div>
             ) : (
               <>
-                <div className="camp-list-toolbar">
-                  <div className="camp-search-wrap">
-                    <Search size={14} />
+                <div className="camp-list-toolbar od-camp-toolbar">
+                  <div className="camp-search-wrap od-camp-search">
+                    <Search size={14} aria-hidden="true" />
                     <input
                       type="search"
                       className="camp-search-input"
                       placeholder="Buscar campanha, status ou número…"
+                      aria-label="Buscar campanha"
                       value={campaignSearch}
                       onChange={(e) => setCampaignSearch(e.target.value)}
                     />
                   </div>
-                  <select
-                    className="camp-sort-select"
-                    value={campaignSort}
-                    onChange={(e) => setCampaignSort(e.target.value)}
-                    title="Ordenar"
-                  >
-                    <option value="newest">Mais recentes</option>
-                    <option value="oldest">Mais antigas</option>
-                    <option value="name">Nome (A–Z)</option>
-                  </select>
+                  <label className="od-camp-sort">
+                    <span className="od-camp-sort-label">Ordenar</span>
+                    <select
+                      className="camp-sort-select"
+                      value={campaignSort}
+                      onChange={(e) => setCampaignSort(e.target.value)}
+                      title="Ordenar"
+                      aria-label="Ordenar campanhas"
+                    >
+                      <option value="newest">Mais recentes</option>
+                      <option value="oldest">Mais antigas</option>
+                      <option value="name">Nome (A–Z)</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="camp-rcp-tabs od-camp-filters" role="tablist" aria-label="Filtrar por situação" style={{ marginBottom: 0 }}>
+                  {[
+                    { id: 'all', label: 'Todas' },
+                    { id: 'draft', label: 'Rascunhos' },
+                    { id: 'active', label: 'Ativas' },
+                    { id: 'done', label: 'Finalizadas' },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={campaignStatusFilter === t.id}
+                      className={`camp-rcp-tab od-pill ${campaignStatusFilter === t.id ? 'act' : ''}`}
+                      onClick={() => setCampaignStatusFilter(t.id)}
+                    >
+                      <span className="od-pill-label">{t.label}</span>
+                      <span className="od-pill-count">{campaignStatusCounts[t.id] ?? 0}</span>
+                    </button>
+                  ))}
                 </div>
                 {filteredCampaigns.length === 0 ? (
                   <p style={{ color: 'var(--muted)', fontSize: 13, margin: 0 }}>
-                    Nenhuma campanha encontrada para “{campaignSearch}”.
+                    {campaignSearch
+                      ? `Nenhuma campanha encontrada para “${campaignSearch}”.`
+                      : 'Nenhuma campanha nesta situação.'}
                   </p>
                 ) : (
-                  <div className="camp-cards">
+                  <div className="camp-cards od-camp-cards">
                     {filteredCampaigns.map((c) => {
                       const stats = c.stats || {};
                       const sent = stats.sent || 0;
@@ -4549,9 +5027,21 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                               : c.status === 'completed' ? 'completed'
                                 : 'ready';
                       const phones = campaignPhoneLabels(c);
+                      const est = estimateCampaignDuration({
+                        totalLeads: total,
+                        intervalSec: Math.max(5, Math.round(((c.schedule?.intervalMs) || 60000) / 1000)),
+                        connectionCount: (c.connectionIds?.length || (c.connectionId ? 1 : 1)),
+                        dailyLimit: settings.campaigns?.dailyLimit || 10,
+                        manualUnlimited: settings.campaigns?.manualUnlimited === true,
+                        workingHoursEnabled: settings.campaigns?.workingHoursEnabled !== false,
+                        workingHoursStart: settings.campaigns?.workingHoursStart || '07:00',
+                        workingHoursEnd: settings.campaigns?.workingHoursEnd || '18:00',
+                      });
                       const statusLabel =
                         c.status === 'paused' && c.pauseReason === 'daily_limit'
-                          ? 'Limite diário'
+                          ? 'Limite de hoje esgotado'
+                          : c.status === 'paused' && c.pauseReason === 'missed_schedule'
+                            ? 'Horário perdido'
                           : c.status === 'running' && c.waitReason === 'outside_hours'
                             ? 'Fora do horário'
                             : c.status === 'running' && c.waitReason === 'no_provider'
@@ -4566,76 +5056,73 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                                   failed: 'Com falhas',
                                 }[c.status] || (c.status || 'Rascunho');
                       return (
-                        <div key={c.id} className={`camp-card status-${statusClass}`}>
-                          <div className="camp-card-top">
-                            <div className="camp-card-title-row">
-                              <h4>{c.name}</h4>
+                        <div key={c.id} className={`camp-card status-${statusClass} od-camp-card`}>
+                          <div className="camp-card-top od-camp-top">
+                            <div className="camp-card-title-row od-camp-title-row">
+                              <h4 className="od-camp-name">{c.name}</h4>
                               <span className={`camp-status-badge ${statusClass}`}>{statusLabel}</span>
                             </div>
-                            <div className="camp-card-date" title="Criada em">
-                              <Clock size={11} /> {formatCampaignDate(c.createdAt)}
+                            <div className="camp-card-date od-camp-meta" title={`Criada em ${formatCampaignDate(c.createdAt)}${c.groupName ? ` · Grupo ${c.groupName}` : ''}`}>
+                              <Clock size={12} aria-hidden="true" /> <span>Criada em {formatCampaignDate(c.createdAt)}</span>
+                              {c.groupName ? <span className="od-camp-meta-group"> · Grupo {c.groupName}</span> : null}
+                              {phones.length > 1 ? <span> · {phones.length} números</span> : (phones[0] ? <span> · {phones[0].label}</span> : null)}
                             </div>
-                            <div className="camp-phone-chips">
-                              {phones.map((p) => (
-                                <span key={p.id} className="camp-phone-chip" title={p.id}>
-                                  <Phone size={11} /> {p.label}
-                                </span>
-                              ))}
-                            </div>
+                            {c.status === 'scheduled' && c.schedule?.startAt && (
+                              <div className="camp-card-date od-camp-meta od-camp-scheduled" title="Agendada para">
+                                <Clock size={12} aria-hidden="true" /> <span>Dispara {formatInZone(c.schedule.startAt, c.schedule?.timeZone || campaignTimeZoneId(settings))} · {timeZoneShortLabel(c.schedule?.timeZone && c.schedule.timeZone !== 'system' ? c.schedule.timeZone : campaignTimeZoneId(settings))}</span>
+                              </div>
+                            )}
                           </div>
 
-                          <div className="camp-card-progress">
-                            <div className="camp-card-progress-meta">
-                              <span>{sent}/{total} enviados · {pct}%</span>
-                              <span>{read} lidos · {replied} resp.</span>
+                          <div className="camp-card-progress od-camp-progress">
+                            <div className="camp-card-progress-meta od-camp-progress-meta">
+                              <span className="od-progress-main">{sent}/{total} enviados · {pct}%</span>
+                              <span className="od-progress-sub">
+                                {read} lidos · {replied} respostas
+                                {est ? <span className="od-progress-est" title={`${est.perDayPerNumber} envios/dia por número · considera retomada manual a cada dia`}> · cerca de {est.days} {est.days === 1 ? 'dia' : 'dias'}</span> : null}
+                              </span>
                             </div>
-                            <div className="camp-progress-bar">
+                            <div className="camp-progress-bar od-progress-track" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`Progresso de envio: ${pct}%`}>
                               <div className="camp-progress-fill" style={{ width: `${pct}%` }} />
                             </div>
                           </div>
 
-                          {stats.byConnection && Object.keys(stats.byConnection).length > 1 && (
-                            <div className="camp-card-by-conn">
-                              {Object.values(stats.byConnection).map((row) => {
-                                const label = phones.find((p) => p.id === row.connectionId)?.label
-                                  || row.connectionId?.slice(0, 8)
-                                  || '—';
-                                return (
-                                  <span key={row.connectionId || 'none'}>
-                                    {label}: {row.sent || 0}/{row.total || 0}
-                                  </span>
-                                );
-                              })}
-                            </div>
-                          )}
-
-                          <div className="camp-card-metrics">
-                            <div>📖 {stats.readRate ?? 0}%</div>
-                            <div>💬 {stats.replyRate ?? 0}%</div>
-                          </div>
-
-                          <div className="camp-card-actions">
-                            <button type="button" className="btn btn-secondary" onClick={() => openCampaignKanban(c)}>
-                              <ListTodo size={12} /> Kanban
-                            </button>
-                            <button type="button" className="btn btn-secondary" onClick={() => handleMonitorCampaign(c.id)}>
-                              <Activity size={12} /> Relatório
-                            </button>
-                            <button type="button" className="btn btn-secondary" title="Editar destinatários" onClick={() => openEditCampaignList(c)}>
-                              <Pencil size={12} /> Lista
-                            </button>
+                          <div className="camp-card-actions od-camp-actions">
                             {canStart ? (
-                              <button type="button" className="btn btn-primary" onClick={() => (c.status === 'paused' ? handleResumeCampaign(c.id) : handleStartCampaign(c.id))}>
-                                <Play size={12} /> {startLabel}
+                              <button type="button" className="btn btn-primary od-action-primary" onClick={() => (c.status === 'paused' ? handleResumeCampaign(c.id) : handleStartCampaign(c.id))}>
+                                <Play size={14} aria-hidden="true" /> {startLabel}
                               </button>
                             ) : canPause ? (
-                              <button type="button" className="btn btn-danger" onClick={() => handlePauseCampaign(c.id)}>
-                                <Pause size={12} /> Pausar
-                              </button>
+                              <>
+                                {c.status === 'scheduled' && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary od-action-primary"
+                                    title={c.schedule?.startAt ? `Agendada para ${formatInZone(c.schedule.startAt, c.schedule?.timeZone || campaignTimeZoneId(settings))} — clique para disparar agora` : 'Disparar agora'}
+                                    onClick={() => handleStartCampaign(c.id, { forceNow: true })}
+                                  >
+                                    <Play size={14} aria-hidden="true" /> Disparar agora
+                                  </button>
+                                )}
+                                <button type="button" className={`btn btn-danger ${c.status === 'scheduled' ? 'btn-compact od-action-secondary' : 'od-action-primary'}`} onClick={() => handlePauseCampaign(c.id)}>
+                                  <Pause size={14} aria-hidden="true" /> Pausar
+                                </button>
+                              </>
                             ) : null}
-                            <button type="button" className="btn btn-danger" onClick={() => handleDeleteCampaign(c.id)} title="Apagar">
-                              <Trash2 size={12} />
-                            </button>
+                            <div className="od-camp-secondary">
+                              <button type="button" className="btn btn-secondary btn-compact od-action-secondary" onClick={() => openCampaignKanban(c)}>
+                                <ListTodo size={13} aria-hidden="true" /> Kanban
+                              </button>
+                              <button type="button" className="btn btn-secondary btn-compact od-action-secondary" onClick={() => handleMonitorCampaign(c.id)}>
+                                <Activity size={13} aria-hidden="true" /> Relatório
+                              </button>
+                              <button type="button" className="btn btn-secondary btn-compact od-action-secondary" title="Editar campanha (lista, mensagem e agendamento)" onClick={() => openEditCampaignList(c)}>
+                                <Pencil size={13} aria-hidden="true" /> Editar
+                              </button>
+                              <button type="button" className="btn btn-danger btn-compact od-action-secondary od-action-icon" onClick={() => handleDeleteCampaign(c.id)} title="Apagar" aria-label={`Apagar campanha ${c.name}`}>
+                                <Trash2 size={13} aria-hidden="true" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       );
@@ -4667,22 +5154,41 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                 >
                   <div className="camp-wizard-header">
                     <h3 id="camp-wizard-title" style={{ margin: 0 }}>
-                      {editingCampaignId ? 'Editar lista da campanha' : wizardSteps[campaignWizardStep]?.title}
+                      {editingCampaignId ? 'Editar campanha' : wizardSteps[campaignWizardStep]?.title}
                     </h3>
+                    {editingCampaignId && (
+                      <span className="wa-hint">{wizardSteps[campaignWizardStep]?.title}</span>
+                    )}
                   </div>
 
-                  {!editingCampaignId && (
+                  {editingCampaignId ? (
+                    <div className="camp-wizard-steps steps" role="tablist" aria-label="Seções da edição">
+                      {wizardSteps.map((step, idx) => (
+                        <button
+                          key={step.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={idx === campaignWizardStep}
+                          title={step.title}
+                          className={`camp-wizard-step ${idx === campaignWizardStep ? 'act' : ''} ${idx < campaignWizardStep ? 'done' : ''}`}
+                          onClick={() => setCampaignWizardStep(idx)}
+                        >
+                          <span className="camp-wizard-step-num">{idx + 1}</span> {step.title}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
                     <div className="camp-wizard-steps steps" aria-hidden="true">
                       {wizardSteps.map((step, idx) => <i key={step.id} className={idx <= campaignWizardStep ? 'on' : ''} />)}
                     </div>
                   )}
 
                   <div className="camp-wizard-body">
-                    {/* EDIT MODE: recipients only */}
-                    {editingCampaignId && (
-                      <div className="camp-wizard-pane">
-                        <div className="camp-field">
-                          <label htmlFor="camp-name-input-edit">Nome</label>
+                    {/* EDIT MODE passo 0: nome + resumo + soma de grupos */}
+                    {editingCampaignId && campaignWizardStep === 0 && (
+                      <div className="camp-wizard-pane od-wizard-step0">
+                        <div className="camp-field od-field">
+                          <label htmlFor="camp-name-input-edit">Nome da campanha</label>
                           <CampaignNameInput
                             id="camp-name-input-edit"
                             initialValue={newCampaignName}
@@ -4690,14 +5196,46 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             placeholder="Nome da campanha"
                           />
                         </div>
-                        {renderRecipientsEditor()}
+                        <div className="field od-field">
+                          <label id="camp-edit-groups-label">Destinatários <span className="wa-hint">(marcar soma · desmarcar remove só os dele)</span></label>
+                          <div className="cmp-recsum od-recsum" role="status" aria-live="polite">
+                            <b className="od-recsum-total">
+                              {campaignRecipients.length} destinatário{campaignRecipients.length === 1 ? '' : 's'}
+                              {selectedCampaignGroups.length ? ` · ${selectedCampaignGroups.length} grupo(s): ${selectedCampaignGroups.map((g) => g.name).join(' + ')}` : ' na lista atual'}
+                            </b>
+                            {campaignRecipients.length > 0 && (
+                              <span className="od-recsum-preview"> · {campaignRecipients.slice(0, 4).map((r) => r.name || r.phone).join(' · ')}{campaignRecipients.length > 4 ? ` +${campaignRecipients.length - 4}` : ''}</span>
+                            )}
+                          </div>
+                          {scoringGroups.length === 0 ? (
+                            <p className="wa-hint">Nenhum grupo na Base de Leads.</p>
+                          ) : (
+                            <div className="cmp-groups od-group-list" role="group" aria-label="Grupos de leads da campanha" aria-labelledby="camp-edit-groups-label">
+                              {scoringGroups.map((group) => {
+                                const count = groupLeads(group.id).filter((l) => l.phone).length;
+                                const checked = campaignGroupIds.some((id) => String(id) === String(group.id));
+                                return (
+                                  <label key={group.id} className={checked ? 'on od-group-on' : 'od-group'}>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={(e) => toggleCampaignGroup(group.id, e.target.checked)}
+                                    />
+                                    <span className="od-group-name">{group.name}</span>
+                                    <span className="cnt">{count} leads</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
 
                     {/* STEP 0: recipients */}
                     {!editingCampaignId && campaignWizardStep === 0 && (
-                      <div className="camp-wizard-pane">
-                        <div className="field">
+                      <div className="camp-wizard-pane od-wizard-step0">
+                        <div className="field od-field">
                           <label htmlFor="camp-name-input">Nome da campanha</label>
                           <CampaignNameInput
                             id="camp-name-input"
@@ -4706,39 +5244,48 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             onChange={setNewCampaignName}
                             placeholder="Ex.: Lançamento Setembro"
                           />
+                          <p className="wa-hint od-field-hint">Se deixar vazio, usamos a data e a hora na criação.</p>
                         </div>
-                        <div className="field">
-                          <label>Grupos de leads <span className="wa-hint">(os mesmos Grupos da Base de Leads)</span></label>
-                          <div className="cmp-groups">
-                            {scoringGroups.length === 0 ? (
-                              <p className="wa-hint">Nenhum grupo ainda — crie grupos na Base de Leads ou adicione números avulsos.</p>
-                            ) : scoringGroups.map((group) => (
-                              <label key={group.id}>
-                                <input type="checkbox" checked={campaignSelectedGroupIds.has(group.id)} onChange={(event) => toggleCampaignGroup(group, event.target.checked)} />
-                                <span>{group.name}</span>
-                                <span className="cnt">{groupLeadCount(group)} leads</span>
-                              </label>
-                            ))}
+                        <div className="field od-field">
+                          <label id="camp-create-groups-label">Grupos de leads <span className="wa-hint">(pode somar mais de um)</span></label>
+                          {scoringGroups.length === 0 ? (
+                            <p className="wa-hint">Nenhum grupo ainda — crie grupos na Base de Leads para organizar os disparos.</p>
+                          ) : (
+                            <div className="cmp-groups od-group-list" role="group" aria-label="Grupos de leads da campanha" aria-labelledby="camp-create-groups-label">
+                              {scoringGroups.map((group) => {
+                                const count = groupLeads(group.id).filter((l) => l.phone).length;
+                                const checked = campaignGroupIds.some((id) => String(id) === String(group.id));
+                                return (
+                                  <label key={group.id} className={checked ? 'on od-group-on' : 'od-group'}>
+                                    <input type="checkbox" checked={checked} onChange={(e) => toggleCampaignGroup(group.id, e.target.checked)} />
+                                    <span className="od-group-name">{group.name}</span>
+                                    <span className="cnt">{count} leads</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                        {campaignGroupIds.length ? (
+                          <div className="cmp-recsum od-recsum" role="status" aria-live="polite">
+                            <b className="od-recsum-total">{campaignRecipients.length} destinatário{campaignRecipients.length === 1 ? '' : 's'} · {campaignGroupIds.length} grupo(s): {selectedCampaignGroups.map((g) => g.name).join(' + ')}</b>
+                            {campaignRecipients.length > 0 && (
+                              <span className="od-recsum-preview"> · {campaignRecipients.slice(0, 4).map((r) => r.name || r.phone).join(' · ')}{campaignRecipients.length > 4 ? ` +${campaignRecipients.length - 4}` : ''}</span>
+                            )}
                           </div>
-                        </div>
-                        <div className="field">
-                          <label htmlFor="campaign-manual">Números avulsos <span className="wa-hint">(um por linha: número — nome opcional)</span></label>
-                          <textarea id="campaign-manual" className="cmp-manual" value={campaignManualText} onChange={(event) => updateCampaignManualText(event.target.value)} placeholder={'+55 21 98765-0000 — João\n+55 21 97654-1111'} />
-                        </div>
-                        <div className="cmp-recsum">
-                          <b>{campaignRecipients.length} destinatário{campaignRecipients.length === 1 ? '' : 's'} único{campaignRecipients.length === 1 ? '' : 's'}</b>
-                          <span> · nenhum finalizado</span>
-                        </div>
+                        ) : (
+                          <div className="camp-alert od-alert">Marque ao menos um grupo para montar a lista de disparo.</div>
+                        )}
                         {connectedSessions.length === 0 && (
-                          <div className="camp-alert">
+                          <div className="camp-alert od-alert">
                             Nenhum número conectado. A campanha será salva como rascunho até você parear um WhatsApp.
                           </div>
                         )}
                       </div>
                     )}
 
-                    {/* STEP 1: message */}
-                    {!editingCampaignId && campaignWizardStep === 1 && (
+                    {/* STEP 1: message (criação e edição) */}
+                    {campaignWizardStep === 1 && (
                       <div className="camp-wizard-pane">
                         <label className="camp-field">
                           <span>Mensagem da campanha</span>
@@ -4766,8 +5313,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                       </div>
                     )}
 
-                    {/* STEP 2: schedule */}
-                    {!editingCampaignId && campaignWizardStep === 2 && (
+                    {/* STEP 2: schedule (criação e edição) */}
+                    {campaignWizardStep === 2 && (
                       <div className="camp-wizard-pane">
                         <div className="camp-field-row">
                           <label className="camp-field">
@@ -4791,7 +5338,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         </div>
                         {scheduleMode === 'scheduled' && (
                           <label className="camp-field">
-                            <span>Iniciar em</span>
+                            <span>Iniciar em · {timeZoneShortLabel(campaignTimeZoneId(settings))}</span>
                             <input
                               type="datetime-local"
                               value={scheduleStartAt}
@@ -4818,11 +5365,12 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                           <br />
                           Ao bater o limite, a campanha permanece pausada até você retomar explicitamente.
                         </div>
+                        <CampaignDurationHint estimate={durationEstimate} />
                       </div>
                     )}
 
-                    {/* STEP 3: review */}
-                    {!editingCampaignId && campaignWizardStep === 3 && (
+                    {/* STEP 3: review (criação e edição) */}
+                    {campaignWizardStep === 3 && (
                       <div className="camp-wizard-pane">
                         <div className="camp-review-card">
                           <h4 style={{ marginTop: 0 }}>
@@ -4837,6 +5385,12 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                               }).join(' · ') || 'Rascunho — conecte antes de iniciar'}
                             </li>
                             <li><strong>Destinatários:</strong> {campaignRecipients.length}</li>
+                            {(selectedCampaignGroups.map((g) => g.name).join(' + ') || editingCampaign?.groupName) && (
+                              <li className="od-review-groups">
+                                <strong>Grupos:</strong>{' '}
+                                <span>{selectedCampaignGroups.map((g) => g.name).join(' + ') || editingCampaign?.groupName}</span>
+                              </li>
+                            )}
                             {campaignConnectionIds.length > 1 && (
                               <li>
                                 <strong>Divisão:</strong>{' '}
@@ -4850,10 +5404,22 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             <li>
                               <strong>Disparo:</strong>{' '}
                               {scheduleMode === 'scheduled'
-                                ? `agendado (${scheduleStartAt || '—'})`
+                                ? (() => {
+                                    const tz = campaignTimeZoneId(settings);
+                                    const ms = zonedDateTimeToMs(scheduleStartAt, tz);
+                                    return Number.isFinite(ms)
+                                      ? `agendado (${formatInZone(ms, tz)} · ${timeZoneShortLabel(tz)})`
+                                      : 'agendado (data inválida)';
+                                  })()
                                 : scheduleMode === 'immediate'
                                   ? 'imediato rápido'
                                   : `intervalo ${intervalSec}s`}
+                            </li>
+                            <li>
+                              <strong>Duração estimada:</strong>{' '}
+                              {durationEstimate
+                                ? `≈ ${durationEstimate.days} dia(s) (${durationEstimate.perDayPerNumber}/dia por número)`
+                                : '—'}
                             </li>
                             <li>
                               <strong>Mensagem:</strong>
@@ -4885,14 +5451,30 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                     </button>
                     <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
                       {editingCampaignId ? (
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          disabled={creatingCampaignBusy || !campaignRecipients.length}
-                          onClick={handleCreateCampaign}
-                        >
-                          {creatingCampaignBusy ? 'Salvando…' : 'Salvar lista'}
-                        </button>
+                        <>
+                          {campaignWizardStep > 0 && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => setCampaignWizardStep((s) => Math.max(0, s - 1))}
+                            >
+                              <ChevronLeft size={14} /> Voltar
+                            </button>
+                          )}
+                          {campaignWizardStep < wizardSteps.length - 1 && (
+                            <button type="button" className="btn btn-secondary" onClick={goWizardNext}>
+                              Continuar
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            disabled={creatingCampaignBusy || !campaignRecipients.length || !templateText.trim()}
+                            onClick={handleCreateCampaign}
+                          >
+                            {creatingCampaignBusy ? 'Salvando…' : 'Salvar campanha'}
+                          </button>
+                        </>
                       ) : (
                         <>
                           {campaignWizardStep > 0 && (
@@ -4943,6 +5525,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
             campaign={monitoringCampaign}
             connections={connections}
             onBack={leaveMonitor}
+            onEdit={(c) => openEditCampaignList(
+              campaigns.find((x) => x.id === (c?.id || monitoringCampaignId)) || c || monitoringCampaign,
+            )}
           />
         ) : null}
 
@@ -5696,6 +6281,27 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   </label>
                 </div>
               )}
+
+              <hr style={{ border: 0, borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div>
+                  <strong style={{ fontSize: '13px' }}>Região do agendamento</strong>
+                  <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                    Horários de disparo e janela seguem esta região. Padrão: relógio do sistema.
+                  </div>
+                </div>
+                <select
+                  className="camp-sort-select"
+                  value={campaignTimeZoneId(settings)}
+                  onChange={(e) => updateSetting({ campaigns: { timeZone: e.target.value } })}
+                  title="Região do agendamento"
+                >
+                  {CAMPAIGN_TIMEZONES.map((z) => (
+                    <option key={z.id} value={z.id}>{z.label}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="wa-card" style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -5802,6 +6408,62 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           </div>
         )}
 
+        {/* RECUPERAÇÃO: horário perdido com o PC desligado — uma decisão por campanha */}
+        {recoveryMissed && recoveryMissed.length > 0 && createPortal(
+          <div
+            className="modal-backdrop camp-wizard-backdrop"
+            onClick={(e) => { if (e.target === e.currentTarget) setRecoveryMissed(null); }}
+          >
+            <div
+              className="wa-card camp-wizard"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="recovery-title"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="camp-wizard-header">
+                <h3 id="recovery-title" style={{ margin: 0 }}>Horário de disparo perdido</h3>
+                <span className="wa-hint">O app estava fechado na hora agendada. Escolha o que fazer com cada campanha.</span>
+                {connectedSessions.length === 0 && (
+                  <div className="camp-alert" style={{ marginTop: 8 }}>
+                    Nenhum WhatsApp conectado — conecte um número para disparar agora, ou deixe para amanhã.
+                  </div>
+                )}
+              </div>
+              <div className="camp-wizard-body">
+                {recoveryMissed.map((m) => {
+                  const tz = m.timeZone || campaignTimeZoneId(settings);
+                  const when = formatInZone(m.scheduledAt, tz);
+                  const next = formatInZone(m.scheduledAt + 24 * 60 * 60 * 1000, tz);
+                  const busy = recoveryBusyId === m.id;
+                  return (
+                    <div key={m.id} className="camp-review-card">
+                      <h4 style={{ marginTop: 0 }}>{m.name}</h4>
+                      <p className="camp-hint" style={{ margin: '4px 0 12px' }}>
+                        Agendada para {when} ({timeZoneShortLabel(tz)}) · {m.pending} de {m.total} pendentes
+                      </p>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => handleRecoveryResolve(m.id, 'now')}>
+                          <Play size={12} /> {busy ? 'Disparando…' : 'Disparar agora'}
+                        </button>
+                        <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => handleRecoveryResolve(m.id, 'tomorrow')}>
+                          Deixar para amanhã ({next})
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="camp-wizard-footer">
+                <button type="button" className="btn btn-ghost" onClick={() => setRecoveryMissed(null)}>
+                  Decidir depois
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
       </div>
     </div>
   );
@@ -5849,7 +6511,7 @@ const LEAD_STATUS_META = {
 };
 
 /** Tela de monitoramento com tracking completo de campanha. */
-function CampaignMonitorView({ campaign, onBack, connections = [] }) {
+function CampaignMonitorView({ campaign, onBack, onEdit, connections = [] }) {
   const [leadFilter, setLeadFilter] = useState('all');
   const stats = (campaign && campaign.stats) || {};
   const sent = Number(stats.sent || 0);
@@ -5880,6 +6542,8 @@ function CampaignMonitorView({ campaign, onBack, connections = [] }) {
   const statusLabel =
     campaign?.status === 'paused' && campaign?.pauseReason === 'daily_limit'
       ? 'Limite diário (salva — aguarda retomada)'
+      : campaign?.status === 'paused' && campaign?.pauseReason === 'missed_schedule'
+        ? 'Horário perdido (aguarda remarcar ou disparo)'
       : {
           ready: 'Pronta',
           running: 'Em andamento',
@@ -5953,15 +6617,27 @@ function CampaignMonitorView({ campaign, onBack, connections = [] }) {
               : ''}
           </span>
         </div>
-        <button
-          type="button"
-          className="btn btn-secondary"
-          onClick={() => {
-            if (typeof onBack === 'function') onBack();
-          }}
-        >
-          <ChevronLeft size={14} /> Voltar
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {typeof onEdit === 'function' && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              title="Editar campanha (lista, mensagem e agendamento)"
+              onClick={() => onEdit(campaign)}
+            >
+              <Pencil size={14} /> Editar
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              if (typeof onBack === 'function') onBack();
+            }}
+          >
+            <ChevronLeft size={14} /> Voltar
+          </button>
+        </div>
       </div>
 
       {/* Por número — campanha multi-conexão */}

@@ -139,14 +139,61 @@ class CampaignManager {
     return { resumedCount, requiresConfirmation: false };
   }
 
-  interruptForRestart() {
+  interruptForRestart(now = Date.now()) {
+    // Regra de boot:
+    // - agendada p/ data futura + pendentes → volta a `scheduled` sozinha;
+    // - agendada p/ data que já passou + pendentes → `paused` (horário perdido,
+    //   o modal de recuperação oferece disparar agora ou remarcar);
+    // - demais em voo (imediatas, sem pendentes) → `interrupted` (confirmação explícita).
     let interruptedCount = 0;
+    let rescheduledCount = 0;
+    let missedCount = 0;
     for (const campaign of this.store.getAll()) {
-      const resumable =
+      const inFlight =
         campaign.status === 'running' ||
         campaign.status === 'scheduled' ||
         (campaign.status === 'paused' && campaign.pauseReason === 'daily_limit');
-      if (!resumable) continue;
+      if (!inFlight) continue;
+      const rawStartAt = campaign.schedule?.startAt;
+      const startAt = rawStartAt == null || rawStartAt === "" ? NaN : Number(rawStartAt);
+      const hasPunctualSlot = Number.isFinite(startAt);
+      const hasPending = (campaign.leads || []).some((l) => l.status === 'pending');
+      if (
+        (campaign.status === 'running' || campaign.status === 'scheduled') &&
+        hasPunctualSlot && startAt > now && hasPending
+      ) {
+        this.store.update(campaign.id, {
+          status: 'scheduled',
+          pauseReason: null,
+          waitReason: null,
+        });
+        rescheduledCount += 1;
+        continue;
+      }
+      if (
+        (campaign.status === 'running' || campaign.status === 'scheduled') &&
+        hasPunctualSlot && startAt > now && !hasPending
+      ) {
+        this.store.update(campaign.id, {
+          status: 'completed',
+          pauseReason: null,
+          waitReason: null,
+        });
+        continue;
+      }
+      if (
+        (campaign.status === 'running' || campaign.status === 'scheduled') &&
+        hasPunctualSlot && startAt <= now && hasPending
+      ) {
+        this.store.update(campaign.id, {
+          status: 'paused',
+          pauseReason: 'missed_schedule',
+          waitReason: null,
+          missedAt: Date.now(),
+        });
+        missedCount += 1;
+        continue;
+      }
       this.store.update(campaign.id, {
         status: 'interrupted',
         pauseReason: 'restart_confirmation_required',
@@ -155,14 +202,91 @@ class CampaignManager {
       });
       interruptedCount += 1;
     }
+    if (rescheduledCount > 0) {
+      console.log(`[CAMPAIGN] ${rescheduledCount} campanha(s) futura(s) restaurada(s) como agendada(s).`);
+    }
+    if (missedCount > 0) {
+      console.log(`[CAMPAIGN] ${missedCount} campanha(s) com horário perdido pausada(s) para decisão manual.`);
+    }
     if (interruptedCount > 0) {
       console.log(`[CAMPAIGN] ${interruptedCount} campaign(s) require explicit recovery after restart.`);
     }
-    return interruptedCount;
+    return { interruptedCount, rescheduledCount, missedCount };
+  }
+
+  /**
+   * Recoloca agendadas futuras no loop do scheduler sem exigir provider
+   * online (o tick espera a conexão sozinho). Chamado uma vez no boot.
+   */
+  rearmScheduled(now = Date.now()) {
+    if (!this.scheduler) {
+      this.scheduler = new CampaignScheduler(this.providersMap, this.store, this.onProgress, this);
+    } else {
+      this.scheduler.providersMap = this.providersMap;
+    }
+    let count = 0;
+    for (const campaign of this.store.getAll()) {
+      if (campaign.status !== 'scheduled') continue;
+      const raw = campaign.schedule?.startAt;
+      const startAt = raw == null || raw === "" ? NaN : Number(raw);
+      if (!Number.isFinite(startAt) || startAt <= now) continue;
+      this.scheduler.addCampaign(campaign.id);
+      count++;
+    }
+    if (count > 0) this.scheduler.start();
+    return count;
   }
 
   getAll() {
     return this.store.getAll();
+  }
+
+  /**
+   * Campanhas cujo horário agendado passou com o app fechado (PC desligado).
+   * O boot marca tudo como `interrupted`; aqui filtramos só as que perderam o startAt.
+   */
+  getMissedSchedules(now = Date.now()) {
+    return this.store.getAll()
+      .filter((c) => {
+        const raw = c?.schedule?.startAt;
+        const startAt = raw == null || raw === "" ? NaN : Number(raw);
+        if (!Number.isFinite(startAt) || startAt >= now) return false;
+        if (!['interrupted', 'scheduled', 'paused'].includes(c.status)) return false;
+        return (c.leads || []).some((l) => l.status === 'pending');
+      })
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        status: c.status,
+        scheduledAt: Number(c.schedule.startAt),
+        timeZone: c.schedule?.timeZone || null,
+        pending: (c.leads || []).filter((l) => l.status === 'pending').length,
+        total: (c.leads || []).length,
+      }));
+  }
+
+  /**
+   * Resolve horário perdido: 'now' dispara imediatamente (limpa o agendamento);
+   * 'tomorrow' remarca para o mesmo horário no dia seguinte e reagenda.
+   */
+  resolveMissedSchedule(campaignId, choice, opts = {}) {
+    const campaign = this.store.get(campaignId);
+    if (!campaign) throw new Error('Campaign not found');
+    if (choice === 'tomorrow') {
+      const d = new Date(Number(campaign.schedule?.startAt) || Date.now());
+      d.setDate(d.getDate() + 1);
+      this.store.update(campaignId, {
+        schedule: { ...(campaign.schedule || {}), mode: 'scheduled', startAt: d.getTime() },
+      });
+      return {
+        ...this.start(campaignId, { ...opts, confirmRecovery: true }),
+        rescheduledTo: d.getTime(),
+      };
+    }
+    if (choice === 'now') {
+      return this.start(campaignId, { ...opts, confirmRecovery: true, forceNow: true });
+    }
+    throw new Error('Escolha inválida: use now ou tomorrow.');
   }
 
   get(id) {
@@ -248,13 +372,26 @@ class CampaignManager {
   }
 
   start(campaignId, opts = {}) {
-    const campaign = this.store.get(campaignId);
+    let campaign = this.store.get(campaignId);
     if (!campaign) throw new Error('Campaign not found');
     if (campaign.status === 'cancelled') {
       throw new Error('Campanha cancelada é terminal e não pode ser retomada. Crie uma nova campanha.');
     }
     if (campaign.status === 'interrupted' && opts.confirmRecovery !== true) {
       throw new Error('Campanha interrompida exige confirmação explícita antes da retomada.');
+    }
+
+    // Disparo direto: ignora agendamento futuro e dispara agora.
+    if (opts.forceNow === true) {
+      const cleared = {
+        ...(campaign.schedule || {}),
+        mode: 'interval',
+        startAt: null,
+      };
+      this.store.update(campaignId, { schedule: cleared });
+      campaign = this.store.get(campaignId);
+      // Reseta gate de intervalo para não herdar espera do agendamento.
+      if (this.scheduler?._lastSentAt) this.scheduler._lastSentAt.delete(campaignId);
     }
 
     // Ainda há leads pendentes?
