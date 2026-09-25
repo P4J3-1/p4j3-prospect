@@ -1514,8 +1514,11 @@ app.whenReady().then(() => {
     },
   });
   // Contatados sempre atualizados: logo após abrir e a cada 15 min (pega o que foi enviado pelo celular).
+  // A rodada de 15 min também confere a conexão e reconecta se tiver caído.
   scheduleContactHistorySync(20000);
-  setInterval(() => scheduleContactHistorySync(0), 15 * 60 * 1000);
+  setInterval(() => {
+    refreshWhatsApp({ auto: true }).catch((error) => console.warn("[WA-REFRESH]", error.message));
+  }, 15 * 60 * 1000);
   campaignManager = new CampaignManager(app.getPath("userData"));
   campaignManager.setProvidersMap(whatsappProviders);
   campaignManager.setCampaignSettingsProvider(() => {
@@ -2588,6 +2591,8 @@ function onChatEvent(event) {
       connectionId: event.connectionId,
     });
     if (event.type === "sync-done") scheduleContactHistorySync(5000);
+  } else if (event.type === "history-update") {
+    scheduleContactHistorySync(5000);
   } else if (event.type === "message-status") {
     contactStatus?.recordReceipt(event.messageId, event.status);
     if (campaignManager) {
@@ -2903,7 +2908,11 @@ async function recordIncomingReply(event) {
       const provider = event.connectionId ? whatsappProviders.get(event.connectionId) : null;
       phone = (await provider?.resolvePhoneJid?.(phone).catch(() => null)) || phone;
     }
-    contactStatus?.recordReply(phone, { optOut: isOptOutMessage(messageText(event.message)) });
+    // Horário real da mensagem: respostas recuperadas após reconectar não viram "agora".
+    const rawTs = event.message?.messageTimestamp;
+    const ts = Number(typeof rawTs === "object" && rawTs ? rawTs.low : rawTs) || 0;
+    const at = ts ? Math.min(Date.now(), ts * 1000) : Date.now();
+    contactStatus?.recordReply(phone, { optOut: isOptOutMessage(messageText(event.message)), at });
   } catch (error) {
     console.warn("[CONTACT-STATUS] resposta:", error.message);
   }
@@ -2948,6 +2957,99 @@ function scheduleContactHistorySync(delayMs = 5000) {
     syncContactHistory().catch((error) => console.warn("[CONTACT-STATUS] sync:", error.message));
   }, delayMs);
 }
+
+/**
+ * "Atualizar WhatsApp": confere cada conexão (reconecta a que caiu, sem
+ * deslogar), deixa as mensagens pendentes chegarem, recalcula quem
+ * respondeu e diz o que mudou. Roda também sozinho a cada 15 min.
+ */
+let waRefreshState = { lastAt: 0, running: false, result: null };
+let waRefreshRunning = null;
+
+function savedSessionIds() {
+  try {
+    const root = getSessionsRoot();
+    return fs.readdirSync(root).filter((d) => {
+      try {
+        assertConnectionId(d);
+        return fs.existsSync(path.join(root, d, "whatsapp-auth", "creds.json"));
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function refreshWhatsApp({ auto = false } = {}) {
+  if (waRefreshRunning) return waRefreshRunning;
+  waRefreshRunning = (async () => {
+    const replyKey = (c) => `${c?.status}|${c?.lastReplyAt || 0}`;
+    const before = new Map(Object.entries(contactStatus?.getAll() || {}).map(([p, c]) => [p, c]));
+    waRefreshState = { ...waRefreshState, running: true };
+    safeSend("whatsapp-refresh-state", waRefreshState);
+
+    // Sessão salva que não está carregada (falhou ao abrir): tenta de novo.
+    if (savedSessionIds().some((id) => !whatsappProviders.has(id))) {
+      await Promise.race([autoReconnectSessions(), new Promise((r) => setTimeout(r, 30000))]).catch(() => {});
+    }
+    const connections = [];
+    for (const [connectionId, provider] of whatsappProviders.entries()) {
+      if (typeof provider.refresh !== "function") continue;
+      const entry = { connectionId, phone: provider.getPhoneNumber?.() || null };
+      try {
+        Object.assign(entry, await provider.refresh(), { ok: true });
+      } catch (error) {
+        Object.assign(entry, { ok: false, error: error.message });
+      }
+      entry.status = provider.getStatus?.() || "disconnected";
+      connections.push(entry);
+    }
+
+    const sync = await syncContactHistory();
+    const newReplies = [];
+    for (const [phone, c] of Object.entries(contactStatus?.getAll() || {})) {
+      if (c?.status !== "respondeu" && c?.status !== "descadastrado") continue;
+      const prev = before.get(phone);
+      // Novo = virou "respondeu" agora, ou respondeu de novo depois da última vez conhecida.
+      const isNew = prev?.status !== c.status || (prev?.lastReplyAt && replyKey(prev) !== replyKey(c));
+      if (isNew) newReplies.push({ phone, name: c.name || "", at: c.lastReplyAt || c.repliedAt || 0 });
+    }
+    const loaded = new Set(whatsappProviders.keys());
+    const result = {
+      at: Date.now(),
+      auto,
+      connections,
+      newReplies: newReplies.sort((a, b) => b.at - a.at),
+      synced: sync.found,
+      offlineSessions: savedSessionIds().filter((id) => !loaded.has(id) || whatsappProviders.get(id)?.getStatus?.() !== "connected").length,
+    };
+    waRefreshState = { lastAt: result.at, running: false, result };
+    safeSend("whatsapp-refresh-state", waRefreshState);
+    // As de agora já avisaram na hora; aqui só as que estavam perdidas.
+    const recovered = newReplies.filter((r) => Date.now() - r.at >= 120000);
+    if (auto && recovered.length) {
+      notifyUser({
+        title: `${recovered.length} resposta(s) recuperada(s)`,
+        body: recovered.slice(0, 3).map((r) => r.name || r.phone).join(", ") + " responderam. Abra o WhatsApp do P4J3 para responder.",
+      });
+    }
+    return { success: true, ...result };
+  })();
+  try {
+    return await waRefreshRunning;
+  } catch (error) {
+    waRefreshState = { ...waRefreshState, running: false };
+    safeSend("whatsapp-refresh-state", waRefreshState);
+    return { success: false, error: error.message };
+  } finally {
+    waRefreshRunning = null;
+  }
+}
+
+ipcMain.handle("whatsapp-refresh", async () => refreshWhatsApp());
+ipcMain.handle("whatsapp-refresh-state", async () => waRefreshState);
 
 ipcMain.handle("contact-status-sync", async () => {
   try {

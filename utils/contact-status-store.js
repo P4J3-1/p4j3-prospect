@@ -144,6 +144,7 @@ class ContactStatusStore {
         firstSentAt: Math.min(prev.firstSentAt || Infinity, item.firstSentAt || item.sentAt || at),
         sentAt: Math.max(prev.sentAt || 0, item.sentAt || 0) || prev.sentAt || at,
         repliedAt: prev.repliedAt || item.repliedAt || undefined,
+        lastReplyAt: Math.max(prev.lastReplyAt || 0, item.lastReplyAt || item.repliedAt || 0) || undefined,
         messages: Math.max(Number(prev.messages) || 0, Number(item.messages) || 0),
         replies: Math.max(Number(prev.replies) || 0, Number(item.replies) || 0),
         lastEventAt: Math.max(prev.lastEventAt || 0, item.repliedAt || 0, item.sentAt || 0) || at,
@@ -211,12 +212,16 @@ class ContactStatusStore {
     const key = phoneCore(phone);
     const prev = key && this.contacts[key];
     if (!prev) return null;
+    // Mensagem anterior ao seu primeiro envio não é resposta à prospecção.
+    if (prev.firstSentAt && at < prev.firstSentAt) return null;
+    // A mesma mensagem pode chegar de novo na recuperação após reconectar.
+    if (prev.lastReplyAt && at <= prev.lastReplyAt && prev.status === "respondeu") return null;
     const next = {
       ...prev,
       status: optOut || prev.status === "descadastrado" ? "descadastrado" : "respondeu",
       repliedAt: prev.repliedAt || at,
-      lastReplyAt: at,
-      lastEventAt: at,
+      lastReplyAt: Math.max(prev.lastReplyAt || 0, at),
+      lastEventAt: Math.max(prev.lastEventAt || 0, at),
       replies: (Number(prev.replies) || 0) + 1,
     };
     this.contacts[key] = next;

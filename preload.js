@@ -118,6 +118,13 @@ contextBridge.exposeInMainWorld("contactAPI", {
   sync: () => ipcRenderer.invoke("contact-status-sync"),
   mark: (phone, mode, name) => ipcRenderer.invoke("contact-status-mark", { phone, mode, name }),
   checkWhatsApp: (phones) => ipcRenderer.invoke("whatsapp-check-numbers", { phones }),
+  refreshWhatsApp: () => ipcRenderer.invoke("whatsapp-refresh"),
+  getRefreshState: () => ipcRenderer.invoke("whatsapp-refresh-state"),
+  onRefreshState: (callback) => {
+    const listener = (_, payload) => callback(payload);
+    ipcRenderer.on("whatsapp-refresh-state", listener);
+    return () => ipcRenderer.removeListener("whatsapp-refresh-state", listener);
+  },
   onWaCheck: (callback) => {
     const listener = (_, payload) => callback(payload);
     ipcRenderer.on("wa-check-changed", listener);

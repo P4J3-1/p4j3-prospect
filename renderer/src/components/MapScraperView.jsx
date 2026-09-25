@@ -36,6 +36,7 @@ import {
 import { useNotifications } from './NotificationCenter';
 import LeadIntelPanel from './LeadIntelPanel';
 import QueuePanel from './QueuePanel';
+import WhatsAppRefresh from './WhatsAppRefresh';
 import { useQueue, activeQueueByPhone } from '../useQueue';
 import { useLeadMemory, TEMPERATURE } from '../useLeadMemory';
 import { useContactStatus, useWaCheck } from '../useContactStatus';
@@ -313,7 +314,6 @@ export default function MapScraperView({
   const [preparing, setPreparing] = useState(false);
   // Aba do lead: fila de envio tem prioridade; depois o status do WhatsApp.
   const bucketOf = (lead) => (queueByPhone[phoneCore(getLeadPhone(lead))] ? 'fila' : contactBucket(contactFor(contacts, lead)));
-  const [syncing, setSyncing] = useState(false);
   const [waChecking, setWaChecking] = useState(null);
 
   // Filtros do Feed Dock / List Pop
@@ -631,27 +631,6 @@ export default function MapScraperView({
     () => visibleLeads.map(getLeadPhone).filter((p) => p && !waCheck[phoneCore(p)]),
     [visibleLeads, waCheck],
   );
-
-  const handleSyncContacts = async () => {
-    if (!window.contactAPI?.sync) return;
-    setSyncing(true);
-    try {
-      const res = await window.contactAPI.sync();
-      if (!res?.success) throw new Error(res?.error || 'Não foi possível sincronizar.');
-      addNotification({
-        type: 'success',
-        category: 'whatsapp',
-        title: 'Contatados sincronizados',
-        message: res.found
-          ? `${res.found} conversa(s) com mensagem sua no WhatsApp · ${res.changed} status atualizado(s).`
-          : 'Nenhuma conversa encontrada. Conecte o WhatsApp e aguarde a sincronização terminar.',
-      });
-    } catch (error) {
-      addNotification({ type: 'warning', category: 'whatsapp', title: 'Sincronização', message: error?.message || 'Falhou.' });
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   const handleCheckWhatsApp = async () => {
     if (!window.contactAPI?.checkWhatsApp || !uncheckedPhones.length) return;
@@ -1732,9 +1711,6 @@ export default function MapScraperView({
           <button type="button" className="btn btn-sm" onClick={() => setQueueOpen(true)}>
             Revisar fila{queueDrafts ? ` (${queueDrafts})` : ''}
           </button>
-          <button type="button" className="btn btn-sm" disabled={syncing} onClick={handleSyncContacts} title="Traz do WhatsApp quem você já chamou, inclusive pelo celular">
-            {syncing ? 'Sincronizando…' : '↻ Sincronizar contatados'}
-          </button>
           <button
             type="button"
             className="btn btn-sm"
@@ -1750,6 +1726,7 @@ export default function MapScraperView({
             <option value="nicho">Agrupar por nicho</option>
           </select>
         </div>
+        <WhatsAppRefresh className="scraper-wa-refresh" />
 
         {(untriagedVisible > 0 || triageProgress) && (
           <div className="triage-bar" role="status">

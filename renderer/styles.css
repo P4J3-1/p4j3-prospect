@@ -8703,3 +8703,13 @@ body.route-whatsapp .wa-open-design .chat-list .chat-filter-tab { flex-shrink: 0
 .prospect-today button.hot { border-color: #fca5a5; background: #fef2f2; }
 @media (max-width: 900px) { .prospect-today { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .backup-card { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; }
+
+/* Atualizar WhatsApp: conexão + respostas recuperadas */
+.wa-refresh { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 12px 0; font-size: 11.5px; color: var(--muted); }
+.wa-refresh .btn { padding: 4px 9px; min-height: 28px; font-size: 11.5px; }
+.wa-refresh-status { min-width: 0; line-height: 1.35; }
+.wa-refresh-warn { color: #b45309; font-weight: 600; }
+.wa-refresh-compact { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.wa-refresh-when { font-size: 11px; color: var(--muted); font-weight: 400; }
+.wa-refresh-new { font-size: 11px; font-weight: 700; color: #fff; background: #16a34a; border-radius: 999px; padding: 1px 7px; }
+.wa-refresh-compact .wa-refresh-warn { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: #f59e0b; color: #fff; font-size: 11px; }

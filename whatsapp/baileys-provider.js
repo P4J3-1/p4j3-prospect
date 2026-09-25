@@ -148,10 +148,12 @@ class BaileysProvider extends WhatsAppProvider {
           },
         });
 
-        this.onStatus("connecting", { msg: "Waiting for QR scan..." });
+        const sock = this.sock;
+        if (!this._opened) this.onStatus("connecting", { msg: "Waiting for QR scan..." });
 
         // ─── MESSAGES ──────────────────────────
         this.sock.ev.on("messages.upsert", ({ messages, type }) => {
+          let syncedReplies = 0;
           for (const msg of messages) {
             if (!msg.message || !msg.key) continue;
             const hasContent =
@@ -198,8 +200,13 @@ class BaileysProvider extends WhatsAppProvider {
                 phoneJid: this._getPhoneJid(jid),
                 message: msg,
               });
+            } else if (!msg.key.fromMe && !isGroup) {
+              syncedReplies += 1;
             }
           }
+          // Mensagens recebidas que chegaram pela recuperação (append/histórico):
+          // avisa para recalcular quem respondeu a partir do histórico.
+          if (syncedReplies) this.onChatEvent({ type: "history-update", count: syncedReplies });
           // Persist with debounce (not every single event)
           this._saveData();
           this._emitChatUpdate();
@@ -452,7 +459,10 @@ class BaileysProvider extends WhatsAppProvider {
 
         // ─── CONNECTION ───────────────────────
         this.sock.ev.on("connection.update", async (update) => {
+          // Eventos de um socket antigo (substituído por reconexão) não contam.
+          if (sock !== this.sock) return;
           const { connection, lastDisconnect, qr } = update;
+          if (update.receivedPendingNotifications) this._pendingDone = true;
           if (qr && !this._opened) {
             this._status = "qr_ready";
             this.onStatus("qr_ready", { qrData: qr });
@@ -461,6 +471,8 @@ class BaileysProvider extends WhatsAppProvider {
             this._opened = true;
             this._status = "connected";
             this._reconnectAttempts = 0;
+            this._dropReconnects = 0;
+            this._connectedAt = Date.now();
             this._phoneNumber = this.sock.user?.id?.split(":")[0] || null;
             this.onStatus("connected", { phoneNumber: this._phoneNumber });
             this._syncActive = true;
@@ -503,8 +515,14 @@ class BaileysProvider extends WhatsAppProvider {
           if (connection === "close") {
             if (this._opened) {
               this._status = "disconnected";
-              this._phoneNumber = null;
-              this.onStatus("disconnected", { msg: "Connection lost" });
+              if (this._shouldStop) return;
+              if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) {
+                this._phoneNumber = null;
+                this.onStatus("disconnected", { msg: "Sessão encerrada no celular: conecte de novo pelo QR." });
+                return;
+              }
+              // Queda de rede/servidor: reconecta sozinho com a mesma sessão.
+              this._scheduleReconnect();
               return;
             }
             const err = lastDisconnect?.error;
@@ -528,8 +546,85 @@ class BaileysProvider extends WhatsAppProvider {
           }
         });
       };
+      this._startSocket = startSocket;
       startSocket();
     });
+  }
+
+  /** Reconexão após queda, sem apagar a sessão: 3s, 6s, 12s… até 1 min. */
+  _scheduleReconnect() {
+    if (this._shouldStop || this._reconnectTimer) return;
+    this._dropReconnects = (this._dropReconnects || 0) + 1;
+    const delay = Math.min(60000, 3000 * Math.pow(2, this._dropReconnects - 1));
+    this._status = "connecting";
+    this.onStatus("connecting", { msg: "Conexão caiu, reconectando...", reconnecting: true });
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      this._restartSocket().catch((e) => console.log("[BAILEYS] Reconnect:", e.message));
+    }, delay);
+  }
+
+  /** Troca o socket por um novo com a mesma credencial (não desloga). */
+  async _restartSocket() {
+    if (this._shouldStop || !this._startSocket) return;
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+    const old = this.sock;
+    this.sock = null; // o "close" do socket antigo passa a ser ignorado
+    try {
+      old?.end?.(undefined);
+    } catch (e) {}
+    this._pendingDone = false;
+    this._status = "connecting";
+    await this._startSocket();
+  }
+
+  /** A conexão responde de verdade? (consulta leve ao servidor, com prazo) */
+  async _ping(timeoutMs = 10000) {
+    const sock = this.sock;
+    const me = this._phoneNumber || sock?.user?.id?.split(":")[0];
+    if (!sock || this._status !== "connected" || !me) return false;
+    let timer;
+    try {
+      await Promise.race([
+        sock.onWhatsApp(me),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
+        }),
+      ]);
+      return true;
+    } catch (e) {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Atualizar WhatsApp: confere se a conexão está viva e, se não estiver,
+   * reconecta com a mesma sessão e espera as mensagens pendentes chegarem.
+   */
+  async refresh({ timeoutMs = 45000 } = {}) {
+    if (this._shouldStop) throw new Error("Conexão desligada");
+    // Ainda abrindo pela primeira vez (ou esperando o QR): não atrapalha o pareamento.
+    if (!this._opened) throw new Error("Ainda conectando");
+    const healthy = await this._ping();
+    if (healthy) return { healthy: true, reconnected: false, phone: this._phoneNumber };
+    await this._restartSocket();
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline && this._status !== "connected") {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (this._status !== "connected") throw new Error("Não reconectou a tempo; tente de novo em instantes");
+    // Mensagens que chegaram enquanto estava fora vêm logo após reconectar.
+    const pendingDeadline = Math.min(deadline, Date.now() + 20000);
+    while (Date.now() < pendingDeadline && !this._pendingDone) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+    return { healthy: false, reconnected: true, phone: this._phoneNumber };
   }
 
   async _fetchGroupsNow() {
@@ -838,6 +933,10 @@ class BaileysProvider extends WhatsAppProvider {
 
   async disconnect() {
     this._shouldStop = true;
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     this._saveDataNow(); // Force immediate save on disconnect
     if (this.sock) {
       try {
@@ -1479,6 +1578,7 @@ class BaileysProvider extends WhatsAppProvider {
       }
       if (!sent) continue;
       let repliedAt = 0;
+      let lastReplyAt = 0;
       let replies = 0;
       for (const m of msgs) {
         if (m?.key?.fromMe) continue;
@@ -1486,6 +1586,7 @@ class BaileysProvider extends WhatsAppProvider {
         if (firstSent && ts > firstSent) {
           replies += 1;
           if (!repliedAt || ts < repliedAt) repliedAt = ts;
+          if (ts > lastReplyAt) lastReplyAt = ts;
         }
       }
       const phoneJid = await this.resolvePhoneJid(jid);
@@ -1496,6 +1597,7 @@ class BaileysProvider extends WhatsAppProvider {
         sentAt: lastSent || firstSent || null,
         messages: sent,
         repliedAt: repliedAt || null,
+        lastReplyAt: lastReplyAt || null,
         replies,
         name: chat?.name || "",
       });

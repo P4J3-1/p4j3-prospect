@@ -48,6 +48,7 @@ import { useTriage } from '../useTriage';
 import { CONTACT_STATUS, phoneCore, timeAgo } from '../contactStatus.mjs';
 import { SEGMENTS, triageFor } from '../triage.mjs';
 import { useLeadMemory, TEMPERATURE } from '../useLeadMemory';
+import WhatsAppRefresh from './WhatsAppRefresh';
 
 // Cor estável por nome: avatares sem foto deixam de ser todos cinza.
 const AVATAR_COLORS = ['#10a37f', '#2563eb', '#7c3aed', '#db2777', '#d97706', '#0891b2', '#16a34a', '#dc2626'];
@@ -914,7 +915,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           }
         }
       } else if (status === 'connecting') {
-        if (isPending) {
+        // Reconexão automática de uma sessão já pareada não abre o fluxo de QR.
+        if (isPending && !data?.reconnecting) {
           setConnectFlowStatus((prev) => prev || 'connecting');
           if (connId && !pendingConnectionIdRef.current) {
             pendingConnectionIdRef.current = connId;
@@ -4546,6 +4548,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           </button>
         </nav>
         <div className="wa-top-actions wa-open-design-actions">
+          <WhatsAppRefresh compact />
           <div className="wa-menuwrap" style={{ position: 'relative' }}>
             <button
               type="button"
