@@ -14,6 +14,7 @@ import {
   MessageCircle,
   Settings2,
   Bot,
+  Workflow,
 } from 'lucide-react';
 import Overview from './components/Overview';
 import MapScraperView from './components/MapScraperView';
@@ -27,6 +28,7 @@ import { NotificationProvider, useNotifications } from './components/Notificatio
 import UpdateBanner from './components/UpdateBanner';
 import UpdateSettingsCard from './components/UpdateSettingsCard';
 import AiSettingsPage from './components/AiSettingsPage';
+import AgentsPage from './components/AgentsPage';
 import { dedupeLeads, normalizeLeadCollection, readLocalArray } from './leadData';
 import { splitBatchInput, buildExtractionTargets, MAX_MATRIX_TARGETS } from './batchSplit.mjs';
 
@@ -187,7 +189,7 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
 
 function AppInner() {
   const [activeTab, setActiveTab] = useState(() => {
-    try { const h = location.hash.slice(1); if(['overview','scraper','base','scoring','kanban','whatsapp','ai','settings'].includes(h)) return h; } catch{}
+    try { const h = location.hash.slice(1); if(['overview','scraper','base','scoring','kanban','whatsapp','ai','agents','settings'].includes(h)) return h; } catch{}
     return 'overview';
   });
   const [isNewExtractionOpen, setIsNewExtractionOpen] = useState(false);
@@ -273,16 +275,16 @@ function AppInner() {
   useEffect(() => {
     const onHashChange = () => {
       const next = String(location.hash || '').slice(1);
-      if (['overview', 'scraper', 'base', 'scoring', 'kanban', 'whatsapp', 'ai', 'settings'].includes(next)) setActiveTab(next);
+      if (['overview', 'scraper', 'base', 'scoring', 'kanban', 'whatsapp', 'ai', 'agents', 'settings'].includes(next)) setActiveTab(next);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
   useEffect(()=>{
     const onKey=(e)=>{
-      if((e.metaKey||e.ctrlKey) && /^[1-7]$/.test(e.key)){
+      if((e.metaKey||e.ctrlKey) && /^[1-8]$/.test(e.key)){
         e.preventDefault();
-        const map=['overview','scraper','base','scoring','kanban','whatsapp','ai'];
+        const map=['overview','scraper','base','scoring','kanban','whatsapp','ai','agents'];
         const i=Number(e.key)-1; if(map[i]) setActiveTab(map[i]);
       }
       if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k' && activeTab === 'overview'){
@@ -700,6 +702,12 @@ function AppInner() {
             <WhatsAppPanel waStatus={waStatus} setWaStatus={setWaStatus} addLog={(msg) => console.log(msg)} initialTab="campaigns" />
           </ErrorBoundaryLite>
         );
+      case 'agents':
+        return (
+          <ErrorBoundaryLite label="Agentes">
+            <AgentsPage onNavigate={navigate} />
+          </ErrorBoundaryLite>
+        );
       case 'ai':
         return (
           <ErrorBoundaryLite label="Inteligência Artificial">
@@ -902,6 +910,14 @@ function AppInner() {
           >
             <span className="ico" aria-hidden="true"><Bot size={17} /></span>
             <span className="nav-label-text">Inteligência Artificial</span><span className="nav-kbd">7</span>
+          </button>
+
+          <button
+            className={`nav-item ${activeTab === 'agents' ? 'active' : ''}`}
+            onClick={() => navigate('agents')}
+          >
+            <span className="ico" aria-hidden="true"><Workflow size={17} /></span>
+            <span className="nav-label-text">Agentes</span><span className="nav-kbd">8</span>
           </button>
 
         </nav>

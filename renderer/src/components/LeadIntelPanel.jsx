@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { X, Search, RefreshCw, Copy, MessageCircle, ExternalLink, UserRound, Building2, Target, Lightbulb } from 'lucide-react';
+import { X, Search, RefreshCw, Copy, MessageCircle, ExternalLink, UserRound, Building2, Target, Lightbulb, ClipboardList, Gift } from 'lucide-react';
+import { SEGMENTS } from '../triage.mjs';
 
 const CHANCE_COLORS = { alta: 'var(--success, #10a37f)', media: '#d97706', baixa: '#dc2626' };
 
@@ -16,12 +17,42 @@ function Section({ icon: Icon, title, children }) {
  * Ficha de pesquisa do lead: busca web + Receita Federal + IA.
  * `onSave(intel)` grava o resultado no lead para reaproveitar em campanhas.
  */
-export default function LeadIntelPanel({ lead, onClose, onSave, onOpenWhatsApp }) {
+export default function LeadIntelPanel({ lead, triage, onClose, onSave, onOpenWhatsApp }) {
   const [intel, setIntel] = useState(lead?.intel || null);
   const [aiConfigured, setAiConfigured] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [giftBusy, setGiftBusy] = useState(false);
+  const [giftError, setGiftError] = useState('');
+
+  // Agente Presente de Valor (e triagem sob demanda): o resultado volta pelo useTriage.
+  const generateGift = async () => {
+    if (!window.aiAPI?.gift) return;
+    setGiftBusy(true);
+    setGiftError('');
+    try {
+      const res = await window.aiAPI.gift({
+        name: lead.name || lead.title || lead.company,
+        category: lead.category,
+        address: lead.address,
+        city: lead.city,
+        phone: lead.phone || lead.tel,
+        website: lead.website || lead.site,
+        instagram: lead.instagram,
+        rating: lead.rating,
+        totalReviews: lead.totalReviews || lead.reviews,
+        saudacao: lead.saudacao || intel?.saudacao,
+        decisor: lead.decisor || intel?.decisor?.nome,
+      });
+      if (!res?.success) throw new Error(res?.error || 'Não foi possível gerar agora.');
+      if (res.aiError) setGiftError(`IA indisponível: ${res.aiError}. Versão por regras gerada.`);
+    } catch (err) {
+      setGiftError(err?.message || 'Falha ao gerar.');
+    } finally {
+      setGiftBusy(false);
+    }
+  };
 
   const research = useCallback(async () => {
     if (!window.aiAPI?.researchLead) {
@@ -120,6 +151,75 @@ export default function LeadIntelPanel({ lead, onClose, onSave, onOpenWhatsApp }
                 )}
                 {intel.decisor?.fonte && <p className="intel-muted">Fonte: {intel.decisor.fonte}</p>}
                 <p>Saudação nas mensagens: <b>“Olá, {intel.saudacao}!”</b> <span className="intel-muted">(variável {'{{saudacao}}'})</span></p>
+              </Section>
+
+              <Section icon={ClipboardList} title="Triagem e entrevista de qualificação">
+                {!triage ? (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span className="intel-muted">Ainda sem triagem para este lead.</span>
+                    <button type="button" className="btn btn-sm" disabled={giftBusy} onClick={generateGift}>
+                      {giftBusy ? 'Triando…' : 'Fazer triagem'}
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="lead-badges" style={{ marginBottom: 6 }}>
+                      <span className="lead-badge potential">Potencial {triage.score}/100</span>
+                      {triage.segments.filter((seg) => seg !== 'alto_potencial').map((seg) => (
+                        <span key={seg} className="lead-badge" style={{ '--badge': SEGMENTS[seg]?.color }}>{SEGMENTS[seg]?.label}</span>
+                      ))}
+                    </div>
+                    {triage.resumo && <p>{triage.resumo}</p>}
+                    {triage.findings?.length > 0 && <ul className="intel-list bad">{triage.findings.map((x) => <li key={x}>{x}</li>)}</ul>}
+                    {triage.entrevista?.servico_recomendado && <p><b>Serviço indicado:</b> {triage.entrevista.servico_recomendado}</p>}
+                    {triage.entrevista?.perguntas?.length > 0 && (
+                      <>
+                        <p className="intel-strong" style={{ fontSize: 13, marginTop: 8 }}>Perguntas para qualificar (nesta ordem)</p>
+                        <ol className="intel-list">{triage.entrevista.perguntas.map((q) => <li key={q}>{q}</li>)}</ol>
+                      </>
+                    )}
+                    {triage.entrevista?.sinais_de_compra?.length > 0 && (
+                      <>
+                        <p className="intel-strong" style={{ fontSize: 13, marginTop: 8 }}>Sinais de que vai comprar</p>
+                        <ul className="intel-list good">{triage.entrevista.sinais_de_compra.map((q) => <li key={q}>{q}</li>)}</ul>
+                      </>
+                    )}
+                    {triage.entrevista?.objecoes?.length > 0 && (
+                      <>
+                        <p className="intel-strong" style={{ fontSize: 13, marginTop: 8 }}>Objeções e respostas</p>
+                        {triage.entrevista.objecoes.map((o) => (
+                          <p key={o.objecao}><b>“{o.objecao}”</b> → {o.resposta}</p>
+                        ))}
+                      </>
+                    )}
+                    <p className="intel-muted">{triage.aiApplied ? 'Triagem com IA' : 'Triagem por regras (configure a IA para a versão completa)'}</p>
+                  </>
+                )}
+              </Section>
+
+              <Section icon={Gift} title="Presente de valor (diagnóstico gratuito)">
+                <p className="intel-muted">Abra a conversa entregando algo útil antes de vender: mais respostas e menos denúncias.</p>
+                {triage?.presente?.mensagem ? (
+                  <div className="camp-msg-bubble" style={{ whiteSpace: 'pre-wrap' }}>{triage.presente.mensagem}</div>
+                ) : (
+                  <p className="intel-muted">Nada a diagnosticar ainda: faça a triagem ou gere com IA.</p>
+                )}
+                {giftError && <p className="intel-muted" style={{ color: '#d97706' }}>{giftError}</p>}
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-sm" disabled={giftBusy} onClick={generateGift}>
+                    <Gift size={13} /> {giftBusy ? 'Gerando…' : triage?.aiApplied ? 'Gerar de novo com IA' : 'Gerar com IA'}
+                  </button>
+                  {triage?.presente?.mensagem && (
+                    <button type="button" className="btn btn-sm" onClick={() => copy(triage.presente.mensagem)}>
+                      <Copy size={13} /> {copied ? 'Copiado!' : 'Copiar'}
+                    </button>
+                  )}
+                  {triage?.presente?.mensagem && phone && onOpenWhatsApp && (
+                    <button type="button" className="btn btn-sm btn-primary" onClick={() => onOpenWhatsApp(triage.presente.mensagem)}>
+                      <MessageCircle size={13} /> Enviar presente pelo WhatsApp
+                    </button>
+                  )}
+                </div>
               </Section>
 
               {chance && (

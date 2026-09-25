@@ -43,6 +43,31 @@ import TriggersManagerModal from './TriggersManagerModal';
 import ChatVoicePlayer from './ChatVoicePlayer';
 import { resolveGroupMembers } from '../leadMatch.mjs';
 import { buildNewChatCandidates } from '../newChatCandidates.mjs';
+import { useContactStatus } from '../useContactStatus';
+import { useTriage } from '../useTriage';
+import { CONTACT_STATUS, phoneCore, timeAgo } from '../contactStatus.mjs';
+import { SEGMENTS, triageFor } from '../triage.mjs';
+
+// Cor estável por nome: avatares sem foto deixam de ser todos cinza.
+const AVATAR_COLORS = ['#10a37f', '#2563eb', '#7c3aed', '#db2777', '#d97706', '#0891b2', '#16a34a', '#dc2626'];
+function avatarColor(seed) {
+  let h = 0;
+  for (const ch of String(seed || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+
+const MOMENT_LABELS = {
+  interessado: 'Interessado',
+  curioso: 'Curioso',
+  duvida: 'Com dúvida',
+  objecao: 'Com objeção',
+  sem_interesse: 'Sem interesse',
+  pediu_para_sair: 'Pediu para sair',
+};
+
+function readShowLeadPanel() {
+  try { return localStorage.getItem('sigma_wa_lead_panel') !== 'false'; } catch { return true; }
+}
 
 // Abordagem padrão: curta, sem link e terminando em pergunta. Pedir permissão
 // gera mais respostas e menos denúncias do que despejar a oferta no 1º toque.
@@ -446,6 +471,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [activeChatName, setActiveChatName] = useState('');
   const [activeChatMeta, setActiveChatMeta] = useState(null); // { isGroup, phone, profilePic }
   const [messages, setMessages] = useState([]);
+  // Contexto comercial da conversa: status ao vivo, triagem e sugestões da IA.
+  const contacts = useContactStatus();
+  const triageMap = useTriage();
+  const [showLeadPanel, setShowLeadPanel] = useState(readShowLeadPanel);
+  const [aiReply, setAiReply] = useState(null); // { loading, error, data }
   const [inputText, setInputText] = useState('');
   const [chatPresence, setChatPresence] = useState(null); // { online, lastSeen, statusText }
   const [chatFilter, setChatFilter] = useState('all'); // all | unread | groups | archived
@@ -4159,6 +4189,49 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, activeChatJid, settings.media, settings.previews]);
 
+  // Lead da conversa ativa (pelo telefone) para o painel lateral e o Agente de Respostas.
+  const activeLeadPhone = useMemo(
+    () => phoneCore(activeChatMeta?.phoneJid || activeChatMeta?.sendJid || activeChatMeta?.phone || activeChatJid || ''),
+    [activeChatMeta, activeChatJid],
+  );
+  const activeLead = useMemo(() => {
+    if (!activeLeadPhone || activeLeadPhone.length < 10) return null;
+    try {
+      const list = JSON.parse(localStorage.getItem('sigma_leads') || '[]');
+      return (Array.isArray(list) ? list : []).find((l) => phoneCore(l?.phone || l?.tel) === activeLeadPhone) || null;
+    } catch {
+      return null;
+    }
+  }, [activeLeadPhone]);
+  const activeContact = contacts[activeLeadPhone] || null;
+  const activeTriage = triageMap[`p:${activeLeadPhone}`] || (activeLead ? triageFor(triageMap, activeLead) : null);
+  const leadPanelVisible = !!activeChatJid && showLeadPanel && !activeChatMeta?.isGroup;
+
+  useEffect(() => { setAiReply(null); }, [activeChatJid]);
+
+  const requestAiReply = async () => {
+    if (!window.aiAPI?.suggestReply) return;
+    setAiReply({ loading: true });
+    const history = messages
+      .slice(-16)
+      .map((m) => ({ fromMe: !!m?.key?.fromMe, text: extractText(unwrapMessage(m?.message || {})) || '' }))
+      .filter((m) => m.text);
+    try {
+      const res = await window.aiAPI.suggestReply(history, {
+        name: activeLead?.name || activeChatName,
+        phone: activeLeadPhone,
+        category: activeLead?.category,
+        website: activeLead?.website,
+        saudacao: activeLead?.saudacao,
+        decisor: activeLead?.decisor,
+      });
+      if (!res?.success) throw new Error(res?.error || 'Sem sugestões agora.');
+      setAiReply({ loading: false, data: res });
+    } catch (error) {
+      setAiReply({ loading: false, error: error?.message || 'Não foi possível sugerir agora.' });
+    }
+  };
+
   const renderAvatar = (jid, name, size = 40, isGroup = false) => {
     const pic = profilePics[jid];
     const initials = (name || '?').trim().slice(0, 1).toUpperCase();
@@ -4174,7 +4247,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       );
     }
     return (
-      <div className="chat-avatar" style={{ width: size, height: size, fontSize: size * 0.4 }}>
+      <div className="chat-avatar" style={{ width: size, height: size, fontSize: size * 0.4, background: isGroup ? undefined : `${avatarColor(name || jid)}1f`, color: isGroup ? undefined : avatarColor(name || jid) }}>
         {isGroup ? <Users size={size * 0.45} /> : initials || <User size={size * 0.45} />}
       </div>
     );
@@ -5588,7 +5661,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
         {/* CHATS TAB */}
         {(waTab === 'chats' || waTab === 'campaigns') && (
-          <div className={`chat-shell ${activeChatJid ? 'has-active-chat' : ''}`} role="tabpanel" aria-label="Conversas">
+          <div className={`chat-shell ${activeChatJid ? 'has-active-chat' : ''}${leadPanelVisible ? ' with-lead-panel' : ''}`} role="tabpanel" aria-label="Conversas">
             {/* Left Chats List */}
             <aside className="chat-list">
               <div className="chat-list-header">
@@ -5674,6 +5747,13 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             {unread > 0 && <span className="chat-unread-badge">{unread > 99 ? '99+' : unread}</span>}
                             {c.archived && <Archive size={12} className="chat-archived-icon" />}
                           </div>
+                          {!c.isGroup && contacts[phoneCore(c.phoneJid || c.phone || c.jid)] && (
+                            <div className="lead-badges" style={{ marginTop: 3 }}>
+                              <span className="lead-badge" style={{ '--badge': CONTACT_STATUS[contacts[phoneCore(c.phoneJid || c.phone || c.jid)].status]?.color }}>
+                                {CONTACT_STATUS[contacts[phoneCore(c.phoneJid || c.phone || c.jid)].status]?.short}
+                              </span>
+                            </div>
+                          )}
                           {contactTagIds(c.phoneJid || c.jid).length > 0 && (
                             <div className="chat-header-tags" style={{ marginTop: 2 }}>
                               {contactTagIds(c.phoneJid || c.jid).slice(0, 3).map((tid) => {
@@ -5742,6 +5822,29 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                       </div>
                     </button>
                     <div className="chat-room-header-actions wa-menuwrap" style={{ position: 'relative' }}>
+                      {!activeChatMeta?.isGroup && (
+                        <button
+                          type="button"
+                          className="btn btn-sm wa-ai-reply-btn"
+                          disabled={aiReply?.loading || messages.length === 0}
+                          title="O Agente de Respostas lê a conversa e sugere 3 respostas"
+                          onClick={requestAiReply}
+                        >
+                          <Sparkles size={13} /> {aiReply?.loading ? 'Pensando…' : 'Sugerir resposta'}
+                        </button>
+                      )}
+                      {!activeChatMeta?.isGroup && (
+                        <button
+                          type="button"
+                          className={`wa-iconbtn ${showLeadPanel ? 'on' : ''}`}
+                          aria-pressed={showLeadPanel}
+                          title={showLeadPanel ? 'Ocultar painel do lead' : 'Mostrar painel do lead'}
+                          aria-label="Painel do lead"
+                          onClick={() => setShowLeadPanel((v) => { try { localStorage.setItem('sigma_wa_lead_panel', String(!v)); } catch {} return !v; })}
+                        >
+                          <User size={15} />
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="wa-iconbtn"
@@ -5915,6 +6018,35 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                     </div>
                   )}
 
+                  {aiReply && !aiReply.loading && (
+                    <div className="wa-ai-suggestions" role="region" aria-label="Sugestões do Agente de Respostas">
+                      <div className="wa-ai-suggestions-head">
+                        <Sparkles size={13} />
+                        {aiReply.error ? (
+                          <span>{aiReply.error}</span>
+                        ) : (
+                          <span>
+                            <b>{MOMENT_LABELS[aiReply.data.momento] || 'Lead'}</b>
+                            {aiReply.data.leitura ? ` · ${aiReply.data.leitura}` : ''}
+                          </span>
+                        )}
+                        <button type="button" className="chat-reply-cancel" aria-label="Fechar sugestões" onClick={() => setAiReply(null)}><X size={14} /></button>
+                      </div>
+                      {!aiReply.error && (
+                        <>
+                          <div className="wa-ai-suggestion-list">
+                            {aiReply.data.sugestoes.map((text) => (
+                              <button key={text} type="button" className="wa-ai-suggestion" title="Usar esta resposta (você revisa antes de enviar)" onClick={() => { setInputText(text); setAiReply(null); }}>
+                                {text}
+                              </button>
+                            ))}
+                          </div>
+                          {aiReply.data.proximoPasso && <p className="wa-ai-next">Próximo passo: {aiReply.data.proximoPasso}</p>}
+                        </>
+                      )}
+                    </div>
+                  )}
+
                   {replyTo && (
                     <div className="chat-reply-bar">
                       <div className="chat-reply-bar-inner">
@@ -6020,6 +6152,83 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                 </>
               )}
             </section>
+
+            {leadPanelVisible && (
+              <aside className="chat-lead-panel" aria-label="Painel do lead">
+                <div className="clp-head">
+                  {renderAvatar(activeChatJid, activeLead?.name || activeChatName, 52, false)}
+                  <strong>{activeLead?.name || activeChatName}</strong>
+                  {activeLead?.category && <span className="clp-muted">{activeLead.category}</span>}
+                </div>
+
+                <div className="clp-section">
+                  <span className="clp-label">Situação no WhatsApp</span>
+                  {activeContact ? (
+                    <div className="clp-status" style={{ '--badge': CONTACT_STATUS[activeContact.status]?.color }}>
+                      <b>{CONTACT_STATUS[activeContact.status]?.label}</b>
+                      <span className="clp-muted"> · {timeAgo(activeContact.lastEventAt)}</span>
+                      <div className="clp-muted">
+                        {activeContact.messages || 0} mensagem(ns) enviada(s){activeContact.replies ? ` · ${activeContact.replies} resposta(s)` : ''}
+                        {activeContact.source === 'campanha' ? ' · via campanha' : ''}
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="clp-muted">Nenhuma prospecção registrada com este número.</span>
+                  )}
+                </div>
+
+                {!activeLead ? (
+                  <p className="clp-muted">Este contato não está na Base de Leads.</p>
+                ) : (
+                  <div className="clp-section">
+                    <span className="clp-label">Com quem falar</span>
+                    <b>{activeLead.decisor || 'Decisor ainda não identificado'}</b>
+                    {activeLead.saudacao && <span className="clp-muted">Saudação: “{activeLead.saudacao}”</span>}
+                    {activeLead.chance_fechamento !== undefined && activeLead.chance_fechamento !== '' && (
+                      <span className="clp-muted">Chance de fechar: {activeLead.chance_fechamento}%</span>
+                    )}
+                  </div>
+                )}
+
+                {activeTriage && (
+                  <div className="clp-section">
+                    <span className="clp-label">Triagem · potencial {activeTriage.score}/100</span>
+                    <div className="agent-usage" style={{ height: 6 }}><span style={{ width: `${activeTriage.score}%` }} /></div>
+                    <div className="lead-badges">
+                      {activeTriage.segments.filter((seg) => seg !== 'alto_potencial').map((seg) => (
+                        <span key={seg} className="lead-badge" style={{ '--badge': SEGMENTS[seg]?.color }}>{SEGMENTS[seg]?.label}</span>
+                      ))}
+                    </div>
+                    {activeTriage.findings?.length > 0 && (
+                      <ul className="intel-list bad">{activeTriage.findings.slice(0, 4).map((x) => <li key={x}>{x}</li>)}</ul>
+                    )}
+                    {activeTriage.entrevista?.perguntas?.length > 0 && (
+                      <>
+                        <span className="clp-label" style={{ marginTop: 6 }}>Próximas perguntas</span>
+                        <ol className="intel-list">
+                          {activeTriage.entrevista.perguntas.slice(0, 3).map((q) => (
+                            <li key={q}>
+                              <button type="button" className="clp-link" title="Colocar no campo de mensagem" onClick={() => setInputText(q)}>{q}</button>
+                            </li>
+                          ))}
+                        </ol>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div className="clp-actions">
+                  <button type="button" className="btn btn-sm btn-primary" disabled={aiReply?.loading || messages.length === 0} onClick={requestAiReply}>
+                    <Sparkles size={13} /> {aiReply?.loading ? 'Pensando…' : 'Sugerir resposta'}
+                  </button>
+                  {activeTriage?.presente?.mensagem && (
+                    <button type="button" className="btn btn-sm" onClick={() => setInputText(activeTriage.presente.mensagem)}>
+                      Usar diagnóstico gratuito
+                    </button>
+                  )}
+                </div>
+              </aside>
+            )}
 
             <TriggersManagerModal
               open={showTriggersModal}

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage, screen, powerSaveBlocker, Notification } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, Tray, Menu, nativeImage, screen, powerSaveBlocker, Notification, safeStorage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -10,9 +10,15 @@ if (process.env.SIGMA_QA === "1" && process.env.SIGMA_QA_USER_DATA) {
   app.setPath("userData", path.resolve(process.env.SIGMA_QA_USER_DATA));
 } else {
   // O app virou P4J3 Prospect, mas a pasta de dados mantém o nome antigo para
-  // preservar leads, sessões do WhatsApp e campanhas de quem já usava.
-  const legacyUserDataDir = app.isPackaged ? "Sigma GMaps Scraper" : "sigma-gmaps-scraper";
-  app.setPath("userData", path.join(app.getPath("appData"), legacyUserDataDir));
+  // preservar leads, sessões do WhatsApp e campanhas de quem já usava. Instalado
+  // e "npm start" usavam pastas diferentes; fica a que já existe, para quem
+  // passou do modo desenvolvimento para o instalador não abrir o app vazio.
+  const appDataDir = app.getPath("appData");
+  const userDataCandidates = app.isPackaged
+    ? ["Sigma GMaps Scraper", "sigma-gmaps-scraper"]
+    : ["sigma-gmaps-scraper", "Sigma GMaps Scraper"];
+  const existingUserData = userDataCandidates.find((dir) => fs.existsSync(path.join(appDataDir, dir)));
+  app.setPath("userData", path.join(appDataDir, existingUserData || userDataCandidates[0]));
 }
 
 // Suppress GPU and Cache errors in console
@@ -52,6 +58,9 @@ const { runAiTask } = require("./lead-scoring/ai-sales-analyzer");
 const { researchLead } = require("./lead-scoring/lead-intel");
 const { optimizeCampaignMessage } = require("./lead-scoring/message-optimizer");
 const { computeInsights } = require("./campaigns/learning");
+const { TriageStore, triageKey, triageLeads } = require("./lead-scoring/lead-triage");
+const { AgentStore } = require("./agents/agent-store");
+const { runAnalyst, suggestReplies } = require("./agents/ai-agents");
 const { KanbanStore } = require("./kanban/kanban-store");
 const { normalizeAddress } = require("./utils/address-normalizer");
 const { normalizeText } = require("./utils/text-normalizer");
@@ -59,6 +68,9 @@ const { normalizeLeadLinks, normalizePhoneDisplay } = require("./utils/lead-link
 const { geocodeAddress, isValidCoord } = require("./utils/geocode");
 const { migrateExistingData } = require("./utils/existing-data-migrator");
 const { createLeadsFileStore } = require("./utils/leads-file-store");
+const { createSecretBox } = require("./utils/secret-box");
+const { ContactStatusStore } = require("./utils/contact-status-store");
+const { isOptOutMessage, messageText } = require("./campaigns/contact-guard");
 const {
   DEFAULT_WINDOW_BOUNDS,
   readWindowState,
@@ -76,6 +88,9 @@ let activeWhatsAppId = null;
 let campaignManager = null;
 let leadScoringService = null;
 let kanbanStore = null;
+let contactStatus = null;
+let agentStore = null;
+let triageStore = null;
 const resultStore = new Map();
 const allowedMediaPaths = new Set();
 const activeScrapes = new Map();
@@ -1449,6 +1464,15 @@ app.whenReady().then(() => {
   try { ensureInstallId(); } catch {}
   try { appMetrics.track("app_open"); } catch {}
   try { autoUpdaterMod.init((ch, payload) => safeSend(ch, payload)); } catch (e) { console.warn("[UPDATER] init:", e.message); }
+  agentStore = new AgentStore(app.getPath("userData"), {
+    onLog: (entry) => safeSend("agent-log", entry),
+  });
+  triageStore = new TriageStore(app.getPath("userData"), {
+    onChange: (changed) => safeSend("triage-changed", changed),
+  });
+  contactStatus = new ContactStatusStore(app.getPath("userData"), {
+    onChange: (phone, entry) => safeSend("contact-status-changed", { phone, entry }),
+  });
   campaignManager = new CampaignManager(app.getPath("userData"));
   campaignManager.setProvidersMap(whatsappProviders);
   campaignManager.setCampaignSettingsProvider(() => {
@@ -1468,9 +1492,14 @@ app.whenReady().then(() => {
   }
   leadScoringService = new LeadScoringService(app.getPath("userData"), (payload) => {
     safeSend("lead-scoring-progress", payload);
-  });
+  }, { secretBox: createSecretBox(safeStorage) });
   kanbanStore = new KanbanStore(app.getPath("userData"));
   campaignManager.setProgressCallback((campaignId, event, data) => {
+    if (event === "lead-sent") recordCampaignContact(campaignId, data?.leadId);
+    // Analista reescreve o playbook a cada 25 novos envios e ao fim da campanha.
+    if (event === "completed" || event === "lead-sent") {
+      runAnalystAgent({ auto: true }).catch(() => {});
+    }
   try { kanbanStore?.syncCampaigns(campaignManager.getAll(), { replace: true, existingOnly: true }); } catch (error) { console.warn("[KANBAN] campaign sync:", error.message); }
     safeSend("campaign-progress", {
       campaignId,
@@ -1618,6 +1647,7 @@ app.on("before-quit", async () => {
   if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer);
   persistWindowState();
   try { leadsFileStore?.flush(); } catch (error) { console.warn("[LEADS-STORE] flush:", error.message); }
+  try { contactStatus?.flush(); } catch (error) { console.warn("[CONTACT-STATUS] flush:", error.message); }
   try {
     if (powerBlockerId !== null) powerSaveBlocker.stop(powerBlockerId);
   } catch {}
@@ -1992,6 +2022,10 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId, progressC
     notifyUser({ title: "Extração concluída", body: `${data.length} resultado(s) para “${cleanQuery}”.` });
     try { appMetrics.track("scrape_completed", { count: data.length, queryLen: cleanQuery.length }); } catch {}
     maybeAutoAnalyzeScrapedLeads(data, cleanQuery);
+    // Agente de Triagem automático: roda depois de responder a UI, sem travar a extração.
+    if (agentStore?.settings("triagem").auto) {
+      setImmediate(() => runTriageAgent(data, { auto: true }).catch(() => {}));
+    }
 
     return {
       success: true,
@@ -2477,6 +2511,9 @@ function onChatEvent(event) {
       connectionId: event.connectionId,
     });
   } else if (event.type === "message-received") {
+    contactStatus?.recordReply(event.phoneJid || event.jid, {
+      optOut: isOptOutMessage(messageText(event.message)),
+    });
     if (campaignManager) {
       campaignManager.trackIncomingMessage(
         event.phoneJid || event.jid,
@@ -2500,6 +2537,7 @@ function onChatEvent(event) {
       connectionId: event.connectionId,
     });
   } else if (event.type === "message-status") {
+    contactStatus?.recordReceipt(event.messageId, event.status);
     if (campaignManager) {
       campaignManager.trackMessageStatus(event.messageId, event.status);
     }
@@ -2724,7 +2762,31 @@ ipcMain.handle("whatsapp-get-contact-info", async (_, { jid, connectionId } = {}
 ipcMain.handle("whatsapp-send-message", async (_, { to, content, connectionId } = {}) => {
   const provider = resolveChatProvider(connectionId);
   if (!provider) return { success: false, error: "Not connected" };
-  return await provider.sendMessage(to, content);
+  const result = await provider.sendMessage(to, content);
+  if (result?.success && result.messageId) {
+    const jid = String(result.jid || to || "");
+    const phoneJid = jid.endsWith("@lid") ? provider._getPhoneJid?.(jid) || "" : jid;
+    if (!phoneJid.endsWith("@g.us")) contactStatus?.recordSent(phoneJid, { messageId: result.messageId, source: "manual" });
+  }
+  return result;
+});
+
+// ─── STATUS DE CONTATO (tempo real para Scraper, Base e Kanban) ───
+function recordCampaignContact(campaignId, leadId) {
+  try {
+    const campaign = campaignManager?.get?.(campaignId);
+    const lead = campaign?.leads?.find((item) => String(item.leadId) === String(leadId));
+    if (!lead || lead.isGroup) return;
+    const meta = { source: "campanha", campaignId, name: lead.name || "" };
+    if (lead.messageId) contactStatus?.recordSent(lead.phone, { ...meta, messageId: lead.messageId, at: lead.sentAt });
+    if (lead.followUpMessageId) contactStatus?.recordSent(lead.phone, { ...meta, messageId: lead.followUpMessageId, at: lead.followUpSentAt });
+  } catch (error) {
+    console.warn("[CONTACT-STATUS] campanha:", error.message);
+  }
+}
+
+ipcMain.handle("contact-status-get-all", async () => {
+  return { success: true, contacts: contactStatus?.getAll() || {} };
 });
 
 ipcMain.handle("whatsapp-chat-action", async (_, { jid, action, connectionId } = {}) => {
@@ -3389,7 +3451,7 @@ ipcMain.handle("lead-scoring-update-settings", async (_, { patch }) => {
   }
 });
 
-// ─── IA: pesquisa de lead, aprendizado e otimização de mensagens ─────
+// ─── IA: agentes (triagem, pesquisa, presente, copy, respostas, analista) ─────
 function currentAiSettings() {
   return leadScoringService?.store?.getSettings?.() || {};
 }
@@ -3407,27 +3469,162 @@ function hasAiConfigured(settings) {
   return !!(ai.enabled && ai.apiKey);
 }
 
+/**
+ * Porta única de IA para os agentes: respeita "ligado" e o limite diário,
+ * registra o uso e injeta o playbook do Analista (auto-aperfeiçoamento).
+ * Devolve null quando o agente não pode usar IA agora (segue só com regras).
+ */
+function agentAi(agentId) {
+  const settings = currentAiSettings();
+  if (!hasAiConfigured(settings) || !agentStore || agentStore.remaining(agentId) <= 0) return null;
+  const playbook = agentStore.playbookText();
+  return async (task) => {
+    const payload = playbook ? { ...task.payload, playbook_do_analista: playbook } : task.payload;
+    const result = await runAiTask(settings, { ...task, payload });
+    agentStore.consume(agentId, 1);
+    return result;
+  };
+}
+
+function cleanLeadInput(input = {}) {
+  const lead = input && typeof input === "object" ? input : {};
+  return {
+    name: limitString(normalizeText(lead.name || lead.company), 160, ""),
+    category: limitString(normalizeText(lead.category), 120, ""),
+    address: limitString(lead.address, 300, ""),
+    city: limitString(lead.city, 120, ""),
+    phone: limitString(lead.phone || lead.tel, 40, ""),
+    website: limitString(lead.website || lead.site, 300, ""),
+    instagram: limitString(lead.instagram, 160, ""),
+    rating: limitString(String(lead.rating ?? ""), 10, ""),
+    totalReviews: limitString(String(lead.reviewCount ?? lead.reviews ?? lead.totalReviews ?? ""), 12, ""),
+    saudacao: limitString(lead.saudacao, 80, ""),
+    decisor: limitString(typeof lead.decisor === "object" ? lead.decisor?.nome : lead.decisor, 120, ""),
+  };
+}
+
+let triageRunning = false;
+
+/** Agente de Triagem: sites em paralelo + IA em lotes, dentro do limite diário. */
+async function runTriageAgent(rawLeads, { auto = false, force = false } = {}) {
+  if (triageRunning) return { success: false, error: "A triagem já está rodando. Aguarde terminar." };
+  const settings = currentAiSettings();
+  if (!agentStore.settings("triagem").enabled) return { success: false, error: "O Agente de Triagem está desligado em Agentes." };
+  const leads = (Array.isArray(rawLeads) ? rawLeads : [])
+    .slice(0, 2000)
+    .map(cleanLeadInput)
+    .filter((lead) => lead.name && (!auto || lead.phone))
+    .filter((lead) => force || !triageStore.has(triageKey(lead)));
+  if (!leads.length) return { success: true, triaged: 0, aiUsed: 0, hot: 0 };
+
+  triageRunning = true;
+  const budget = hasAiConfigured(settings) ? agentStore.remaining("triagem") : 0;
+  agentStore.log("triagem", `${auto ? "Automático" : "Manual"}: triando ${leads.length} lead(s)${budget ? "" : " só com regras (IA indisponível ou limite do dia)"}.`);
+  try {
+    const { results, aiUsed, aiError } = await triageLeads(leads, {
+      settings,
+      runAi: budget ? (task) => runAiTask(settings, task) : null,
+      playbook: agentStore.playbookText(),
+      aiBudget: budget,
+      onProgress: (progress) => safeSend("agent-progress", { agent: "triagem", ...progress }),
+    });
+    agentStore.consume("triagem", aiUsed);
+    triageStore.putMany(results);
+    const hot = results.filter((r) => r.level === "alto").length;
+    agentStore.log("triagem", `${results.length} lead(s) triados · ${hot} de alto potencial · ${aiUsed} com IA.${aiError ? ` IA falhou: ${aiError}` : ""}`, !aiError);
+    return { success: true, triaged: results.length, aiUsed, hot, aiError };
+  } catch (error) {
+    agentStore.log("triagem", `Falhou: ${error.message}`, false);
+    return { success: false, error: error.message };
+  } finally {
+    triageRunning = false;
+  }
+}
+
+let analystRunning = false;
+
+/** Agente Analista: reescreve o playbook a partir dos resultados reais. */
+async function runAnalystAgent({ auto = false } = {}) {
+  if (analystRunning) return { success: false, error: "O analista já está trabalhando." };
+  const insights = currentInsights();
+  const previous = agentStore.getPlaybook();
+  if (auto) {
+    const s = agentStore.settings("analista");
+    const newSends = Number(insights?.sent || 0) - Number(previous?.basedOnSent || 0);
+    if (!s.auto || newSends < 25) return { success: true, skipped: true };
+  }
+  const runAi = agentAi("analista");
+  if (!runAi) return { success: false, error: "Configure a IA e confira o limite do Agente Analista." };
+  analystRunning = true;
+  try {
+    const settings = currentAiSettings();
+    const playbook = await runAnalyst({ insights, commercial: settings.commercial, previous }, runAi);
+    agentStore.setPlaybook(playbook);
+    agentStore.log("analista", `Playbook atualizado com ${playbook.basedOnSent} envio(s) (resposta ${playbook.replyRate}%).`);
+    return { success: true, playbook };
+  } catch (error) {
+    agentStore.log("analista", `Falhou: ${error.message}`, false);
+    return { success: false, error: error.message };
+  } finally {
+    analystRunning = false;
+  }
+}
+
+ipcMain.handle("agents-state", async () => {
+  return { success: true, ...agentStore.snapshot(), aiConfigured: hasAiConfigured(currentAiSettings()), insights: currentInsights() };
+});
+
+ipcMain.handle("agents-update", async (_, { id, patch } = {}) => {
+  try {
+    const settings = agentStore.update(String(id || ""), patch || {});
+    return { success: true, settings, ...agentStore.snapshot() };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("agents-run", async (_, { id, leads, force } = {}) => {
+  if (id === "triagem") return runTriageAgent(leads, { auto: false, force: force === true });
+  if (id === "analista") return runAnalystAgent({ auto: false });
+  return { success: false, error: "Este agente roda pelo botão na própria tela." };
+});
+
+ipcMain.handle("triage-get-all", async () => {
+  return { success: true, triage: triageStore?.getAll() || {} };
+});
+
 ipcMain.handle("ai-research-lead", async (_, { lead } = {}) => {
   try {
-    const input = lead && typeof lead === "object" ? lead : {};
-    const clean = {
-      name: limitString(normalizeText(input.name || input.company), 160, ""),
-      category: limitString(normalizeText(input.category), 120, ""),
-      address: limitString(input.address, 300, ""),
-      city: limitString(input.city, 120, ""),
-      phone: limitString(input.phone, 40, ""),
-      website: isHttpUrl(input.website) ? limitString(input.website, 300, "") : "",
-      instagram: limitString(input.instagram, 160, ""),
-      rating: limitString(String(input.rating ?? ""), 10, ""),
-      totalReviews: limitString(String(input.totalReviews ?? input.reviews ?? ""), 12, ""),
-    };
+    const clean = cleanLeadInput(lead);
+    if (!isHttpUrl(clean.website)) clean.website = "";
     if (!clean.name) return { success: false, error: "Lead sem nome para pesquisar." };
     const settings = currentAiSettings();
-    const intel = await researchLead(clean, settings, {
-      runAi: hasAiConfigured(settings) ? (task) => runAiTask(settings, task) : null,
-      insights: currentInsights(),
+    const runAi = agentAi("pesquisador");
+    const intel = await researchLead(clean, settings, { runAi, insights: currentInsights() });
+    agentStore.log("pesquisador", `Pesquisou ${clean.name}${intel.decisor ? ` · decisor: ${intel.decisor.nome}` : ""}${runAi ? "" : " (sem IA)"}.`, !intel.aiError);
+    return { success: true, intel, aiConfigured: !!runAi };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("ai-gift", async (_, { lead } = {}) => {
+  try {
+    const clean = cleanLeadInput(lead);
+    if (!clean.name) return { success: false, error: "Lead sem nome." };
+    const settings = currentAiSettings();
+    const runAi = agentAi("presente");
+    // A triagem só manda para a IA leads com telefone; o presente é sob demanda.
+    const { results, aiError } = await triageLeads([{ ...clean, phone: clean.phone || "0000000000" }], {
+      settings,
+      runAi,
+      playbook: agentStore.playbookText(),
+      aiBudget: runAi ? 1 : 0,
     });
-    return { success: true, intel, aiConfigured: hasAiConfigured(settings) };
+    const result = { ...results[0], key: triageKey(clean), hasPhone: !!clean.phone };
+    triageStore.putMany([result]);
+    agentStore.log("presente", `Presente de valor para ${clean.name}${result.aiApplied ? "" : " (por regras)"}.`, !aiError);
+    return { success: true, triage: result, aiError };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -3439,16 +3636,41 @@ ipcMain.handle("ai-insights", async () => {
 
 ipcMain.handle("ai-optimize-message", async (_, { template, followUp } = {}) => {
   try {
-    const settings = currentAiSettings();
-    if (!hasAiConfigured(settings)) {
-      return { success: false, error: "Configure um provedor de IA em Configurações → Inteligência Artificial." };
+    const runAi = agentAi("copywriter");
+    if (!runAi) {
+      return { success: false, error: "Configure a IA em Inteligência Artificial e confira o limite do Agente Copywriter." };
     }
     const result = await optimizeCampaignMessage({
       template: limitString(template, 2000, ""),
       followUp: limitString(followUp, 1000, ""),
       insights: currentInsights(),
-      commercial: settings.commercial || {},
-    }, (task) => runAiTask(settings, task));
+      commercial: currentAiSettings().commercial || {},
+    }, runAi);
+    agentStore.log("copywriter", "Mensagem de campanha reescrita com base nos resultados.");
+    return { success: true, ...result };
+  } catch (error) {
+    agentStore.log("copywriter", `Falhou: ${error.message}`, false);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("ai-suggest-reply", async (_, { messages, lead } = {}) => {
+  try {
+    const runAi = agentAi("respostas");
+    if (!runAi) return { success: false, error: "Configure a IA e confira o limite do Agente de Respostas." };
+    const list = (Array.isArray(messages) ? messages : []).slice(-16).map((m) => ({
+      fromMe: !!m?.fromMe,
+      text: limitString(String(m?.text || ""), 600, ""),
+    }));
+    const clean = cleanLeadInput(lead);
+    const triage = triageStore?.getAll()?.[triageKey(clean)] || null;
+    const result = await suggestReplies({
+      messages: list,
+      lead: { ...clean, triagem: triage ? { segmentos: triage.segmentLabels, problemas: triage.findings } : null },
+      commercial: currentAiSettings().commercial || {},
+      playbook: agentStore.playbookText(),
+    }, runAi);
+    agentStore.log("respostas", `Sugestões para ${clean.name || "conversa"} (lead ${result.momento.replace(/_/g, " ")}).`);
     return { success: true, ...result };
   } catch (error) {
     return { success: false, error: error.message };

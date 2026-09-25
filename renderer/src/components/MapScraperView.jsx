@@ -35,6 +35,29 @@ import {
 } from '../leadData';
 import { useNotifications } from './NotificationCenter';
 import LeadIntelPanel from './LeadIntelPanel';
+import { useContactStatus } from '../useContactStatus';
+import { useTriage } from '../useTriage';
+import { CONTACT_STATUS, contactFor, timeAgo } from '../contactStatus.mjs';
+import { SEGMENTS, triageFor } from '../triage.mjs';
+
+// Filtros de qualidade: segmentos da triagem (qualquer um marcado) + requisitos.
+const QUALITY_CHIPS = [
+  { id: 'alto_potencial', label: 'Alto potencial', kind: 'segment' },
+  { id: 'sem_site', label: 'Sem site / fora do ar', kind: 'segment', also: ['so_rede_social', 'site_fora_do_ar'] },
+  { id: 'site_fraco', label: 'Site fraco', kind: 'segment' },
+  { id: 'atendimento_manual', label: 'WhatsApp sem automação', kind: 'segment' },
+  { id: 'tel', label: 'Com telefone', kind: 'require' },
+  { id: 'decisor', label: 'Dono identificado', kind: 'require' },
+];
+
+function readScraperTab() {
+  try {
+    const saved = localStorage.getItem('sigma_scraper_tab');
+    return ['disponiveis', 'contatados', 'todos'].includes(saved) ? saved : 'disponiveis';
+  } catch {
+    return 'disponiveis';
+  }
+}
 import { instagramProfileUrl, normalizeInstagram } from '../leadLinks.mjs';
 
 const BASEMAPS = {
@@ -259,7 +282,13 @@ export default function MapScraperView({
   const [filterCat, setFilterCat] = useState('');
   const [filterScore, setFilterScore] = useState(0);
   const [filterTel, setFilterTel] = useState('');
-  const [filterOrd, setFilterOrd] = useState('score'); // 'score' | 'rating' | 'name'
+  const [filterOrd, setFilterOrd] = useState('score'); // 'score' | 'potencial' | 'rating' | 'name'
+  // Disponíveis = ainda não contatados. Lead sai daqui na hora em que o WhatsApp confirma o envio.
+  const [scraperTab, setScraperTab] = useState(readScraperTab);
+  const [qualityChips, setQualityChips] = useState([]);
+  const [triageProgress, setTriageProgress] = useState(null);
+  const contacts = useContactStatus();
+  const triage = useTriage();
 
   // Filtros do Feed Dock / List Pop
   const [feedSearch, setFeedSearch] = useState('');
@@ -452,7 +481,18 @@ export default function MapScraperView({
   const visibleLeads = useMemo(() => {
     const nq = norm(feedSearch.trim());
 
+    const segmentChips = QUALITY_CHIPS.filter((c) => c.kind === 'segment' && qualityChips.includes(c.id));
+    const wantedSegments = new Set(segmentChips.flatMap((c) => [c.id, ...(c.also || [])]));
     return displayLeads.filter((lead) => {
+      const contact = contactFor(contacts, lead);
+      if (scraperTab === 'disponiveis' && contact) return false;
+      if (scraperTab === 'contatados' && !contact) return false;
+      if (qualityChips.includes('tel') && !getLeadPhone(lead)) return false;
+      if (qualityChips.includes('decisor') && !lead.decisor) return false;
+      if (wantedSegments.size) {
+        const t = triageFor(triage, lead);
+        if (!t || !t.segments.some((seg) => wantedSegments.has(seg))) return false;
+      }
       const name = getLeadName(lead);
       const cat = getLeadCat(lead);
       const tel = getLeadPhone(lead);
@@ -481,6 +521,8 @@ export default function MapScraperView({
 
       return true;
     }).sort((a, b) => {
+      if (filterOrd === 'potencial') return (triageFor(triage, b)?.score ?? -1) - (triageFor(triage, a)?.score ?? -1);
+      if (scraperTab === 'contatados') return (contactFor(contacts, b)?.lastEventAt || 0) - (contactFor(contacts, a)?.lastEventAt || 0);
       if (filterOrd === 'score') return getLeadScore(b) - getLeadScore(a);
       if (filterOrd === 'rating') return getLeadRating(b) - getLeadRating(a);
       if (filterOrd === 'name') return getLeadName(a).localeCompare(getLeadName(b), 'pt-BR');
@@ -497,7 +539,57 @@ export default function MapScraperView({
     listUf,
     listCidade,
     listBairro,
+    scraperTab,
+    qualityChips,
+    contacts,
+    triage,
   ]);
+
+  const tabCounts = useMemo(() => {
+    let contacted = 0;
+    for (const lead of displayLeads) if (contactFor(contacts, lead)) contacted += 1;
+    return { todos: displayLeads.length, contatados: contacted, disponiveis: displayLeads.length - contacted };
+  }, [displayLeads, contacts]);
+
+  useEffect(() => {
+    try { localStorage.setItem('sigma_scraper_tab', scraperTab); } catch {}
+  }, [scraperTab]);
+
+  useEffect(() => {
+    const off = window.agentsAPI?.onProgress?.((p) => {
+      if (p?.agent === 'triagem') setTriageProgress(p);
+    });
+    return () => { if (typeof off === 'function') off(); };
+  }, []);
+
+  const toggleQualityChip = (id) => {
+    setQualityChips((current) => (current.includes(id) ? current.filter((c) => c !== id) : [...current, id]));
+  };
+
+  const untriagedVisible = useMemo(
+    () => visibleLeads.filter((lead) => !triageFor(triage, lead)).length,
+    [visibleLeads, triage],
+  );
+
+  const handleTriageList = async () => {
+    const pending = visibleLeads.filter((lead) => !triageFor(triage, lead));
+    if (!pending.length || !window.agentsAPI?.run) return;
+    setTriageProgress({ phase: 'site', done: 0, total: pending.length });
+    try {
+      const res = await window.agentsAPI.run('triagem', { leads: pending });
+      if (!res?.success) throw new Error(res?.error || 'A triagem falhou.');
+      addNotification({
+        type: 'success',
+        category: 'system',
+        title: 'Triagem concluída',
+        message: `${res.triaged} lead(s) triados · ${res.hot || 0} de alto potencial${res.aiUsed ? ` · ${res.aiUsed} com IA` : ' · sem IA (configure em Inteligência Artificial)'}.`,
+      });
+    } catch (error) {
+      addNotification({ type: 'warning', category: 'system', title: 'Triagem', message: error?.message || 'Não foi possível triar agora.' });
+    } finally {
+      setTriageProgress(null);
+    }
+  };
 
   // Contagem de filtros ativos do feed
   const activeListFiltersCount = useMemo(() => {
@@ -1354,6 +1446,7 @@ export default function MapScraperView({
               onChange={(e) => setFilterOrd(e.target.value)}
             >
               <option value="score">Maior score</option>
+              <option value="potencial">Maior potencial (triagem)</option>
               <option value="rating">Melhor avaliados</option>
               <option value="name">Nome A–Z</option>
             </select>
@@ -1463,6 +1556,55 @@ export default function MapScraperView({
             )}
           </button>
         </div>
+
+        <div className="scraper-tabs" role="tablist" aria-label="Situação do lead">
+          {[
+            ['disponiveis', 'Disponíveis', 'Ainda não receberam mensagem'],
+            ['contatados', 'Contatados', 'Já receberam mensagem pelo WhatsApp'],
+            ['todos', 'Todos', 'Todos os leads da busca'],
+          ].map(([id, label, hint]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={scraperTab === id}
+              title={hint}
+              className={`scraper-tab ${scraperTab === id ? 'active' : ''}`}
+              onClick={() => setScraperTab(id)}
+            >
+              {label} <span className="scraper-tab-count">{tabCounts[id]}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="quality-chips" aria-label="Filtro de qualidade">
+          {QUALITY_CHIPS.map((chip) => (
+            <button
+              key={chip.id}
+              type="button"
+              aria-pressed={qualityChips.includes(chip.id)}
+              className={`quality-chip ${qualityChips.includes(chip.id) ? 'on' : ''}`}
+              onClick={() => toggleQualityChip(chip.id)}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+
+        {(untriagedVisible > 0 || triageProgress) && (
+          <div className="triage-bar" role="status">
+            {triageProgress ? (
+              <span>
+                Agente de Triagem: {triageProgress.phase === 'ai' ? 'analisando com IA' : 'checando sites'} · {triageProgress.done}/{triageProgress.total}
+              </span>
+            ) : (
+              <>
+                <span>{untriagedVisible} lead(s) sem triagem nesta lista.</span>
+                <button type="button" className="btn btn-sm" onClick={handleTriageList}>Triar agora</button>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Popover de Filtros da Lista */}
         {isListPopOpen && (
@@ -1576,6 +1718,8 @@ export default function MapScraperView({
               const phone = getLeadPhone(lead);
               const ig = getLeadIg(lead);
               const loc = getExactLeadLocation(lead);
+              const leadTriage = triageFor(triage, lead);
+              const leadContact = contactFor(contacts, lead);
 
               let straightDist = null;
               if (userLocation && loc) {
@@ -1609,6 +1753,26 @@ export default function MapScraperView({
                   <div className="lead-meta">
                     {hood || city ? `${hood || city}${uf ? ` · ${uf}` : ''}` : getLeadCat(lead)}
                   </div>
+
+                  {(leadTriage || leadContact) && (
+                    <div className="lead-badges">
+                      {leadContact && (
+                        <span className="lead-badge" style={{ '--badge': CONTACT_STATUS[leadContact.status]?.color }} title={`${CONTACT_STATUS[leadContact.status]?.label} ${timeAgo(leadContact.lastEventAt)}`}>
+                          {CONTACT_STATUS[leadContact.status]?.short} · {timeAgo(leadContact.lastEventAt)}
+                        </span>
+                      )}
+                      {leadTriage && (
+                        <span className="lead-badge potential" title={leadTriage.findings.join(' · ')}>
+                          Potencial {leadTriage.score}
+                        </span>
+                      )}
+                      {leadTriage?.segments.filter((seg) => seg !== 'alto_potencial').slice(0, 2).map((seg) => (
+                        <span key={seg} className="lead-badge" style={{ '--badge': SEGMENTS[seg]?.color }}>
+                          {SEGMENTS[seg]?.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
 
                   <div className="lead-actions">
                     {phone && (
@@ -1710,6 +1874,7 @@ export default function MapScraperView({
       {intelLead && (
         <LeadIntelPanel
           lead={intelLead}
+          triage={triageFor(triage, intelLead)}
           onClose={() => setIntelLead(null)}
           onSave={saveLeadIntel}
           onOpenWhatsApp={(draft) => openWhatsAppWithDraft(intelLead, draft)}

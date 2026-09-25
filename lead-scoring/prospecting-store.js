@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { DEFAULT_RULES } = require("./scoring-engine");
+const { PLAIN_BOX } = require("../utils/secret-box");
 
 function websiteValue(lead) {
   return String(lead?.company?.website || lead?.website || "").trim();
@@ -33,14 +34,15 @@ function hasInstagram(lead) {
 }
 
 class ProspectingStore {
-  constructor(userDataPath) {
+  constructor(userDataPath, { secretBox = PLAIN_BOX } = {}) {
+    this.secretBox = secretBox;
     this.root = path.join(userDataPath, "lead-scoring");
     this.filePath = path.join(this.root, "prospecting-leads.json");
     this.settingsPath = path.join(this.root, "lead-score-settings.json");
     this.groupsPath = path.join(this.root, "prospecting-groups.json");
     this.leads = this._loadJson(this.filePath, {});
     this.groups = this._loadJson(this.groupsPath, {});
-    this.settings = mergeSettings(defaultSettings(), this._loadJson(this.settingsPath, {}));
+    this.settings = mergeSettings(defaultSettings(), this._mapSecrets(this._loadJson(this.settingsPath, {}), (v) => this.secretBox.open(v)));
     let dirty = false;
     if (!this.settings.analysis?.optimizedDefaultsApplied) {
       this.settings.analysis = {
@@ -142,7 +144,25 @@ class ProspectingStore {
   }
 
   saveSettings() {
-    this._writeJson(this.settingsPath, this.settings);
+    this._writeJson(this.settingsPath, this._mapSecrets(this.settings, (v) => this.secretBox.seal(v)));
+    // O .bak guardaria a versão anterior (talvez com a chave em texto puro).
+    try { fs.copyFileSync(this.settingsPath, `${this.settingsPath}.bak`); } catch {}
+  }
+
+  /** Aplica `fn` às API keys (principal e fallbacks) sem alterar o original. */
+  _mapSecrets(settings, fn) {
+    if (!settings || typeof settings !== "object" || !settings.ai) return settings;
+    const ai = { ...settings.ai };
+    if (ai.apiKey) ai.apiKey = fn(ai.apiKey);
+    if (ai.fallbackProviders) {
+      try {
+        const list = JSON.parse(ai.fallbackProviders);
+        if (Array.isArray(list)) {
+          ai.fallbackProviders = JSON.stringify(list.map((p) => (p && p.apiKey ? { ...p, apiKey: fn(p.apiKey) } : p)), null, 2);
+        }
+      } catch { /* texto livre: mantém como está */ }
+    }
+    return { ...settings, ai };
   }
 
   getSettings() {

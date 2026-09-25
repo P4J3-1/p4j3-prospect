@@ -43,6 +43,13 @@ import {
   syncGroupsToService,
 } from '../leadGroups.mjs';
 import { useNotifications } from './NotificationCenter';
+import { useContactStatus } from '../useContactStatus';
+import { useTriage } from '../useTriage';
+import { CONTACT_STATUS, contactFor, timeAgo } from '../contactStatus.mjs';
+import { triageFor } from '../triage.mjs';
+
+const CONTACT_SYMBOL = { enviado: '→', entregue: '✓', lido: '✓✓', respondeu: '↩', descadastrado: '⊘' };
+const CONTACT_RANK = { enviado: 1, entregue: 2, lido: 3, respondeu: 4, descadastrado: 5 };
 
 const DEFAULT_COLS = [
   { id: 'nome', label: 'Empresa' },
@@ -166,6 +173,9 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
 
   const [groups, setGroups] = useState(() => readLocalArray('sigma_groups'));
 
+  // Status do WhatsApp em tempo real (envio, entrega, leitura, resposta, descadastro).
+  const contacts = useContactStatus();
+  const triage = useTriage();
   const [hist, setHist] = useState(() => {
     try {
       const h = JSON.parse(localStorage.getItem('sigma_history') || 'null');
@@ -412,6 +422,12 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   const statusPresentation = (lead, id) => {
     const card = kanbanCardFor(lead);
     const column = card && kanbanSnapshot.board?.columns?.find((item) => item.id === card.columnId);
+    // Negócio ganho/perdido no Kanban manda; senão vale o que o WhatsApp acabou de sinalizar.
+    const contact = contactFor(contacts, lead);
+    if (contact && !column?.dealOutcome) {
+      const cfg = CONTACT_STATUS[contact.status] || CONTACT_STATUS.enviado;
+      return { label: cfg.label, color: cfg.color, symbol: CONTACT_SYMBOL[contact.status] || '→', detail: timeAgo(contact.lastEventAt), live: true };
+    }
     if (column) return { label: column.name, color: column.color || '#94a3b8', symbol: column.dealOutcome === 'won' ? '✓' : column.dealOutcome === 'lost' ? '×' : column.id === 'contacted' ? '↩' : column.id === 'sent' ? '→' : '○' };
     const fallback = leadStatus(id);
     return { label: fallback === 'resp' ? 'Respondeu' : fallback === 'env' ? 'Mensagem enviada' : 'Novo lead', color: fallback === 'resp' ? '#2563eb' : fallback === 'env' ? '#10a37f' : '#94a3b8', symbol: fallback === 'resp' ? '↩' : fallback === 'env' ? '→' : '○' };
@@ -640,10 +656,14 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
         x = parseFloat(String(getLeadRating(a)).replace(',', '.')) || 0;
         y = parseFloat(String(getLeadRating(b)).replace(',', '.')) || 0;
       } else if (bSort.key === 'status') {
-        const sx = leadStatus(getLeadId(a, 0));
-        const sy = leadStatus(getLeadId(b, 0));
-        x = sx === 'resp' ? 2 : sx === 'env' ? 1 : 0;
-        y = sy === 'resp' ? 2 : sy === 'env' ? 1 : 0;
+        const rank = (lead) => {
+          const contact = contactFor(contacts, lead);
+          if (contact) return CONTACT_RANK[contact.status] || 1;
+          const st = leadStatus(getLeadId(lead, 0));
+          return st === 'resp' ? 4 : st === 'env' ? 1 : 0;
+        };
+        x = rank(a);
+        y = rank(b);
       }
       if (typeof x === 'number' && typeof y === 'number') {
         return (x - y) * bSort.dir;
@@ -822,8 +842,11 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
         else if (c.id === 'hood') row[c.label] = getLeadHood(l) || '—';
         else if (c.id === 'orig') row[c.label] = getLeadOrig(l);
         else if (c.id === 'status') {
+          const contact = contactFor(contacts, l);
           const st = leadStatus(id);
-          row[c.label] = st === 'resp' ? 'Respondeu' : st === 'env' ? 'Mensagem enviada' : 'Ainda não contatado';
+          row[c.label] = contact
+            ? CONTACT_STATUS[contact.status]?.label || 'Mensagem enviada'
+            : st === 'resp' ? 'Respondeu' : st === 'env' ? 'Mensagem enviada' : 'Ainda não contatado';
         } else if (c.id === 'grupos') {
           row[c.label] = leadGroups(l).map((g) => g.name).join('; ') || '—';
         }
@@ -1513,12 +1536,20 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                       if (colId === 'status') {
                         return (
                           <td key={colId}>
-                            <span
-                              className="st-ic"
-                              style={{ background: `${st.color}18`, borderColor: st.color, color: st.color }}
-                              title={`Kanban: ${st.label}`}
-                            >
-                              {st.symbol}
+                            <span className="st-cell" title={st.live ? `WhatsApp: ${st.label} ${st.detail}` : `Kanban: ${st.label}`}>
+                              <span
+                                className="st-ic"
+                                style={{ background: `${st.color}18`, borderColor: st.color, color: st.color }}
+                              >
+                                {st.symbol}
+                              </span>
+                              <span className="st-label" style={{ color: st.color }}>{st.label}</span>
+                              {st.detail && <span className="st-time">{st.detail}</span>}
+                              {triageFor(triage, l) && (
+                                <span className="lead-badge potential" title={triageFor(triage, l).findings.join(' · ')}>
+                                  {triageFor(triage, l).score}
+                                </span>
+                              )}
                             </span>
                           </td>
                         );

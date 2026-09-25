@@ -224,7 +224,7 @@ function heuristicChance(lead, company) {
   const risks = [];
   if (lead.phone) { value += 10; signals.push("Tem telefone para contato direto"); }
   const rating = Number(String(lead.rating || "").replace(",", "."));
-  const reviews = Number(lead.totalReviews || lead.reviews || 0);
+  const reviews = Number(String(lead.reviewCount ?? lead.reviews ?? lead.totalReviews ?? 0).replace(/\D/g, "")) || 0;
   if (rating >= 4.3) { value += 8; signals.push(`Boa reputação (${rating})`); }
   if (reviews >= 30) { value += 7; signals.push(`${reviews} avaliações: negócio ativo`); }
   if (!lead.website) { value += 10; signals.push("Sem site próprio: espaço para melhorar a presença digital"); }

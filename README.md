@@ -25,6 +25,17 @@ O app combina scraping, tratamento de dados, análise comercial e execução de 
 - Filtros, seleção em lote, exportação CSV/XLSX e filtros rápidos nas últimas extrações (**Todos**, **com site**, **com telefone** e **com e-mail**).
 - Site aparece como ícone web (com URL no hover e abertura em janela interna); telefone pode iniciar uma conversa mesmo fora da lista de contatos.
 
+### IA e agentes
+
+- **Inteligência Artificial** (menu 7): provedor (DeepSeek, OpenRouter, NVIDIA, OpenCode ou API própria), chave cifrada pelo Windows, perfil do seu negócio e aprendizado das campanhas.
+- **Agentes** (menu 8): Triagem, Pesquisador, Presente de Valor, Copywriter, Respostas e Analista, cada um com liga/desliga, modo automático e limite diário de uso da API.
+- **Triagem**: classifica cada lead em sem site, site fraco/fora do ar, WhatsApp sem automação, já automatizado e alto potencial; monta a entrevista de qualificação e um diagnóstico gratuito para abrir a conversa entregando valor.
+- **Localizador** (pino no Scraper Maps): busca na web, CNPJ, quadro de sócios (dono), abordagem e chance de fechar.
+- **Auto-aperfeiçoamento**: o Analista estuda os resultados e escreve um playbook que os outros agentes seguem.
+- **Status em tempo real**: enviado, entregue, lido, respondeu ou pediu para sair aparecem na hora no Scraper (aba Contatados), na Base de Leads e no WhatsApp.
+
+Sugestões para o Kanban com IA: [docs/sugestoes-kanban-ia.md](docs/sugestoes-kanban-ia.md).
+
 ### Lead Scoring
 
 - Auditoria do site do lead para sinais técnicos e comerciais: HTTPS, responsividade, pixel, WhatsApp, presença digital e qualidade do site.
@@ -113,9 +124,17 @@ Veja [docs/estrategia-prospeccao.md](docs/estrategia-prospeccao.md): lista quali
 
 ## Publicar uma nova versão
 
-1. Atualize `version` no `package.json`.
-2. Crie e envie a tag: `git tag v1.3.0 && git push origin v1.3.0`.
-3. O GitHub Actions gera o instalador e publica a release; os apps instalados se atualizam sozinhos.
+```bash
+npm run release                        # correção: 1.4.0 → 1.4.1
+npm run release -- minor               # novidade: 1.4.0 → 1.5.0
+npm run release -- patch "mensagem"    # inclui alterações ainda não commitadas
+```
+
+O script roda os testes, sobe a versão, cria commit + tag, envia ao GitHub e acompanha o build. O GitHub Actions gera o instalador e publica a release; os apps instalados se atualizam sozinhos.
+
+## Abrir pelo código (Windows)
+
+Dê dois cliques em `iniciar.cmd` (ou rode-o no terminal): ele baixa as atualizações, instala dependências novas e abre o app.
 
 ## Estrutura principal
 

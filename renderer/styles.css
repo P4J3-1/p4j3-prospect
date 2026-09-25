@@ -8554,3 +8554,92 @@ body.route-whatsapp .app-screen-container { overflow: hidden; }
 .intel-url { color: #188038; font-size: 11px; }
 .intel-snippet { color: var(--fg); font-size: 12px; opacity: .85; }
 .intel-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 20px; border-top: 1px solid var(--border, #e5e7eb); }
+
+/* Scraper Maps: abas de situação, filtros de qualidade e selos de triagem */
+.scraper-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 8px 12px 0; padding: 3px; border-radius: 10px; background: var(--surface-2, #f1f5f4); }
+.scraper-tab { border: 0; background: transparent; border-radius: 8px; padding: 6px 4px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.scraper-tab.active { background: var(--bg, #fff); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.scraper-tab-count { font-weight: 500; opacity: .7; margin-left: 2px; }
+.quality-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 12px 0; }
+.quality-chip { border: 1px solid var(--border, #e5e7eb); background: var(--bg, #fff); color: var(--fg); border-radius: 999px; padding: 3px 9px; font-size: 11px; cursor: pointer; }
+.quality-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.triage-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 12px 0; padding: 6px 10px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 9%, transparent); font-size: 12px; }
+.lead-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.lead-badge { --badge: #64748b; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; color: var(--badge); background: color-mix(in srgb, var(--badge) 12%, transparent); }
+.lead-badge.potential { --badge: var(--accent); }
+
+/* Base de Leads: status ao vivo do WhatsApp */
+.st-cell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.st-label { font-size: 12px; font-weight: 600; }
+.st-time { font-size: 11px; color: var(--muted); }
+
+/* Agentes de IA */
+.agents-page .settings-open-design-card { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.agent-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 14px; background: var(--bg, #fff); }
+.agent-card.off { opacity: .6; }
+.agent-card header { display: flex; gap: 10px; align-items: flex-start; }
+.agent-card h3 { margin: 0; font-size: 14px; }
+.agent-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); flex-shrink: 0; }
+.agent-role { margin: 0; font-size: 12.5px; line-height: 1.45; }
+.agent-switch, .agent-auto { display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.agent-switch input, .agent-auto input { width: auto; margin: 0; }
+.agent-limit { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.agent-limit input { width: 72px; padding: 3px 6px; }
+.agent-usage { height: 5px; border-radius: 99px; background: var(--border, #e5e7eb); overflow: hidden; }
+.agent-usage span { display: block; height: 100%; background: var(--accent); }
+.agent-segments { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.agent-segment { --badge: #64748b; display: flex; flex-direction: column; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--badge) 9%, transparent); }
+.agent-segment b { font-size: 20px; color: var(--badge); }
+.agent-segment span { font-size: 11.5px; color: var(--muted); }
+.agent-log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.agent-log li { display: flex; gap: 8px; align-items: baseline; }
+.agent-log li.fail span:last-child { color: #dc2626; }
+.agent-log-time { color: var(--muted); font-size: 11px; min-width: 64px; }
+
+/* WhatsApp: painel do lead ao lado da conversa + sugestões da IA */
+body.route-whatsapp .wa-open-design .chat-shell.with-lead-panel,
+.wa-open-design .chat-shell.with-lead-panel { grid-template-columns: minmax(260px, 28%) minmax(0, 1fr) 290px; }
+.chat-lead-panel { border-left: 1px solid var(--border); padding: 16px 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; background: var(--surface, #fff); font-size: 12.5px; min-height: 0; }
+.clp-head { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.clp-head strong { font-size: 14px; }
+.clp-section { display: flex; flex-direction: column; gap: 4px; }
+.clp-label { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+.clp-muted { color: var(--muted); font-size: 12px; }
+.clp-status { --badge: #64748b; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--badge) 10%, transparent); border-left: 3px solid var(--badge); }
+.clp-status b { color: var(--badge); }
+.clp-link { background: none; border: 0; padding: 0; text-align: left; color: var(--fg); cursor: pointer; font-size: 12.5px; }
+.clp-link:hover { color: var(--accent); text-decoration: underline; }
+.clp-actions { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
+.wa-iconbtn.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.wa-ai-reply-btn { margin-right: 6px; }
+.wa-ai-suggestions { margin: 0 12px 6px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--accent) 6%, var(--surface, #fff)); }
+.wa-ai-suggestions-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg); }
+.wa-ai-suggestions-head > span { flex: 1; min-width: 0; }
+.wa-ai-suggestion-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.wa-ai-suggestion { text-align: left; border: 1px solid var(--border); background: var(--bg, #fff); border-radius: 10px; padding: 8px 10px; font-size: 13px; line-height: 1.4; cursor: pointer; color: var(--fg); }
+.wa-ai-suggestion:hover { border-color: var(--accent); box-shadow: 0 2px 8px rgba(16, 163, 127, .12); }
+.wa-ai-next { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
+/* Filtros da lista de conversas numa linha só (rolagem horizontal) */
+/* od.css carrega depois com seletor body.route-whatsapp, por isso o seletor mais longo. */
+body.route-whatsapp .wa-open-design .chat-list .chat-filter-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 6px; }
+body.route-whatsapp .wa-open-design .chat-list .chat-filter-tabs::-webkit-scrollbar { display: none; }
+body.route-whatsapp .wa-open-design .chat-list .chat-filter-tab { flex-shrink: 0; min-height: 30px; padding: 5px 11px; }
+@media (max-width: 1180px) {
+  body.route-whatsapp .wa-open-design .chat-shell.with-lead-panel,
+  .wa-open-design .chat-shell.with-lead-panel { grid-template-columns: minmax(260px, 32%) minmax(0, 1fr); }
+  .chat-lead-panel { display: none; }
+}
+
+/* Visão Geral: fluxo de prospecção em 5 passos */
+.prospect-flow { margin: 14px 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface, #fff); }
+.prospect-flow-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 14px; }
+.prospect-flow-next { border: 0; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); border-radius: 999px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; text-align: left; }
+.prospect-flow-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.prospect-flow-steps button { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg, #fff); cursor: pointer; text-align: left; position: relative; }
+.prospect-flow-steps button:hover { border-color: var(--accent); }
+.prospect-flow-steps b { font-size: 22px; line-height: 1.1; }
+.pf-index { position: absolute; top: 8px; right: 10px; font-size: 11px; color: var(--muted); }
+.pf-label { font-size: 12.5px; font-weight: 600; }
+.pf-hint { font-size: 11px; color: var(--muted); }
+@media (max-width: 900px) { .prospect-flow-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

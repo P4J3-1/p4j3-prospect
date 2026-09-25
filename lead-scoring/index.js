@@ -5,9 +5,9 @@ const { calculateScore, classify, buildReasons } = require("./scoring-engine");
 const { analyzeWithSalesAI, analyzeBatchWithSalesAI, testProviderConnection } = require("./ai-sales-analyzer");
 
 class LeadScoringService {
-  constructor(userDataPath, onProgress = () => {}) {
+  constructor(userDataPath, onProgress = () => {}, storeOptions = {}) {
     this.userDataPath = userDataPath;
-    this.store = new ProspectingStore(userDataPath);
+    this.store = new ProspectingStore(userDataPath, storeOptions);
     this.onProgress = onProgress;
     this.activeJobs = new Map();
     this.lastAiWarning = "";

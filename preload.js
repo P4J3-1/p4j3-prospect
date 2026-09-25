@@ -110,7 +110,37 @@ contextBridge.exposeInMainWorld("kanbanAPI", {
   resumeAutomation: (entityKey) => ipcRenderer.invoke("kanban-resume-automation", { entityKey }),
 });
 
+contextBridge.exposeInMainWorld("contactAPI", {
+  getAll: () => ipcRenderer.invoke("contact-status-get-all"),
+  onChanged: (callback) => {
+    const listener = (_, payload) => callback(payload);
+    ipcRenderer.on("contact-status-changed", listener);
+    return () => ipcRenderer.removeListener("contact-status-changed", listener);
+  },
+});
+
+const subscribe = (channel) => (callback) => {
+  const listener = (_, payload) => callback(payload);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+};
+
+contextBridge.exposeInMainWorld("agentsAPI", {
+  getState: () => ipcRenderer.invoke("agents-state"),
+  update: (id, patch) => ipcRenderer.invoke("agents-update", { id, patch }),
+  run: (id, payload = {}) => ipcRenderer.invoke("agents-run", { id, ...payload }),
+  onLog: subscribe("agent-log"),
+  onProgress: subscribe("agent-progress"),
+});
+
+contextBridge.exposeInMainWorld("triageAPI", {
+  getAll: () => ipcRenderer.invoke("triage-get-all"),
+  onChanged: subscribe("triage-changed"),
+});
+
 contextBridge.exposeInMainWorld("aiAPI", {
+  gift: (lead) => ipcRenderer.invoke("ai-gift", { lead }),
+  suggestReply: (messages, lead) => ipcRenderer.invoke("ai-suggest-reply", { messages, lead }),
   researchLead: (lead) => ipcRenderer.invoke("ai-research-lead", { lead }),
   getInsights: () => ipcRenderer.invoke("ai-insights"),
   optimizeMessage: (template, followUp) => ipcRenderer.invoke("ai-optimize-message", { template, followUp }),

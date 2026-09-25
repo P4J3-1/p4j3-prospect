@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import ProspectFlow from './ProspectFlow';
 import {
   Bell,
   Clock3,
@@ -458,6 +459,8 @@ function Overview({ onNavigate, onNewExtraction, leadsCount = 0 }) {
           </div>
         </div>
       </section>
+
+      <ProspectFlow onNavigate={onNavigate} won={dealStats.wonCount} />
 
       <div className="overview-grid dash-grid">
         <section className="overview-panel panel" data-od-id="dashboard-categories">
