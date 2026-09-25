@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { assertAllowedMediaPath, assertMaxBytes } = require('../utils/security');
 const { DailyQuota } = require('./daily-quota');
+const { followUpState } = require('./contact-guard');
 
 const MAX_CAMPAIGN_MEDIA_BYTES = 50 * 1024 * 1024;
 
@@ -17,6 +18,9 @@ class CampaignScheduler {
     this.running = false;
     // Per-campaign last-sent timestamp + max concurrent retries
     this._lastSentAt = new Map();
+    // Intervalo com jitter sorteado uma única vez por envio; sortear a cada
+    // tick de 1s faria o gate passar no primeiro sorteio baixo e anularia o jitter.
+    this._nextGapMs = new Map();
     this._maxRetries = 2;
   }
 
@@ -88,13 +92,20 @@ class CampaignScheduler {
    * Escolhe lead pendente + provider com cota disponível.
    * Preferência: connectionId do lead → outros números da campanha com cota.
    */
-  _pickNextSend(campaign) {
+  _pickNextSend(campaign, now = Date.now()) {
     const leads = campaign.leads || [];
-    const pendingIdxs = [];
+    let pendingIdxs = [];
     for (let i = 0; i < leads.length; i++) {
       if (leads[i].status === 'pending') pendingIdxs.push(i);
     }
-    if (!pendingIdxs.length) return { done: true };
+    // Primeiro toque para todos; depois, follow-ups vencidos de quem não respondeu.
+    let followUp = false;
+    if (!pendingIdxs.length) {
+      const fu = followUpState(campaign, now);
+      if (!fu.due.length) return fu.awaiting ? { waitingFollowUp: true, nextAt: fu.nextAt } : { done: true };
+      pendingIdxs = fu.due;
+      followUp = true;
+    }
 
     const campIds = this._campaignConnectionIds(campaign);
     const quota = this._getDailyQuota();
@@ -109,7 +120,7 @@ class CampaignScheduler {
         const check = quota.check(connectionId, limitCfg);
         if (!check.allowed) return null;
       }
-      return { leadIndex, connectionId, provider, limitCfg };
+      return { leadIndex, connectionId, provider, limitCfg, followUp };
     };
 
     // 1) lead com connectionId próprio e cota
@@ -120,8 +131,9 @@ class CampaignScheduler {
       if (hit) return hit;
     }
 
-    // 2) reatribui para outro número da campanha com cota
-    for (const idx of pendingIdxs) {
+    // 2) reatribui para outro número da campanha com cota. Follow-up não:
+    // o segundo toque precisa vir do mesmo número da primeira mensagem.
+    for (const idx of followUp ? [] : pendingIdxs) {
       for (const cid of campIds) {
         const hit = tryConn(cid, idx);
         if (hit) return hit;
@@ -129,7 +141,7 @@ class CampaignScheduler {
     }
 
     // 3) qualquer sessão online com cota (fallback legado)
-    if (map) {
+    if (map && !followUp) {
       for (const idx of pendingIdxs) {
         for (const [cid, provider] of map.entries()) {
           if (!this._ready(provider)) continue;
@@ -218,9 +230,25 @@ class CampaignScheduler {
       // Per-campaign interval gate with jitter
       const lastSent = this._lastSentAt.get(campaignId) || 0;
       const baseInterval = campaign.schedule?.intervalMs || 5000;
-      if (lastSent && (now - lastSent) < this._intervalWithJitter(baseInterval)) continue;
+      if (lastSent && (now - lastSent) < (this._nextGapMs.get(campaignId) ?? baseInterval)) continue;
 
-      const pick = this._pickNextSend(campaign);
+      if (this._skipDoNotContact(campaign)) {
+        campaign.stats = this._computeStats(campaign);
+        this.store.update(campaignId, { leads: campaign.leads, stats: campaign.stats }, true);
+      }
+
+      const pick = this._pickNextSend(campaign, now);
+
+      if (pick.waitingFollowUp) {
+        if (campaign.waitReason !== 'follow_up') {
+          campaign.waitReason = 'follow_up';
+          this.store.update(campaignId, { waitReason: 'follow_up' }, true);
+          if (this.onProgress) {
+            this.onProgress(campaignId, 'waiting', { reason: 'follow_up', nextAt: pick.nextAt, stats: campaign.stats });
+          }
+        }
+        continue;
+      }
 
       if (pick.done) {
         campaign.status = 'completed';
@@ -294,87 +322,92 @@ class CampaignScheduler {
         this.store.update(campaignId, { connectionId });
       }
 
-      const content = interpolate(campaign.template, lead);
-      const media = (campaign.media) || (content && content.media) || null;
-      const textPreview = typeof content === 'string'
-        ? content
-        : (content?.text || content?.header || content?.caption || '');
+      if (pick.followUp) {
+        await this._sendFollowUp(campaign, lead, provider, connectionId, pick, now);
+      } else {
+        const content = interpolate(campaign.template, lead);
+        const media = (campaign.media) || (content && content.media) || null;
+        const textPreview = typeof content === 'string'
+          ? content
+          : (content?.text || content?.header || content?.caption || '');
 
-      try {
-        const destination = lead.isGroup
-          ? (lead.jid || lead.phone)
-          : (lead.jid || lead.phone);
-        if (!destination) {
-          throw new Error('Destinatário sem telefone/grupo');
-        }
-
-        let mediaContent = null;
-        if (media && media.filePath) {
-          mediaContent = await this._prepareMediaContent(media, typeof content === 'object' ? content : { text: content });
-        }
-
-        if (!mediaContent && !String(textPreview || '').trim()) {
-          throw new Error('Mensagem vazia após aplicar o template (verifique {{variáveis}})');
-        }
-
-        console.log(
-          `[SCHEDULER] Enviando campanha=${campaignId} conn=${connectionId} lead=${lead.name || lead.leadId} dest=${destination}`,
-        );
-
-        let result = null;
-        if (mediaContent) {
-          result = await provider.sendMedia(destination, mediaContent);
-        } else {
-          result = await provider.sendMessage(destination, content);
-        }
-
-        if (result && result.success && result.messageId) {
-          lead.status = 'sent';
-          lead.sentAt = now;
-          lead.messageId = result.messageId;
-          lead.jid = result.jid || null;
-          lead.connectionId = connectionId;
-          lead.errorMessage = null;
-          lead.retryCount = 0;
-          if (this.campaignManager) {
-            this.campaignManager.registerMessageId(campaignId, pick.leadIndex, result.messageId);
+        try {
+          const destination = lead.isGroup
+            ? (lead.jid || lead.phone)
+            : (lead.jid || lead.phone);
+          if (!destination) {
+            throw new Error('Destinatário sem telefone/grupo');
           }
-          // Cota diária por número
-          const quota = this._getDailyQuota();
-          if (quota) {
-            const used = quota.recordSend(connectionId, 1, now);
-            console.log(`[SCHEDULER] Cota ${connectionId}: ${used}${pick.limitCfg?.dailyLimit ? `/${pick.limitCfg.dailyLimit}` : ''}`);
+
+          let mediaContent = null;
+          if (media && media.filePath) {
+            mediaContent = await this._prepareMediaContent(media, typeof content === 'object' ? content : { text: content });
           }
-          try {
-            const jid = result.jid || lead.jid;
-            if (jid && provider?.sock?.presenceSubscribe) {
-              provider.sock.presenceSubscribe(jid).catch(() => {});
-            }
-          } catch (_) { /* optional */ }
-          console.log(`[SCHEDULER] OK messageId=${result.messageId} jid=${result.jid || '?'}`);
-        } else {
-          const errMsg = (result && result.error) || 'Envio sem confirmação do WhatsApp (sem messageId)';
-          const attempts = (lead.retryCount || 0) + 1;
-          lead.retryCount = attempts;
-          if (attempts <= this._maxRetries) {
-            lead.status = 'pending';
-            lead.errorMessage = `tentativa ${attempts}: ${errMsg}`;
-            console.warn(`[SCHEDULER] retry ${attempts}: ${errMsg}`);
+
+          if (!mediaContent && !String(textPreview || '').trim()) {
+            throw new Error('Mensagem vazia após aplicar o template (verifique {{variáveis}})');
+          }
+
+          console.log(
+            `[SCHEDULER] Enviando campanha=${campaignId} conn=${connectionId} lead=${lead.name || lead.leadId} dest=${destination}`,
+          );
+
+          let result = null;
+          if (mediaContent) {
+            result = await provider.sendMedia(destination, mediaContent);
           } else {
-            lead.status = 'failed';
-            lead.errorMessage = errMsg;
-            lead.sentAt = now;
-            console.error(`[SCHEDULER] FAIL: ${errMsg}`);
+            result = await provider.sendMessage(destination, content);
           }
+
+          if (result && result.success && result.messageId) {
+            lead.status = 'sent';
+            lead.sentAt = now;
+            lead.messageId = result.messageId;
+            lead.jid = result.jid || null;
+            lead.connectionId = connectionId;
+            lead.errorMessage = null;
+            lead.retryCount = 0;
+            if (this.campaignManager) {
+              this.campaignManager.registerMessageId(campaignId, pick.leadIndex, result.messageId);
+            }
+            // Cota diária por número
+            const quota = this._getDailyQuota();
+            if (quota) {
+              const used = quota.recordSend(connectionId, 1, now);
+              console.log(`[SCHEDULER] Cota ${connectionId}: ${used}${pick.limitCfg?.dailyLimit ? `/${pick.limitCfg.dailyLimit}` : ''}`);
+            }
+            try {
+              const jid = result.jid || lead.jid;
+              if (jid && provider?.sock?.presenceSubscribe) {
+                provider.sock.presenceSubscribe(jid).catch(() => {});
+              }
+            } catch (_) { /* optional */ }
+            console.log(`[SCHEDULER] OK messageId=${result.messageId} jid=${result.jid || '?'}`);
+          } else {
+            const errMsg = (result && result.error) || 'Envio sem confirmação do WhatsApp (sem messageId)';
+            const attempts = (lead.retryCount || 0) + 1;
+            lead.retryCount = attempts;
+            if (attempts <= this._maxRetries) {
+              lead.status = 'pending';
+              lead.errorMessage = `tentativa ${attempts}: ${errMsg}`;
+              console.warn(`[SCHEDULER] retry ${attempts}: ${errMsg}`);
+            } else {
+              lead.status = 'failed';
+              lead.errorMessage = errMsg;
+              lead.sentAt = now;
+              console.error(`[SCHEDULER] FAIL: ${errMsg}`);
+            }
+          }
+        } catch (e) {
+          lead.status = 'failed';
+          lead.errorMessage = e.message;
+          lead.sentAt = now;
+          console.error(`[SCHEDULER] exception:`, e.message);
         }
-      } catch (e) {
-        lead.status = 'failed';
-        lead.errorMessage = e.message;
-        lead.sentAt = now;
-        console.error(`[SCHEDULER] exception:`, e.message);
       }
 
       this._lastSentAt.set(campaignId, now);
+      this._nextGapMs.set(campaignId, this._intervalWithJitter(baseInterval));
 
       campaign.stats = this._computeStats(campaign);
       campaign.updatedAt = now;
@@ -434,6 +467,50 @@ class CampaignScheduler {
       return minutes >= startM || minutes < endM;
     }
     return minutes >= startM && minutes < endM;
+  }
+
+  /** Marca como pulados os pendentes que pediram para não receber mensagens. */
+  _skipDoNotContact(campaign) {
+    const dnc = this.campaignManager?.doNotContact;
+    if (!dnc) return false;
+    let changed = false;
+    for (const lead of campaign.leads || []) {
+      if (lead.isGroup || lead.optedOut || !dnc.has(lead.phone)) continue;
+      lead.optedOut = true;
+      if (lead.status === 'pending') {
+        lead.status = 'skipped';
+        lead.errorMessage = 'Descadastrado: pediu para não receber mensagens';
+      }
+      changed = true;
+    }
+    return changed;
+  }
+
+  async _sendFollowUp(campaign, lead, provider, connectionId, pick, now) {
+    try {
+      const destination = lead.jid || lead.phone;
+      if (!destination) throw new Error('Destinatário sem telefone');
+      const content = interpolate({ text: campaign.followUp.text }, lead);
+      if (!String(content?.text || '').trim()) {
+        throw new Error('Follow-up vazio após aplicar o template (verifique {{variáveis}})');
+      }
+      const result = await provider.sendMessage(destination, content);
+      if (!result?.success || !result.messageId) {
+        throw new Error(result?.error || 'Follow-up sem confirmação do WhatsApp (sem messageId)');
+      }
+      lead.followUpSentAt = now;
+      lead.followUpMessageId = result.messageId;
+      lead.followUpError = null;
+      const quota = this._getDailyQuota();
+      if (quota) quota.recordSend(connectionId, 1, now);
+      this.store.pushEvent(campaign, { type: 'follow-up', leadId: lead.leadId, name: lead.name || lead.phone });
+      console.log(`[SCHEDULER] follow-up OK lead=${lead.name || lead.leadId}`);
+    } catch (e) {
+      // Sem nova tentativa: um follow-up duplicado incomoda mais do que um a menos.
+      lead.followUpFailedAt = now;
+      lead.followUpError = e.message;
+      console.error('[SCHEDULER] follow-up FAIL:', e.message);
+    }
   }
 
   // Jitter up to +40% of the base interval so successive sends never land

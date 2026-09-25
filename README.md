@@ -1,9 +1,8 @@
-# Sigma GMaps Scraper
+# P4J3 Prospect
 
 Desktop local-first para transformar pesquisas do Google Maps em uma operação de prospecção: encontrar empresas, organizar leads, priorizar oportunidades e iniciar conversas pelo WhatsApp.
 
-[![Release](https://img.shields.io/github/v/release/olucianobotelho/google-maps-sigma-scrapper?display_name=tag)](https://github.com/olucianobotelho/google-maps-sigma-scrapper/releases)
-[![License](https://img.shields.io/github/license/olucianobotelho/google-maps-sigma-scrapper)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ## Fluxo do produto
 
@@ -64,17 +63,15 @@ O app combina scraping, tratamento de dados, análise comercial e execução de 
 
 ## Download para Windows
 
-Baixe a [release mais recente](https://github.com/olucianobotelho/google-maps-sigma-scrapper/releases).
+**[Baixar a versão mais recente](https://github.com/P4J3-1/p4j3-prospect/releases/latest)**. Cada versão traz:
 
-Na release `v1.1.9`, os arquivos são:
-
-- `Sigma-GMaps-Scraper-1.1.9-x64.exe` — instalador NSIS recomendado.
-- `Sigma-GMaps-Scraper-1.1.9-x64-complete.zip` — pacote portátil completo.
+- `P4J3-Prospect-<versão>-x64.exe` — instalador NSIS recomendado.
+- `P4J3-Prospect-<versão>-x64.zip` — pacote portátil.
 - `latest.yml` e `.blockmap` — metadados usados pelo atualizador automático.
 
-Após instalar, abra o Sigma e comece por **Nova Extração**. Para campanhas, conecte um número em **WhatsApp → Sessão** ou salve primeiro um rascunho e conecte depois.
+Após instalar, abra o P4J3 Prospect e comece por **Nova Extração**. Para campanhas, conecte um número em **WhatsApp → Sessão** ou salve primeiro um rascunho e conecte depois.
 
-> O atualizador automático funciona na versão instalada pelo NSIS. Com o updater ativo, instalações anteriores podem detectar a `v1.1.9` e baixá-la pelo próprio app; instalações `win-unpacked`, portáteis ou com o updater indisponível precisam do download manual. `win-unpacked` é uma saída de teste local e não deve ser usada para validar atualização in-place.
+> O atualizador automático funciona na versão instalada pelo NSIS. Com o updater ativo, instalações anteriores detectam a nova versão e a baixam pelo próprio app; instalações `win-unpacked`, portáteis ou com o updater indisponível precisam do download manual. `win-unpacked` é uma saída de teste local e não deve ser usada para validar atualização in-place.
 
 ## Desenvolvimento
 
@@ -87,6 +84,8 @@ Após instalar, abra o Sigma e comece por **Nova Extração**. Para campanhas, c
 ### Instalar e executar
 
 ```bash
+git clone https://github.com/P4J3-1/p4j3-prospect.git
+cd p4j3-prospect
 npm install
 npm start                 # builda o renderer e abre o Electron
 ```
@@ -108,6 +107,16 @@ npm run build:win         # instalador NSIS + ZIP em dist/
 
 O build de produção usa Electron Builder e publica artefatos Windows x64 conforme o campo `build.publish` do `package.json`.
 
+## Estratégia de prospecção
+
+Veja [docs/estrategia-prospeccao.md](docs/estrategia-prospeccao.md): lista qualificada, mensagem de permissão com variações, follow-up automático, descadastro e aquecimento de número.
+
+## Publicar uma nova versão
+
+1. Atualize `version` no `package.json`.
+2. Crie e envie a tag: `git tag v1.3.0 && git push origin v1.3.0`.
+3. O GitHub Actions gera o instalador e publica a release; os apps instalados se atualizam sozinhos.
+
 ## Estrutura principal
 
 ```text
@@ -121,19 +130,11 @@ scripts/capture-open-design-ui.js  QA visual determinístico
 test/                              Testes unitários e de integração local
 ```
 
-## Apoie o projeto
-
-Se o Sigma GMaps Scraper for útil para você, qualquer contribuição ajuda a manter o projeto:
-
-- **Pix:** `0501fe37-1008-43d1-9db1-1a4bc7ce6953`
-- **Nome:** Luciano Paiva Botelho
-- **Banco:** Nubank
-
 ## Contribuir e reportar problemas
 
-- Abra uma [Issue](https://github.com/olucianobotelho/google-maps-sigma-scrapper/issues) com versão, sistema operacional, passos para reproduzir e logs relevantes.
+- Abra uma Issue no repositório com versão, sistema operacional, passos para reproduzir e logs relevantes.
 - Pull requests devem manter `npm test` e `npm run qa:ui` verdes.
 
 ## Licença
 
-MIT — veja [LICENSE](LICENSE).
+MIT — veja [LICENSE](LICENSE). Baseado no projeto open source Sigma GMaps Scraper (Ferdy/Feralgorithms e colaboradores); o aviso de copyright original é mantido conforme a licença MIT.

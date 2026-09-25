@@ -6,6 +6,8 @@ module.exports = {
   HEADLESS: true,
   SEARCH_DEPTH: 5,
   MAX_RETRIES: 2,
+  EMAIL_CONCURRENCY: 3,
+  EMAIL_TIMEOUT: 15000,
   SEARCH_VARIATIONS: [],
   REQUEST_BLOCK_TYPES: [],
   USER_AGENT: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',

@@ -78,7 +78,7 @@ async function searchNominatim(query) {
   try {
     res = await fetch(url, {
       headers: {
-        "User-Agent": "SigmaGMaps/1.0 (sigma-gmaps-scraper)",
+        "User-Agent": "P4J3Prospect/1.0 (p4j3-prospect)",
         Accept: "application/json",
       },
       signal: AbortSignal.timeout(8000),

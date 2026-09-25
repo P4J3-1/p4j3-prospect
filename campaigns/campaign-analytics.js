@@ -139,6 +139,11 @@ function recomputeStats(campaign) {
       : null,
     replyHourHistogram,
     byConnection,
+    skipped: leads.filter((l) => l.status === 'skipped').length,
+    optedOut: leads.filter((l) => l.optedOut).length,
+    followUpsSent: leads.filter((l) => l.followUpSentAt).length,
+    // Resposta que só veio depois do follow-up: mede o ganho do segundo toque.
+    followUpReplies: leads.filter((l) => l.followUpSentAt && l.repliedAt && l.repliedAt > l.followUpSentAt).length,
   };
 }
 
@@ -170,6 +175,10 @@ function emptyStats(total = 0) {
     avgReplyHour: null,
     replyHourHistogram: Array.from({ length: 24 }, () => 0),
     byConnection: {},
+    skipped: 0,
+    optedOut: 0,
+    followUpsSent: 0,
+    followUpReplies: 0,
   };
 }
 

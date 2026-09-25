@@ -257,7 +257,7 @@ async function testProviderConnection(ai = {}) {
 function describeHttpFailure(status, body = "") {
   const detail = body ? ` Detalhe: ${body}` : "";
   if (/MissingSessionID|free tier can only be used in OpenCode/i.test(body)) {
-    return "Este modelo gratuito do OpenCode só funciona dentro do próprio OpenCode. No Sigma, escolha um modelo Zen com créditos (ex.: glm-5.3-flash) ou use uma chave do OpenRouter.";
+    return "Este modelo gratuito do OpenCode só funciona dentro do próprio OpenCode. No P4J3, escolha um modelo Zen com créditos (ex.: glm-5.3-flash) ou use uma chave do OpenRouter.";
   }
   if (/CreditsError|No payment method|add a payment method/i.test(body)) {
     return "A chave foi reconhecida, mas o workspace do OpenCode Zen não tem forma de pagamento. Adicione créditos/faturamento no OpenCode ou use uma chave do OpenRouter.";
@@ -279,7 +279,7 @@ function describeHttpFailure(status, body = "") {
 
 function resolveProviderConfig(ai = {}) {
   const provider = String(ai.provider || "openrouter").toLowerCase();
-  const appName = ai.appName || "Sigma GMaps Scraper";
+  const appName = ai.appName || "P4J3 Prospect";
   if (provider === "openrouter") {
     const endpointUrl = joinApiUrl(ai.baseUrl || "https://openrouter.ai/api/v1", "chat/completions");
     return {
@@ -291,7 +291,7 @@ function resolveProviderConfig(ai = {}) {
       endpointUrl,
       chatCompletionsUrl: endpointUrl,
       headers: {
-        ...(ai.siteUrl ? { "HTTP-Referer": ai.siteUrl } : { "HTTP-Referer": "https://sigma-gmaps.local" }),
+        ...(ai.siteUrl ? { "HTTP-Referer": ai.siteUrl } : { "HTTP-Referer": "https://p4j3-prospect.local" }),
         "X-Title": appName,
       },
     };
@@ -321,6 +321,19 @@ function resolveProviderConfig(ai = {}) {
       apiKey: ai.apiKey || "",
       model: ai.model || "deepseek-ai/deepseek-v4-flash",
       defaultModel: "deepseek-ai/deepseek-v4-flash",
+      apiStyle: "chat-completions",
+      endpointUrl,
+      chatCompletionsUrl: endpointUrl,
+      headers: parseExtraHeaders(ai.extraHeaders),
+    };
+  }
+  if (provider === "deepseek") {
+    const endpointUrl = joinApiUrl(ai.baseUrl || "https://api.deepseek.com", "chat/completions");
+    return {
+      provider: "deepseek",
+      apiKey: ai.apiKey || "",
+      model: ai.model || "deepseek-chat",
+      defaultModel: "deepseek-chat",
       apiStyle: "chat-completions",
       endpointUrl,
       chatCompletionsUrl: endpointUrl,

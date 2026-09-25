@@ -525,7 +525,7 @@ function defaultSettings() {
       model: "openrouter/free",
       baseUrl: "https://openrouter.ai/api/v1",
       siteUrl: "https://sigma-scraper.local",
-      appName: "Sigma Scraper",
+      appName: "P4J3 Prospect",
       extraHeaders: "",
       fallbackProviders: "[]",
       batchSize: 8,

@@ -209,6 +209,7 @@ export default function MapScraperView({
   addLog,
   onOpenNewExtraction,
   activeExtraction,
+  onNavigate,
 }) {
   const { addNotification } = useNotifications();
 
@@ -858,15 +859,11 @@ export default function MapScraperView({
       });
       return;
     }
+    // direct: o WhatsApp abre a conversa na hora, mesmo sem o contato salvo.
     try {
-      localStorage.setItem('sigma_wa_pending', JSON.stringify({ name, tel: phone }));
+      localStorage.setItem('sigma_wa_pending', JSON.stringify({ name, tel: phone, direct: true }));
     } catch {}
-    addNotification({
-      type: 'success',
-      category: 'whatsapp',
-      title: 'Conversa Preparada',
-      message: `${name} · ${phone} — continue no módulo WhatsApp.`
-    });
+    onNavigate?.('whatsapp');
   };
 
   // Usar localização atual

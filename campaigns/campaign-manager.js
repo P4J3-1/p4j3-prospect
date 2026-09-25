@@ -1,11 +1,13 @@
 const { CampaignStore } = require('./campaign-store');
 const { CampaignScheduler } = require('./campaign-scheduler');
 const { DailyQuota } = require('./daily-quota');
+const { DoNotContactStore, isOptOutMessage, messageText, normalizeFollowUp } = require('./contact-guard');
 
 class CampaignManager {
   constructor(userDataPath) {
     this.store = new CampaignStore(userDataPath);
     this.dailyQuota = new DailyQuota(userDataPath);
+    this.doNotContact = new DoNotContactStore(userDataPath);
     this.scheduler = null;
     this.providersMap = null;
     this.onProgress = null;
@@ -95,6 +97,9 @@ class CampaignManager {
   }
 
   update(id, updates) {
+    if (updates && Object.prototype.hasOwnProperty.call(updates, 'followUp')) {
+      updates = { ...updates, followUp: normalizeFollowUp(updates.followUp) };
+    }
     const campaign = this.store.update(id, updates);
     this._rebuildMessageIndex();
     this._rebuildPhoneIndex();
@@ -646,6 +651,7 @@ class CampaignManager {
 
   trackIncomingMessage(jid, message, connectionId) {
     if (!jid || message?.key?.fromMe) return null;
+    const optOut = isOptOutMessage(messageText(message));
     const digits = String(jid).replace(/@.*$/, '').replace(/\D/g, '');
     if (!digits) return null;
 
@@ -680,6 +686,12 @@ class CampaignManager {
         lead.replyTimestamps = lead.replyTimestamps.slice(-50);
       }
       lead.status = 'replied';
+      if (optOut && !lead.optedOut) {
+        lead.optedOut = true;
+        lead.optedOutAt = now;
+        this.doNotContact.add(digits, `respondeu na campanha ${campaign.name || campaign.id}`, now);
+        this.store.pushEvent(campaign, { type: 'opt-out', leadId: lead.leadId, name: lead.name || lead.phone });
+      }
 
       // A reply implies they opened the conversation
       if (!lead.openedAt) {

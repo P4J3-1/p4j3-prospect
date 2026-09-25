@@ -73,6 +73,10 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
   const statistics = { withPhone: 0, withWebsite: 0, withInstagram: 0, withEmail: 0, withRating: 0, withPhotos: 0 };
   let context;
   let page;
+  const emailTasks = new Set();
+  let emailCancelled = null;
+  let emitted = 0;
+  let closed = false;
 
   try {
     checkCancelled(cancelToken);
@@ -180,44 +184,57 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
             if (await ig.count() > 0) place.instagram = normalizeInstagram(await ig.getAttribute('href'));
           }
 
-          // E-mail só faz sentido em site próprio: rede social e agregador não
-          // expõem contato da empresa de forma confiável.
-          if (place.website && !isSocialUrl(place.website) && !isAggregatorUrl(place.website)) {
-            checkCancelled(cancelToken);
-            place.email = await scrapeEmails(browser, place.website, onProgress, cancelToken);
-          } else {
-            place.email = '';
-          }
-
           places.push(place);
+          const current = i + 1;
+          const finishPlace = () => {
+            if (closed) return;
+            if (place.phone) statistics.withPhone++;
+            if (place.website) statistics.withWebsite++;
+            if (place.instagram) statistics.withInstagram++;
+            if (place.email) statistics.withEmail++;
+            if (place.rating) statistics.withRating++;
+            if (place.photos?.count > 0) statistics.withPhotos++;
+            emitted++;
+            onProgress({
+              type: 'lead',
+              current,
+              total,
+              found: emitted,
+              lead: place,
+              message: describeExtractedPlace(place, current, total),
+            });
+          };
 
-          if (place.phone) statistics.withPhone++;
-          if (place.website) statistics.withWebsite++;
-          if (place.instagram) statistics.withInstagram++;
-          if (place.email) statistics.withEmail++;
-          if (place.rating) statistics.withRating++;
-          if (place.photos?.count > 0) statistics.withPhotos++;
-
-          onProgress({
-            type: 'lead',
-            current: i + 1,
-            total,
-            found: places.length,
-            lead: place,
-            message: describeExtractedPlace(place, i + 1, total),
-          });
+          // E-mail só faz sentido em site próprio: rede social e agregador não
+          // expõem contato da empresa de forma confiável. A visita ao site roda
+          // em paralelo (pool limitado) para não travar a navegação no Maps.
+          place.email = '';
+          if (place.website && !isSocialUrl(place.website) && !isAggregatorUrl(place.website)) {
+            while (emailTasks.size >= CONFIG.EMAIL_CONCURRENCY) await Promise.race(emailTasks);
+            checkCancelled(cancelToken);
+            const task = scrapeEmails(browser, place.website, onProgress, cancelToken)
+              .then((email) => { place.email = email; finishPlace(); })
+              .catch((err) => { if (err.code === 'SCRAPE_CANCELLED') emailCancelled = err; else finishPlace(); })
+              .finally(() => emailTasks.delete(task));
+            emailTasks.add(task);
+          } else {
+            finishPlace();
+          }
         }
       } catch (err) {
         if (err.code === 'SCRAPE_CANCELLED') throw err;
+        console.warn(`[scraper] empresa ${i + 1}/${total} ignorada:`, err.message);
         onProgress({
           type: 'skipped',
           current: i + 1,
           total,
-          found: places.length,
+          found: emitted,
           message: `Empresa ${i + 1} de ${total} ignorada por dados incompletos.`,
         });
       }
     }
+    await Promise.all(emailTasks);
+    if (emailCancelled) throw emailCancelled;
     await page.close();
     await context.close();
   } catch (e) {
@@ -226,12 +243,14 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
       throw e;
     }
     onProgress(`Erro durante a extração: ${e.message}`);
+    await Promise.all(emailTasks);
     if (places.length === 0) {
       return { success: false, error: e.message, data: [], count: 0, statistics };
     }
     statistics.total = places.length;
     return { success: true, partial: true, warnings: [e.message], data: places, count: places.length, statistics };
   } finally {
+    closed = true;
     await page?.close?.().catch(() => {});
     await context?.close?.().catch(() => {});
     await browser.close().catch(() => {});
@@ -260,7 +279,7 @@ async function scrapeEmails(browser, url, onProgress, cancelToken = null) {
   const page = await browser.newPage();
   try {
     checkCancelled(cancelToken);
-    await page.goto(url, { timeout: CONFIG.PAGE_TIMEOUT, waitUntil: 'domcontentloaded' });
+    await page.goto(url, { timeout: CONFIG.EMAIL_TIMEOUT, waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000);
     checkCancelled(cancelToken);
 

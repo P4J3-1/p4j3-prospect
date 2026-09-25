@@ -5,6 +5,7 @@ const {
   emptyStats,
   defaultLeadTrackingFields,
 } = require('./campaign-analytics');
+const { normalizeFollowUp } = require('./contact-guard');
 
 const KANBAN_STAGES = new Set(['new', 'conversation', 'finished']);
 
@@ -152,6 +153,7 @@ class CampaignStore {
         startAt: data.schedule?.startAt || null,
         workingHours: data.schedule?.workingHours || null,
       },
+      followUp: normalizeFollowUp(data.followUp),
       status: 'ready',
       pauseReason: null,
       stats: emptyStats((data.leadIds || []).length),

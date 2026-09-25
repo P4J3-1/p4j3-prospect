@@ -62,6 +62,12 @@ const PROVIDERS = {
       'nvidia/llama-3.1-nemotron-ultra-253b-v1',
     ]
   },
+  deepseek: {
+    name: 'DeepSeek',
+    base: 'https://api.deepseek.com',
+    defaultModel: 'deepseek-chat',
+    models: ['deepseek-chat', 'deepseek-reasoner']
+  },
   opencode: {
     name: 'OpenCode',
     base: 'https://opencode.ai/zen/v1',
@@ -1085,6 +1091,7 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                       : `Usa créditos do Zen. A rota correta é escolhida automaticamente (${/^muse-|^gpt-|^grok-/i.test(aiDraft.model || '') ? '/responses' : '/chat/completions'}).`}
                   </small>
                 ) : null}
+                {aiDraft.provider === 'deepseek' ? <small className="sc-provider-route">DeepSeek usa a API compatível com OpenAI em api.deepseek.com. Crie a chave em platform.deepseek.com.</small> : null}
                 {aiDraft.provider === 'nvidia' ? <small className="sc-provider-route">NVIDIA Build usa a API compatível com OpenAI em integrate.api.nvidia.com.</small> : null}
                 {aiDraft.provider === 'openrouter' ? <small className="sc-provider-route">OpenRouter/free escolhe automaticamente um modelo gratuito disponível.</small> : null}
               </div>

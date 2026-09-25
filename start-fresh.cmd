@@ -1,9 +1,10 @@
 @echo off
 cd /d "%~dp0"
 echo.
-echo === Sigma GMaps - start limpo ===
-echo Matando processos Electron / Sigma antigos...
+echo === P4J3 Prospect - start limpo ===
+echo Matando processos Electron / P4J3 antigos...
 taskkill /F /IM electron.exe >nul 2>&1
+taskkill /F /IM "P4J3 Prospect.exe" >nul 2>&1
 taskkill /F /IM "Sigma GMaps Scraper.exe" >nul 2>&1
 timeout /t 2 /nobreak >nul
 

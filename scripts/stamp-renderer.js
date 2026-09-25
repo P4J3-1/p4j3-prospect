@@ -33,7 +33,7 @@ html = html.replace(
 // título visível
 html = html.replace(
   /<title>([^<]*)<\/title>/i,
-  `<title>Sigma Control Center · ${stamp}</title>`,
+  `<title>P4J3 Prospect · ${stamp}</title>`,
 );
 
 const injectHead = `

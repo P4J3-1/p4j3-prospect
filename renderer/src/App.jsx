@@ -92,6 +92,9 @@ function readStoredSigmaData() {
       const key = localStorage.key(index);
       if (key && key.startsWith('sigma_')) snapshot[key] = localStorage.getItem(key);
     }
+    // sigma_leads mora em arquivo (leadStorage.mjs) e não aparece em localStorage.key().
+    const leads = localStorage.getItem('sigma_leads');
+    if (leads !== null) snapshot.sigma_leads = leads;
   } catch {}
   return snapshot;
 }
@@ -660,6 +663,7 @@ function AppInner() {
               addLog={(msg) => console.log(msg)}
               onOpenNewExtraction={() => setIsNewExtractionOpen(true)}
               activeExtraction={activeExtraction}
+              onNavigate={navigate}
             />
           </ErrorBoundaryLite>
         );
@@ -794,6 +798,7 @@ function AppInner() {
             addLog={(msg) => console.log(msg)}
             onOpenNewExtraction={() => setIsNewExtractionOpen(true)}
             activeExtraction={activeExtraction}
+            onNavigate={navigate}
           />
         );
     }
@@ -812,11 +817,11 @@ function AppInner() {
           title={isSidebarCollapsed ? 'Expandir menu' : 'Recolher menu'}
         >
           <div className="brand-icon-box">
-            Σ
+            P4
           </div>
           <div className="brand-text-col">
-            <span className="brand-name">Sigma Scraper</span>
-            <span className="brand-tag">GMaps</span>
+            <span className="brand-name">P4J3</span>
+            <span className="brand-tag">Prospect</span>
           </div>
         </button>
 

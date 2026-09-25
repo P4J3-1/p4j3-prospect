@@ -1,7 +1,7 @@
 {
-  "name": "sigma-gmaps-scraper",
-  "version": "1.2.0",
-  "description": "Desktop Google Maps business data scraper built with Electron + Playwright",
+  "name": "p4j3-prospect",
+  "version": "1.3.0",
+  "description": "P4J3 Prospect — prospecção com Google Maps, lead scoring e WhatsApp (Electron + Playwright)",
   "main": "main.js",
   "license": "MIT",
   "scripts": {
@@ -31,7 +31,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tldts": "^7.0.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
@@ -41,8 +41,8 @@
     "vite": "^5.4.11"
   },
   "build": {
-    "appId": "com.gmaps.scraper",
-    "productName": "Sigma GMaps Scraper",
+    "appId": "com.p4j3.prospect",
+    "productName": "P4J3 Prospect",
     "directories": {
       "output": "dist"
     },
@@ -65,7 +65,7 @@
       "!node_modules/playwright/node_modules"
     ],
     "win": {
-      "artifactName": "Sigma-GMaps-Scraper-${version}-${arch}.${ext}",
+      "artifactName": "P4J3-Prospect-${version}-${arch}.${ext}",
       "target": [
         {
           "target": "nsis",
@@ -90,8 +90,9 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "olucianobotelho",
-        "repo": "google-maps-sigma-scrapper"
+        "owner": "P4J3-1",
+        "repo": "p4j3-prospect",
+        "releaseType": "release"
       }
     ],
     "linux": {

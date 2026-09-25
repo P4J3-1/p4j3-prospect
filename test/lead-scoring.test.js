@@ -156,6 +156,13 @@ test("NVIDIA Build provider resolves its chat completions endpoint", () => {
   assert.equal(config.endpointUrl, "https://integrate.api.nvidia.com/v1/chat/completions");
 });
 
+test("DeepSeek provider resolves its chat completions endpoint", () => {
+  const config = resolveProviderConfig({ provider: "deepseek", apiKey: "ds-key" });
+  assert.equal(config.model, "deepseek-chat");
+  assert.equal(config.apiStyle, "chat-completions");
+  assert.equal(config.endpointUrl, "https://api.deepseek.com/chat/completions");
+});
+
 test("default free providers resolve openrouter and opencode chain", () => {
   const chain = resolveProviderChain({
     provider: "openrouter",

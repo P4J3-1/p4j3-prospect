@@ -8,6 +8,11 @@ const QRCode = require("qrcode");
 // O smoke empacotado usa um perfil descartável; nunca misture seus dados com o perfil real.
 if (process.env.SIGMA_QA === "1" && process.env.SIGMA_QA_USER_DATA) {
   app.setPath("userData", path.resolve(process.env.SIGMA_QA_USER_DATA));
+} else {
+  // O app virou P4J3 Prospect, mas a pasta de dados mantém o nome antigo para
+  // preservar leads, sessões do WhatsApp e campanhas de quem já usava.
+  const legacyUserDataDir = app.isPackaged ? "Sigma GMaps Scraper" : "sigma-gmaps-scraper";
+  app.setPath("userData", path.join(app.getPath("appData"), legacyUserDataDir));
 }
 
 // Suppress GPU and Cache errors in console
@@ -49,6 +54,7 @@ const { normalizeText } = require("./utils/text-normalizer");
 const { normalizeLeadLinks, normalizePhoneDisplay } = require("./utils/lead-links");
 const { geocodeAddress, isValidCoord } = require("./utils/geocode");
 const { migrateExistingData } = require("./utils/existing-data-migrator");
+const { createLeadsFileStore } = require("./utils/leads-file-store");
 const {
   DEFAULT_WINDOW_BOUNDS,
   readWindowState,
@@ -277,9 +283,9 @@ function getTrayImage() {
 function updateTray() {
   if (!tray) return;
   const snapshot = getTraySnapshot();
-  tray.setToolTip(`Sigma Scraper — WhatsApp ${snapshot.whatsappLabel}; ${snapshot.activeCampaigns.length} campanha(s) ativa(s)`);
+  tray.setToolTip(`P4J3 Prospect — WhatsApp ${snapshot.whatsappLabel}; ${snapshot.activeCampaigns.length} campanha(s) ativa(s)`);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Abrir Sigma Scraper", click: () => restoreMainWindow() },
+    { label: "Abrir P4J3 Prospect", click: () => restoreMainWindow() },
     { type: "separator" },
     { label: `WhatsApp: ${snapshot.whatsappLabel}`, enabled: false },
     { label: `Campanhas ativas: ${snapshot.activeCampaigns.length}`, enabled: false },
@@ -289,7 +295,7 @@ function updateTray() {
       click: () => pauseActiveCampaignsFromTray(),
     },
     { type: "separator" },
-    { label: "Sair do Sigma Scraper", click: () => quitApplication() },
+    { label: "Sair do P4J3 Prospect", click: () => quitApplication() },
   ]));
 }
 
@@ -333,7 +339,7 @@ function refreshBackgroundHolds() {
 
 /** Avisa no Windows (respeita Configurações → notificações). */
 function notifyUser({ title, body }) {
-  const cleanTitle = limitString(title || "Sigma Scraper", 120, "Sigma Scraper");
+  const cleanTitle = limitString(title || "P4J3 Prospect", 120, "P4J3 Prospect");
   const cleanBody = limitString(body || "", 220, "");
   if (!cleanBody) return;
   let desktop = true;
@@ -373,7 +379,7 @@ function showTrayHint() {
   trayHintShown = true;
   try {
     tray.displayBalloon({
-      title: "Sigma Scraper continua em segundo plano",
+      title: "P4J3 Prospect continua em segundo plano",
       content: "Use o ícone da bandeja para abrir ou sair com segurança.",
       iconType: "info",
     });
@@ -427,10 +433,10 @@ function requestWindowClose() {
   closePromptInFlight = true;
   dialog.showMessageBox(mainWindow, {
     type: "question",
-    title: "Fechar Sigma Scraper",
-    message: "Deseja continuar em segundo plano ou encerrar o Sigma Scraper?",
+    title: "Fechar P4J3 Prospect",
+    message: "Deseja continuar em segundo plano ou encerrar o P4J3 Prospect?",
     detail: "Campanhas interrompidas nunca serão retomadas automaticamente após um encerramento.",
-    buttons: ["Continuar em segundo plano", "Encerrar Sigma Scraper"],
+    buttons: ["Continuar em segundo plano", "Encerrar P4J3 Prospect"],
     defaultId: 0,
     cancelId: 0,
     checkboxLabel: "Lembrar minha escolha",
@@ -1198,7 +1204,7 @@ function getCurrentUiStamp() {
     const html = fs.readFileSync(getUiIndexPath(), "utf8");
     const m = html.match(/sigma-ui-build"\s+content="([^"]+)"/i)
       || html.match(/\?v=(ui-[a-z0-9]+)/i)
-      || html.match(/Sigma Control Center · (ui-[a-z0-9]+)/i);
+      || html.match(/(?:P4J3 Prospect|Sigma Control Center) · (ui-[a-z0-9]+)/i);
     return m ? m[1] : "";
   } catch {
     return "";
@@ -1251,7 +1257,7 @@ function createWindow() {
     minHeight: DEFAULT_WINDOW_BOUNDS.minHeight,
     frame: false,
     show: false,
-    title: "Sigma Scraper",
+    title: "P4J3 Prospect",
     icon: path.join(__dirname, "assets", "icon.ico"),
     backgroundColor: resolveWindowBgColor(),
     webPreferences: {
@@ -1597,6 +1603,7 @@ app.on("before-quit", async () => {
   isExitInProgress = true;
   if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer);
   persistWindowState();
+  try { leadsFileStore?.flush(); } catch (error) { console.warn("[LEADS-STORE] flush:", error.message); }
   try {
     if (powerBlockerId !== null) powerSaveBlocker.stop(powerBlockerId);
   } catch {}
@@ -1728,6 +1735,32 @@ ipcMain.handle("migrate-existing-data", async (_, { localStorage } = {}) => {
     return { success: true, ...report };
   } catch (error) {
     return { success: false, changed: false, error: error.message, localStorageUpdates: {} };
+  }
+});
+
+// ─── BASE DE LEADS (arquivo no userData) ────
+let leadsFileStore = null;
+function getLeadsFileStore() {
+  if (!leadsFileStore) {
+    leadsFileStore = createLeadsFileStore(path.join(app.getPath("userData"), "sigma-leads.json"));
+  }
+  return leadsFileStore;
+}
+
+// Síncrono de propósito: o renderer lê `sigma_leads` via localStorage.getItem.
+ipcMain.on("leads-store-load", (event) => {
+  try {
+    event.returnValue = { success: true, value: getLeadsFileStore().load() };
+  } catch (error) {
+    event.returnValue = { success: false, error: error.message };
+  }
+});
+
+ipcMain.on("leads-store-save", (_, value) => {
+  try {
+    getLeadsFileStore().save(value);
+  } catch (error) {
+    console.warn("[LEADS-STORE] save:", error.message);
   }
 });
 

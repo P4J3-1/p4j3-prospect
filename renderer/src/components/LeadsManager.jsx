@@ -422,7 +422,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
     if (!phonePromptLead) return;
     const name = getLeadName(phonePromptLead);
     const tel = getLeadTel(phonePromptLead);
-    try { localStorage.setItem('sigma_wa_pending', JSON.stringify({ name, tel })); } catch {}
+    try { localStorage.setItem('sigma_wa_pending', JSON.stringify({ name, tel, direct: true })); } catch {}
     setPhonePromptLead(null);
     window.location.hash = '#whatsapp';
   };

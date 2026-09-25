@@ -137,7 +137,7 @@ async function fetchHtmlPage(url, timeoutMs) {
       redirect: "follow",
       signal: controller.signal,
       headers: {
-        "user-agent": CONFIG.USER_AGENT || "Mozilla/5.0 SigmaGMapsScraper",
+        "user-agent": CONFIG.USER_AGENT || "Mozilla/5.0 P4J3Prospect",
         accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "accept-language": "pt-BR,pt;q=0.9,en;q=0.8",
       },

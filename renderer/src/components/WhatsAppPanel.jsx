@@ -42,6 +42,22 @@ import {
 import TriggersManagerModal from './TriggersManagerModal';
 import ChatVoicePlayer from './ChatVoicePlayer';
 import { resolveGroupMembers } from '../leadMatch.mjs';
+import { buildNewChatCandidates } from '../newChatCandidates.mjs';
+
+// Abordagem padrão: curta, sem link e terminando em pergunta. Pedir permissão
+// gera mais respostas e menos denúncias do que despejar a oferta no 1º toque.
+// {a|b} sorteia uma variação por lead (spintax) para as mensagens não saírem iguais.
+const DEFAULT_CAMPAIGN_TEMPLATE = '{Oi|Olá}, tudo bem? Vi a {{name}} no Google Maps e {tive|pensei em} uma ideia {rápida|simples} para trazer mais clientes pelo WhatsApp. Posso te mandar em 2 linhas?';
+const DEFAULT_FOLLOW_UP_TEMPLATE = '{Oi|Olá} de novo! Só confirmando se viu minha mensagem acima 🙂 Se não fizer sentido agora, é só responder SAIR que não te chamo mais.';
+const DEFAULT_FOLLOW_UP_HOURS = 48;
+
+function previewTemplate(text) {
+  return String(text || '…')
+    .replace(/\{\{name\}\}/gi, 'Maria')
+    .replace(/\{\{phone\}\}/gi, '11999990000')
+    .replace(/\{\{website\}\}/gi, 'site.com.br')
+    .replace(/\{([^{}|]*)\|[^{}]*\}/g, '$1');
+}
 
 /** Isola crash de um player de áudio para não derrubar o chat inteiro */
 class VoicePlayerBoundary extends React.Component {
@@ -279,6 +295,9 @@ function campaignStatusPresentation(campaign) {
   if (status === 'running' && campaign?.waitReason === 'no_provider') {
     return { statusClass: 'running', label: 'Aguardando WhatsApp' };
   }
+  if (status === 'running' && campaign?.waitReason === 'follow_up') {
+    return { statusClass: 'running', label: 'Aguardando follow-up' };
+  }
   return {
     statusClass: ['running', 'scheduled', 'paused', 'completed'].includes(status) ? status : 'ready',
     label: {
@@ -403,8 +422,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [recipientBrowseFilter, setRecipientBrowseFilter] = useState('');
   const [selectedBrowseKeys, setSelectedBrowseKeys] = useState(() => new Set());
   const [recipientSourcesLoading, setRecipientSourcesLoading] = useState(false);
-  const [templateText, setTemplateText] = useState('Olá {{name}}, tudo bem? Notamos que o seu site está com lentidão.');
+  const [templateText, setTemplateText] = useState(DEFAULT_CAMPAIGN_TEMPLATE);
   const [intervalSec, setIntervalSec] = useState(60);
+  const [followUpEnabled, setFollowUpEnabled] = useState(true);
+  const [followUpHours, setFollowUpHours] = useState(DEFAULT_FOLLOW_UP_HOURS);
+  const [followUpText, setFollowUpText] = useState(DEFAULT_FOLLOW_UP_TEMPLATE);
   const [scheduleMode, setScheduleMode] = useState('interval');
   const [scheduleStartAt, setScheduleStartAt] = useState('');
 
@@ -463,7 +485,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       const saved = JSON.parse(localStorage.getItem('sigma_wa_profile') || 'null');
       if (saved && typeof saved === 'object') return saved;
     } catch (_) {}
-    return { name: 'Sigma Comercial', about: 'Prospecção B2B no automático', phone: '' };
+    return { name: 'P4J3 Comercial', about: 'Prospecção B2B no automático', phone: '' };
   });
   const [isFindBarOpen, setIsFindBarOpen] = useState(false);
   const [inChatSearchTerm, setInChatSearchTerm] = useState('');
@@ -512,7 +534,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     } catch (e) {}
     // Preset inicial: mensagens prontas comuns para prospecção/comercial
     return [
-      { id: 'snip_intro', kind: 'text', label: 'Apresentação inicial', text: 'Olá {{name}}, tudo bem? Aqui é da Sigma — vemos oportunidades de melhorar sua presença digital.' },
+      { id: 'snip_intro', kind: 'text', label: 'Apresentação inicial', text: 'Olá {{name}}, tudo bem? Aqui é da P4J3 — vemos oportunidades de melhorar sua presença digital.' },
       { id: 'snip_followup', kind: 'text', label: 'Follow-up educado', text: 'Oi {{name}}, apenas retornando o contato. Posso te mandar um diagnóstico rápido do seu site?' },
       { id: 'snip_offer', kind: 'text', label: 'Oferta de diagnóstico', text: '{{name}}, fiz uma análise rápida do seu site e encontrei pontos de melhoria. Posso compartilhar?' },
       { id: 'snip_close', kind: 'text', label: 'Fechamento', text: 'Perfeito, {{name}}! Vou preparar a proposta. Alguma preferência de horário para conversarmos?' },
@@ -894,6 +916,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         addLog('[CAMPAIGN] Aguardando WhatsApp conectado para continuar os disparos…');
       } else if (event === 'waiting' && data?.reason === 'outside_hours') {
         addLog('[CAMPAIGN] Fora do horário de disparo — campanha aguardando a janela configurada.');
+      } else if (event === 'waiting' && data?.reason === 'follow_up') {
+        addLog('[CAMPAIGN] Primeiros envios concluídos — aguardando o prazo do follow-up de quem não respondeu.');
       }
       if (monitoringCampaignId === campaignId) {
         // Refresh active monitoring campaign
@@ -1023,7 +1047,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
   const saveSessionProfile = () => {
     const next = {
-      name: String(sessionProfile.name || '').trim() || 'Sigma Comercial',
+      name: String(sessionProfile.name || '').trim() || 'P4J3 Comercial',
       about: String(sessionProfile.about || '').trim(),
       phone: String(sessionProfile.phone || '').trim(),
     };
@@ -1390,7 +1414,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           );
           if (local?.success) {
             setMessages((prev) => prev.filter((x) => x.key?.id !== m.key.id));
-            addLog('[WHATSAPP] Não deu para apagar para todos; removida só no Sigma.');
+            addLog('[WHATSAPP] Não deu para apagar para todos; removida só no P4J3.');
             return;
           }
         }
@@ -2415,7 +2439,10 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     setCreatingCampaignBusy(false);
     setCampaignFormError('');
     // Reseta mensagem + agendamento para não vazar da campanha anterior.
-    setTemplateText('Olá {{name}}, tudo bem? Notamos que o seu site está com lentidão.');
+    setTemplateText(DEFAULT_CAMPAIGN_TEMPLATE);
+    setFollowUpEnabled(true);
+    setFollowUpHours(DEFAULT_FOLLOW_UP_HOURS);
+    setFollowUpText(DEFAULT_FOLLOW_UP_TEMPLATE);
     setIntervalSec(60);
     setScheduleMode('interval');
     setScheduleStartAt('');
@@ -2555,7 +2582,10 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     try {
       setEditingCampaignId(campaign.id);
       setNewCampaignName(campaign.name || '');
-      setTemplateText(campaign.template?.text || 'Olá {{name}}, tudo bem? Notamos que o seu site está com lentidão.');
+      setTemplateText(campaign.template?.text || DEFAULT_CAMPAIGN_TEMPLATE);
+      setFollowUpEnabled(!!campaign.followUp?.enabled);
+      setFollowUpHours(Number(campaign.followUp?.afterHours) || DEFAULT_FOLLOW_UP_HOURS);
+      setFollowUpText(campaign.followUp?.text || DEFAULT_FOLLOW_UP_TEMPLATE);
       // Hidrata agendamento atual para permitir reagendar + disparo direto.
       const sch = campaign.schedule || {};
       setScheduleMode(sch.mode || 'interval');
@@ -2739,6 +2769,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
           },
           leads: mapRecipientsToPayload(campaignRecipients, campaignConnectionIds),
           schedule,
+          followUp: { enabled: followUpEnabled, afterHours: followUpHours, text: followUpText },
           connectionId: campaignConnectionIds[0] || editing?.connectionId || null,
           connectionIds: campaignConnectionIds.length
             ? campaignConnectionIds
@@ -2844,6 +2875,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         template,
         leadIds: leads,
         schedule,
+        followUp: { enabled: followUpEnabled, afterHours: followUpHours, text: followUpText },
       });
       if (res?.success) {
         closeCampaignModal();
@@ -3947,52 +3979,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     } catch (_) {
       storedLeads = [];
     }
-
-    const seen = new Set();
-    const candidates = [];
-    const append = (item) => {
-      if (!item || item.isGroup || String(item.jid || '').endsWith('@g.us')) return;
-      const rawPhone = String(item.phone || item.phoneNumber || item.number || item.jid || '');
-      const phone = rawPhone.includes('@') ? rawPhone.replace(/@.*$/, '') : rawPhone;
-      const digits = phone.replace(/\D/g, '');
-      const jid = item.jid || (digits ? `${digits}@s.whatsapp.net` : '');
-      const key = digits || jid;
-      if (!key || seen.has(key)) return;
-      seen.add(key);
-      candidates.push({
-        ...item,
-        jid,
-        phone: digits || phone,
-        phoneJid: item.phoneJid || jid,
-        name: item.name || item.company || item.pushName || phone || 'Contato',
-      });
-    };
-
-    chats.forEach(append);
-    waContacts.forEach(append);
-    scrapeLeadPool.forEach(append);
-    storedLeads.forEach(append);
-
-    const query = newChatSearch.trim().toLowerCase();
-    const filtered = candidates
-      .filter((item) => !query || `${item.name} ${item.phone} ${item.jid}`.toLowerCase().includes(query))
-      .slice(0, 100);
-
-    // Permite iniciar conversa com um número que ainda não existe na agenda,
-    // sem exigir importação/sincronização prévia. O backend normaliza o país
-    // quando o candidato não traz um JID pronto.
-    const manualDigits = newChatSearch.replace(/\D/g, '');
-    if (manualDigits.length >= 10 && !candidates.some((item) => item.phone.replace(/\D/g, '') === manualDigits)) {
-      filtered.unshift({
-        leadId: `manual_${manualDigits}`,
-        name: 'Número informado',
-        phone: newChatSearch.trim(),
-        jid: '',
-        phoneJid: '',
-        isManual: true,
-      });
-    }
-    return filtered.slice(0, 100);
+    return buildNewChatCandidates([chats, waContacts, scrapeLeadPool, storedLeads], newChatSearch);
   }, [chats, waContacts, scrapeLeadPool, newChatSearch]);
 
   const openNewChat = () => {
@@ -4587,7 +4574,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
             )}
           </div>
           <span className="wa-sigma-sep wa-sigma-separator" aria-hidden="true" />
-          <span className="wa-sigma-tag wa-sigma-label" aria-hidden="true">Sigma</span>
+          <span className="wa-sigma-tag wa-sigma-label" aria-hidden="true">P4J3</span>
           <button
             type="button"
             className="btn btn-sm btn-ghost"
@@ -5046,6 +5033,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             ? 'Fora do horário'
                             : c.status === 'running' && c.waitReason === 'no_provider'
                               ? 'Aguardando WhatsApp'
+                            : c.status === 'running' && c.waitReason === 'follow_up'
+                              ? 'Aguardando follow-up'
                               : {
                                   ready: 'Rascunho',
                                   running: 'Em andamento',
@@ -5304,12 +5293,44 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         <div className="camp-msg-preview">
                           <div className="camp-msg-preview-label">Prévia</div>
                           <div className="camp-msg-bubble">
-                            {(templateText || '…')
-                              .replace(/\{\{name\}\}/gi, 'Maria')
-                              .replace(/\{\{phone\}\}/gi, '11999990000')
-                              .replace(/\{\{website\}\}/gi, 'site.com.br')}
+                            {previewTemplate(templateText)}
                           </div>
                         </div>
+                        <p className="camp-hint">
+                          Use <code>{'{Oi|Olá}'}</code> para sortear variações por lead: mensagens idênticas em massa são o principal gatilho de bloqueio.
+                        </p>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '12px 0 4px', fontSize: 13 }}>
+                          <input
+                            type="checkbox"
+                            checked={followUpEnabled}
+                            onChange={(e) => setFollowUpEnabled(e.target.checked)}
+                            style={{ width: 'auto', margin: 0 }}
+                          />
+                          <span>Follow-up automático para quem não responder em</span>
+                          <input
+                            type="number"
+                            min={12}
+                            max={336}
+                            value={followUpHours}
+                            disabled={!followUpEnabled}
+                            onChange={(e) => setFollowUpHours(parseInt(e.target.value, 10) || DEFAULT_FOLLOW_UP_HOURS)}
+                            style={{ width: 72 }}
+                          />
+                          <span>horas</span>
+                        </label>
+                        {followUpEnabled && (
+                          <label className="camp-field">
+                            <span>Mensagem do follow-up (enviada uma vez, pelo mesmo número)</span>
+                            <textarea
+                              value={followUpText}
+                              onChange={(e) => setFollowUpText(e.target.value)}
+                              rows={3}
+                            />
+                            <span className="camp-hint">
+                              Para sozinho quando o lead responde. Quem responder SAIR, PARAR ou "não tenho interesse" é descadastrado de todas as campanhas.
+                            </span>
+                          </label>
+                        )}
                       </div>
                     )}
 
@@ -6524,7 +6545,8 @@ function CampaignMonitorView({ campaign, onBack, onEdit, connections = [] }) {
   const opened = Number(stats.opened || 0);
   const openCount = Number(stats.openCount || 0);
   const replyCount = Number(stats.replyCount || replied || 0);
-  const progressPct = Math.round((sent / (total || 1)) * 100);
+  const skipped = Number(stats.skipped || 0);
+  const progressPct = Math.round(((sent + skipped) / (total || 1)) * 100);
   const leads = Array.isArray(campaign?.leads) ? campaign.leads : [];
   const histogram = Array.isArray(stats.replyHourHistogram)
     ? stats.replyHourHistogram
@@ -6544,6 +6566,8 @@ function CampaignMonitorView({ campaign, onBack, onEdit, connections = [] }) {
       ? 'Limite diário (salva — aguarda retomada)'
       : campaign?.status === 'paused' && campaign?.pauseReason === 'missed_schedule'
         ? 'Horário perdido (aguarda remarcar ou disparo)'
+      : campaign?.status === 'running' && campaign?.waitReason === 'follow_up'
+        ? 'Aguardando prazo do follow-up'
       : {
           ready: 'Pronta',
           running: 'Em andamento',
@@ -6575,6 +6599,9 @@ function CampaignMonitorView({ campaign, onBack, onEdit, connections = [] }) {
   ];
 
   const tips = [];
+  if (Number(stats.followUpsSent || 0) > 0 || Number(stats.optedOut || 0) > 0) {
+    tips.push(`Follow-up: ${Number(stats.followUpsSent || 0)} enviado(s), ${Number(stats.followUpReplies || 0)} resposta(s) vieram depois dele · ${Number(stats.optedOut || 0)} descadastro(s).`);
+  }
   if (sent > 0 && Number(stats.deliveryRate || 0) < 80) {
     tips.push('Taxa de entrega baixa: confira se os números têm WhatsApp e se o DDI está correto.');
   }

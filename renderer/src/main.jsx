@@ -1,3 +1,4 @@
+import './installLeadStorage';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
@@ -191,7 +192,7 @@ function formatErrorReport(error, errorInfo, extra = {}) {
   const line = extra.lineno || extra.line || '';
   const col = extra.colno || extra.col || '';
   return [
-    '=== SIGMA REACT ERROR ===',
+    '=== P4J3 REACT ERROR ===',
     `Build: ${BUILD_STAMP}`,
     `Hora: ${new Date().toISOString()}`,
     `URL: ${typeof location !== 'undefined' ? location.href : ''}`,
@@ -222,7 +223,7 @@ function persistError(report) {
     localStorage.setItem('sigma_last_react_error_at', String(Date.now()));
   } catch { /* ignore */ }
   try {
-    document.title = 'ERRO React — Sigma';
+    document.title = 'ERRO React — P4J3';
   } catch { /* ignore */ }
   console.error(report);
 }
