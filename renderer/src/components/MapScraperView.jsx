@@ -37,6 +37,7 @@ import { useNotifications } from './NotificationCenter';
 import LeadIntelPanel from './LeadIntelPanel';
 import QueuePanel from './QueuePanel';
 import { useQueue, activeQueueByPhone } from '../useQueue';
+import { useLeadMemory, TEMPERATURE } from '../useLeadMemory';
 import { useContactStatus, useWaCheck } from '../useContactStatus';
 import { useTriage } from '../useTriage';
 import { CONTACT_STATUS, contactBucket, contactFor, phoneCore, timeAgo } from '../contactStatus.mjs';
@@ -305,6 +306,8 @@ export default function MapScraperView({
   const triage = useTriage();
   const [groupBy, setGroupBy] = useState('');
   const queue = useQueue();
+  const leadMemoryMap = useLeadMemory();
+  const temperatureOfLead = (lead) => leadMemoryMap[phoneCore(getLeadPhone(lead))]?.temperatura || '';
   const queueByPhone = useMemo(() => activeQueueByPhone(queue.items), [queue.items]);
   const [queueOpen, setQueueOpen] = useState(false);
   const [preparing, setPreparing] = useState(false);
@@ -549,6 +552,11 @@ export default function MapScraperView({
         const gb = groupBy === 'bairro' ? (getLeadBairro(b) || 'Sem bairro') : getLeadCat(b);
         if (ga !== gb) return ga.localeCompare(gb, 'pt-BR');
       }
+      // Quem respondeu: os quentes primeiro.
+      if (scraperTab === 'responderam') {
+        const diff = (TEMPERATURE[temperatureOfLead(b)]?.rank || 0) - (TEMPERATURE[temperatureOfLead(a)]?.rank || 0);
+        if (diff) return diff;
+      }
       if (filterOrd === 'potencial') return (triageFor(triage, b)?.score ?? -1) - (triageFor(triage, a)?.score ?? -1);
       if (filterOrd === 'reviews') return Number(getLeadReviews(b) || 0) - Number(getLeadReviews(a) || 0);
       if (filterOrd === 'recente') return (contactFor(contacts, b)?.lastEventAt || 0) - (contactFor(contacts, a)?.lastEventAt || 0);
@@ -579,6 +587,7 @@ export default function MapScraperView({
     waCheck,
     groupBy,
     queueByPhone,
+    leadMemoryMap,
   ]);
 
   const tabCounts = useMemo(() => {
@@ -1924,6 +1933,9 @@ export default function MapScraperView({
                         </span>
                       )}
                       {leadWa && !leadWa.exists && <span className="lead-badge" style={{ '--badge': '#94a3b8' }}>Sem WhatsApp</span>}
+                      {TEMPERATURE[temperatureOfLead(lead)] && (
+                        <span className="lead-badge" style={{ '--badge': TEMPERATURE[temperatureOfLead(lead)].color }}>{TEMPERATURE[temperatureOfLead(lead)].label}</span>
+                      )}
                       {leadTriage?.segments.filter((seg) => seg !== 'alto_potencial').slice(0, 2).map((seg) => (
                         <span key={seg} className="lead-badge" style={{ '--badge': SEGMENTS[seg]?.color }}>
                           {SEGMENTS[seg]?.label}

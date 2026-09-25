@@ -65,7 +65,9 @@ const { composeMessages } = require("./campaigns/outreach-composer");
 const { entryOffer, imageDiagnosis, nextOffer, objectionsFor, OFFERS } = require("./campaigns/offer-ladder");
 const { DailyQuota } = require("./campaigns/daily-quota");
 const { AgentStore } = require("./agents/agent-store");
-const { runAnalyst, suggestReplies } = require("./agents/ai-agents");
+const { runAnalyst, suggestReplies, writeProposal } = require("./agents/ai-agents");
+const { LeadMemory, temperatureOf } = require("./campaigns/lead-memory");
+const { backupRoot, hasBackupToday, listBackups, runBackup } = require("./utils/backup");
 const { KanbanStore } = require("./kanban/kanban-store");
 const { normalizeAddress } = require("./utils/address-normalizer");
 const { normalizeText } = require("./utils/text-normalizer");
@@ -97,6 +99,8 @@ let contactStatus = null;
 let agentStore = null;
 let triageStore = null;
 let sendQueue = null;
+let leadMemory = null;
+const notifiedReplies = new Map();
 const resultStore = new Map();
 const allowedMediaPaths = new Set();
 const activeScrapes = new Map();
@@ -1476,6 +1480,7 @@ app.whenReady().then(() => {
   triageStore = new TriageStore(app.getPath("userData"), {
     onChange: (changed) => safeSend("triage-changed", changed),
   });
+  leadMemory = new LeadMemory(app.getPath("userData"));
   sendQueue = new SendQueue(app.getPath("userData"), {
     onChange: (snapshot) => safeSend("queue-changed", snapshot),
   });
@@ -1483,10 +1488,29 @@ app.whenReady().then(() => {
   setInterval(() => queueTick().catch((error) => console.warn("[FILA] envio:", error.message)), 15000);
   setInterval(() => planQueueRecontacts().catch((error) => console.warn("[FILA] recontato:", error.message)), 60 * 60 * 1000);
   setTimeout(() => planQueueRecontacts().catch(() => {}), 60000);
+  // Backup diário (mantém 7 dias): confere 2 min após abrir e a cada 6 h.
+  const dailyBackup = () => {
+    try {
+      if (!hasBackupToday(app.getPath("userData"))) runBackup(app.getPath("userData"));
+    } catch (error) {
+      console.warn("[BACKUP]", error.message);
+    }
+  };
+  setTimeout(dailyBackup, 2 * 60 * 1000);
+  setInterval(dailyBackup, 6 * 60 * 60 * 1000);
   contactStatus = new ContactStatusStore(app.getPath("userData"), {
     onChange: (phone, entry) => {
       safeSend("contact-status-changed", { phone, entry });
       if (sendQueue?.historyFor(phone).length) scheduleKanbanQueueSync();
+      if (entry?.status === "respondeu" && entry.lastReplyAt && Date.now() - entry.lastReplyAt < 120000
+        && notifiedReplies.get(phone) !== entry.lastReplyAt) {
+        notifiedReplies.set(phone, entry.lastReplyAt);
+        notifyUser({
+          title: `${entry.name || "Um lead"} respondeu!`,
+          body: "Responda rápido: velocidade de resposta é o que mais fecha venda. Use “Sugerir resposta” no WhatsApp.",
+        });
+        safeSend("lead-replied", { phone, name: entry.name || "" });
+      }
     },
   });
   // Contatados sempre atualizados: logo após abrir e a cada 15 min (pega o que foi enviado pelo celular).
@@ -3814,15 +3838,29 @@ async function prepareQueueDrafts(rawLeads, { limit = 200 } = {}) {
     runAi: agentAi("copywriter"),
     commercial: currentAiSettings().commercial || {},
   });
+  // Teste A/B: A = pergunta de permissão; B = diagnóstico gratuito (quando existe).
+  const contactOf = (phone) => contactStatus?.get(phone);
+  const ab = sendQueue.abStats(contactOf);
+  let alternate = sendQueue.pickVariant(contactOf);
+  for (const item of items) {
+    if (!item.triage?.presente?.mensagem) { item.variant = "A"; continue; }
+    if (ab.winner) {
+      item.variant = Math.random() < 0.8 ? ab.winner : (ab.winner === "A" ? "B" : "A");
+    } else {
+      item.variant = alternate;
+      alternate = alternate === "A" ? "B" : "A";
+    }
+  }
   const added = sendQueue.add(items.map((item) => ({
     phone: item.lead.phone,
     kind: "primeiro",
     offer: item.offer,
     name: item.lead.name,
     lead: item.lead,
-    message: composed.get(item.key)?.mensagem || "",
-    ai: composed.get(item.key)?.ai,
-    reason: `${OFFERS[item.offer].label}: ${item.findings.slice(0, 2).join("; ") || "potencial " + (item.triage.score ?? "")}`,
+    message: item.variant === "B" ? item.triage.presente.mensagem : composed.get(item.key)?.mensagem || "",
+    ai: item.variant === "B" ? !!item.triage.aiApplied : composed.get(item.key)?.ai,
+    variant: item.variant,
+    reason: `${item.variant === "B" ? "[B: diagnóstico grátis] " : item.variant === "A" ? "[A: pergunta] " : ""}${OFFERS[item.offer].label}: ${item.findings.slice(0, 2).join("; ") || "potencial " + (item.triage.score ?? "")}`,
   })));
   return { success: true, added: added.length, skipped };
 }
@@ -3986,7 +4024,77 @@ ipcMain.handle("lead-sales-kit", async (_, { phone } = {}) => {
   return kit ? { success: true, kit } : { success: false, error: "Número inválido." };
 });
 
-ipcMain.handle("queue-get", async () => ({ success: true, ...sendQueue.snapshot(), wait: queueWait }));
+ipcMain.handle("backup-status", async () => {
+  return { success: true, backups: listBackups(app.getPath("userData")) };
+});
+
+ipcMain.handle("backup-now", async () => {
+  try {
+    leadsFileStore?.flush();
+    contactStatus?.flush();
+    const result = runBackup(app.getPath("userData"));
+    return { success: true, ...result, backups: listBackups(app.getPath("userData")) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("backup-open-folder", async () => {
+  const root = backupRoot(app.getPath("userData"));
+  fs.mkdirSync(root, { recursive: true });
+  const error = await shell.openPath(root);
+  return error ? { success: false, error } : { success: true };
+});
+
+ipcMain.handle("queue-get", async () => ({
+  success: true,
+  ...sendQueue.snapshot(),
+  wait: queueWait,
+  ab: sendQueue.abStats((phone) => contactStatus?.get(phone)),
+}));
+
+ipcMain.handle("lead-memory-all", async () => {
+  const out = {};
+  const contacts = contactStatus?.getAll() || {};
+  const memory = leadMemory?.getAll() || {};
+  for (const phone of new Set([...Object.keys(contacts), ...Object.keys(memory)])) {
+    const temperature = temperatureOf(contacts[phone], memory[phone]);
+    if (temperature && (contacts[phone]?.status === "respondeu" || memory[phone])) {
+      out[phone] = { temperatura: temperature, momento: memory[phone]?.momento || "", objecoes: memory[phone]?.objecoes || [] };
+    }
+  }
+  return { success: true, memory: out };
+});
+
+ipcMain.handle("ai-proposal", async (_, { phone, messages } = {}) => {
+  try {
+    const runAi = agentAi("proposta");
+    if (!runAi) return { success: false, error: "Configure a IA e confira o limite do Agente de Proposta." };
+    const kit = leadSalesKit(limitString(phone, 60, ""));
+    if (!kit) return { success: false, error: "Lead sem telefone válido." };
+    const raw = getLeadsFileStore().load();
+    const all = raw ? JSON.parse(raw) : [];
+    const core = String(phone || "").replace(/\D/g, "").replace(/^55(?=\d{10,11}$)/, "");
+    const leadRaw = all.find((l) => String(l?.phone || "").replace(/\D/g, "").endsWith(core)) || {};
+    const lead = cleanLeadInput(leadRaw);
+    const triage = triageStore.getAll()[triageKey(lead)] || computeTriage(lead, null);
+    const conversation = (Array.isArray(messages) ? messages : []).slice(-12).map((m) => ({
+      de: m?.fromMe ? "vendedor" : "lead",
+      texto: limitString(String(m?.text || ""), 600, ""),
+    })).filter((m) => m.texto);
+    const result = await writeProposal({
+      lead: { ...lead, saudacao: lead.saudacao || undefined },
+      offer: kit.offerLabel,
+      findings: [...(triage.findings || []), ...(kit.image?.findings || [])],
+      conversation,
+      commercial: currentAiSettings().commercial || {},
+    }, runAi);
+    agentStore.log("proposta", `Proposta de ${kit.offerLabel} para ${lead.name || "lead"}.`);
+    return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
 
 ipcMain.handle("queue-prepare", async (_, { leads, limit } = {}) => {
   try {
@@ -4119,12 +4227,23 @@ ipcMain.handle("ai-suggest-reply", async (_, { messages, lead } = {}) => {
           triagem: triage ? { segmentos: triage.segmentLabels, problemas: triage.findings } : null,
           oferta_atual: kit?.offerLabel,
           roteiro_objecoes: kit?.objections?.slice(0, 6),
+          memoria: (() => {
+            const history = sendQueue?.historyFor(clean.phone) || [];
+            const mem = leadMemory?.get(clean.phone);
+            return {
+              ofertas_feitas: [...new Set(history.map((i) => OFFERS[i.offer]?.label).filter(Boolean))],
+              mensagens_enviadas: history.filter((i) => i.status === "enviado").slice(-3).map((i) => i.message),
+              objecoes_anteriores: mem?.objecoes || [],
+              momento_anterior: mem?.momento || "",
+            };
+          })(),
         };
       })(),
       commercial: currentAiSettings().commercial || {},
     }, runAi);
     agentStore.log("respostas", `Sugestões para ${clean.name || "conversa"} (lead ${result.momento.replace(/_/g, " ")}).`);
-    return { success: true, ...result };
+    const memory = leadMemory?.recordReading(clean.phone, { momento: result.momento, leitura: result.leitura, objecao: result.objecao });
+    return { success: true, ...result, temperatura: temperatureOf(contactStatus?.get(clean.phone), memory) };
   } catch (error) {
     return { success: false, error: error.message };
   }

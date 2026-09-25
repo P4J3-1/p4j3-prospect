@@ -15,7 +15,8 @@ const REPLY_SYSTEM_PROMPT = [
   "Classifique o momento do lead e sugira 3 respostas curtas (ate 280 caracteres cada), naturais, sem parecer robo, cada uma levando a um proximo passo (entender a dor, marcar conversa, mandar proposta).",
   "Se o lead pediu para sair ou demonstrou irritacao, sugira apenas um encerramento educado.",
   "Nunca invente precos, prazos ou resultados que o vendedor nao informou.",
-  "Responda apenas JSON: {\"momento\":\"interessado|curioso|duvida|objecao|sem_interesse|pediu_para_sair\",\"leitura\":\"1 frase sobre o que o lead quer\",\"sugestoes\":[\"\",\"\",\"\"],\"proximo_passo\":\"\"}",
+  "Use a memoria do lead (ofertas ja feitas, objecoes anteriores, mensagens enviadas) para nao repetir abordagem. Havendo objecao, parta do roteiro_objecoes e adapte ao que o lead disse.",
+  "Responda apenas JSON: {\"momento\":\"interessado|curioso|duvida|objecao|sem_interesse|pediu_para_sair\",\"leitura\":\"1 frase sobre o que o lead quer\",\"objecao\":\"a objecao em poucas palavras, ou vazio\",\"sugestoes\":[\"\",\"\",\"\"],\"proximo_passo\":\"\"}",
 ].join("\n");
 
 const MOMENTS = ["interessado", "curioso", "duvida", "objecao", "sem_interesse", "pediu_para_sair"];
@@ -61,9 +62,34 @@ async function suggestReplies({ messages, lead, commercial }, runAi) {
   return {
     momento: MOMENTS.includes(result?.momento) ? result.momento : "curioso",
     leitura: String(result?.leitura || "").slice(0, 240),
+    objecao: String(result?.objecao || "").slice(0, 120),
     sugestoes,
     proximoPasso: String(result?.proximo_passo || "").slice(0, 240),
   };
 }
 
-module.exports = { runAnalyst, suggestReplies, MOMENTS };
+const PROPOSAL_SYSTEM_PROMPT = [
+  "Voce escreve propostas comerciais curtas para enviar pelo WhatsApp a empresas locais no Brasil.",
+  "Recebe o lead (dados, problemas encontrados, conversa ate aqui), a oferta e o perfil de quem vende.",
+  "Escreva uma proposta em texto corrido e escaneavel (use *negrito* do WhatsApp nos titulos), com: 1) o problema que o lead tem, com os dados reais; 2) a solucao da oferta, em 3 a 5 entregas concretas; 3) o resultado esperado em termos de clientes/atendimento, sem prometer numeros que o vendedor nao informou; 4) proximo passo com uma pergunta simples.",
+  "Sem link. Preco: use o do perfil do vendedor se existir; senao escreva que o valor e combinado em uma conversa rapida. Tratar a pessoa pela saudacao.",
+  "Responda apenas JSON: {\"titulo\":\"\",\"proposta\":\"\"}",
+].join("\n");
+
+async function writeProposal({ lead, offer, findings, conversation, commercial }, runAi) {
+  const { result } = await runAi({
+    system: PROPOSAL_SYSTEM_PROMPT,
+    payload: {
+      lead: lead || {},
+      oferta: offer || "",
+      problemas: (findings || []).slice(0, 6),
+      conversa: (conversation || []).slice(-12),
+      vendedor: commercial || {},
+    },
+  });
+  const proposta = String(result?.proposta || "").replace(/https?:\/\/\S+|www\.\S+/gi, "").trim().slice(0, 2500);
+  if (proposta.length < 40) throw new Error("A IA não devolveu uma proposta. Tente novamente.");
+  return { titulo: String(result?.titulo || "Proposta").slice(0, 120), proposta };
+}
+
+module.exports = { runAnalyst, suggestReplies, writeProposal, MOMENTS };

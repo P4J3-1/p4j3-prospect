@@ -27,6 +27,7 @@ import OnboardingTour from './components/OnboardingTour';
 import { NotificationProvider, useNotifications } from './components/NotificationCenter';
 import UpdateBanner from './components/UpdateBanner';
 import UpdateSettingsCard from './components/UpdateSettingsCard';
+import BackupCard from './components/BackupCard';
 import AiSettingsPage from './components/AiSettingsPage';
 import AgentsPage from './components/AgentsPage';
 import { dedupeLeads, normalizeLeadCollection, readLocalArray } from './leadData';
@@ -824,6 +825,7 @@ function AppInner() {
               </div>
               <p>Use Ctrl/Cmd +, − ou 0 para ajustar o zoom. A preferência é restaurada nesta instalação.</p>
               <UpdateSettingsCard />
+              <BackupCard />
               <section className="settings-danger-zone" aria-labelledby="clearLeadBaseTitle">
                 <div>
                   <div className="eyebrow">Dados locais</div>

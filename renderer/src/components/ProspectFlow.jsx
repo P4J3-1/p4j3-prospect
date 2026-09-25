@@ -4,6 +4,8 @@ import { useContactStatus } from '../useContactStatus';
 import { useTriage } from '../useTriage';
 import { contactFor } from '../contactStatus.mjs';
 import { triageFor } from '../triage.mjs';
+import { useQueue } from '../useQueue';
+import { useLeadMemory } from '../useLeadMemory';
 
 /**
  * O caminho do lead em 5 passos, com números reais e o próximo passo sugerido.
@@ -12,6 +14,25 @@ import { triageFor } from '../triage.mjs';
 export default function ProspectFlow({ onNavigate, won = 0 }) {
   const contacts = useContactStatus();
   const triage = useTriage();
+  const queue = useQueue();
+  const leadMemory = useLeadMemory();
+
+  const today = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const t0 = start.getTime();
+    let sent = 0;
+    let waiting = 0;
+    for (const c of Object.values(contacts)) {
+      if ((c?.sentAt || 0) >= t0) sent += 1;
+      // Respondeu depois da sua última mensagem: a bola está com você.
+      if (c?.status === 'respondeu' && (c.lastReplyAt || 0) > (c.sentAt || 0)) waiting += 1;
+    }
+    const drafts = queue.items.filter((i) => i.status === 'rascunho').length;
+    const approved = queue.items.filter((i) => i.status === 'aprovado').length;
+    const hot = Object.values(leadMemory).filter((m) => m.temperatura === 'quente').length;
+    return { sent, waiting, drafts, approved, hot, goal: Number(queue.settings?.dailyGoal) || 40 };
+  }, [contacts, queue, leadMemory]);
 
   const counts = useMemo(() => {
     const leads = readLocalArray('sigma_leads');
@@ -59,6 +80,16 @@ export default function ProspectFlow({ onNavigate, won = 0 }) {
             Próximo passo: {next.text} →
           </button>
         )}
+      </div>
+      <div className="prospect-today" aria-label="Hoje">
+        <button type="button" onClick={() => onNavigate?.('scraper')}>
+          <b>{today.sent}/{today.goal}</b><span>envios hoje (meta)</span>
+          <i style={{ width: `${Math.min(100, Math.round((today.sent / today.goal) * 100))}%` }} />
+        </button>
+        <button type="button" onClick={() => onNavigate?.('scraper')}><b>{today.drafts}</b><span>para aprovar na fila</span></button>
+        <button type="button" onClick={() => onNavigate?.('scraper')}><b>{today.approved}</b><span>aprovadas aguardando envio</span></button>
+        <button type="button" className={today.waiting ? 'alert' : ''} onClick={() => onNavigate?.('whatsapp')}><b>{today.waiting}</b><span>conversas esperando você</span></button>
+        <button type="button" className={today.hot ? 'hot' : ''} onClick={() => onNavigate?.('whatsapp')}><b>{today.hot}</b><span>leads quentes</span></button>
       </div>
       <ol className="prospect-flow-steps">
         {steps.map((step, index) => (

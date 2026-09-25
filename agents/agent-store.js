@@ -35,6 +35,13 @@ const AGENTS = {
     unit: "sugestões/dia",
     defaults: { enabled: true, auto: false, dailyLimit: 200 },
   },
+  proposta: {
+    name: "Agente de Proposta",
+    role: "Quando o lead se interessa, escreve a proposta com o problema real dele, as entregas da oferta e o próximo passo. Sem link.",
+    trigger: "Botão “Gerar proposta” no painel do lead (WhatsApp), depois que ele respondeu.",
+    unit: "propostas/dia",
+    defaults: { enabled: true, auto: false, dailyLimit: 20 },
+  },
   analista: {
     name: "Agente Analista",
     role: "Estuda os resultados das campanhas e escreve o playbook: nichos, horários e mensagens que funcionam. Os outros agentes seguem esse playbook.",

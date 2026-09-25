@@ -36,6 +36,14 @@ O app combina scraping, tratamento de dados, análise comercial e execução de 
 
 Sugestões para o Kanban com IA: [docs/sugestoes-kanban-ia.md](docs/sugestoes-kanban-ia.md).
 
+### Prospecção de ponta a ponta
+
+- **Extração por meta de novos** (padrão 150): pula quem já está na base sem abrir o resultado, carrega os bairros do município pelo OpenStreetMap, varia o termo do nicho e completa por regiões do mapa.
+- **Contatados sempre atualizados**: importa do WhatsApp quem você já chamou (inclusive pelo celular), com botões "Já contatei" e "Não contatar". Abas no Scraper: Disponíveis, Na fila, Contatados, Responderam, Não contatar.
+- **Fila de envio com aprovação**: a IA escreve a mensagem de cada lead pela oferta certa (site, reformulação, automação, presença de imagem); você aprova; o envio respeita janela de horário, intervalo e limite do número. Follow-up em 3 dias e nova oferta em 7, também para aprovação.
+- **Teste A/B** (pergunta x diagnóstico grátis), **temperatura do lead**, **roteiro de objeções**, **Agente de Proposta**, aviso quando alguém responde e **metas do dia** na Visão Geral.
+- **Backup diário** automático dos dados (7 dias), em Configurações.
+
 ### Lead Scoring
 
 - Auditoria do site do lead para sinais técnicos e comerciais: HTTPS, responsividade, pixel, WhatsApp, presença digital e qualidade do site.

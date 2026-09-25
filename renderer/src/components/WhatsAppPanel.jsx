@@ -47,6 +47,7 @@ import { useContactStatus } from '../useContactStatus';
 import { useTriage } from '../useTriage';
 import { CONTACT_STATUS, phoneCore, timeAgo } from '../contactStatus.mjs';
 import { SEGMENTS, triageFor } from '../triage.mjs';
+import { useLeadMemory, TEMPERATURE } from '../useLeadMemory';
 
 // Cor estável por nome: avatares sem foto deixam de ser todos cinza.
 const AVATAR_COLORS = ['#10a37f', '#2563eb', '#7c3aed', '#db2777', '#d97706', '#0891b2', '#16a34a', '#dc2626'];
@@ -4218,6 +4219,25 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     return () => { alive = false; };
   }, [leadPanelVisible, activeLeadPhone, activeContact?.status]);
   const conversationStarted = activeContact?.status === 'respondeu';
+  const leadMemoryMap = useLeadMemory();
+  const activeTemperature = aiReply?.data?.temperatura || leadMemoryMap[activeLeadPhone]?.temperatura || '';
+  const [proposal, setProposal] = useState(null); // { loading, error, titulo, proposta }
+  useEffect(() => { setProposal(null); }, [activeChatJid]);
+  const requestProposal = async () => {
+    if (!window.aiAPI?.proposal) return;
+    setProposal({ loading: true });
+    const history = messages
+      .slice(-12)
+      .map((m) => ({ fromMe: !!m?.key?.fromMe, text: extractText(unwrapMessage(m?.message || {})) || '' }))
+      .filter((m) => m.text);
+    try {
+      const res = await window.aiAPI.proposal(activeLeadPhone, history);
+      if (!res?.success) throw new Error(res?.error || 'Não foi possível gerar a proposta.');
+      setProposal({ loading: false, titulo: res.titulo, proposta: res.proposta });
+    } catch (error) {
+      setProposal({ loading: false, error: error?.message || 'Falhou.' });
+    }
+  };
 
   useEffect(() => { setAiReply(null); }, [activeChatJid]);
 
@@ -6175,6 +6195,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
 
                 <div className="clp-section">
                   <span className="clp-label">Situação no WhatsApp</span>
+                  {activeTemperature && TEMPERATURE[activeTemperature] && (
+                    <span className="lead-badge" style={{ '--badge': TEMPERATURE[activeTemperature].color, alignSelf: 'flex-start' }}>
+                      Lead {TEMPERATURE[activeTemperature].label.toLowerCase()}
+                    </span>
+                  )}
                   {activeContact ? (
                     <div className="clp-status" style={{ '--badge': CONTACT_STATUS[activeContact.status]?.color }}>
                       <b>{CONTACT_STATUS[activeContact.status]?.label}</b>
@@ -6236,6 +6261,17 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                       <span className="clp-muted">Objeções e comparação com concorrentes aparecem quando o lead responder.</span>
                     ) : (
                       <>
+                        <button type="button" className="btn btn-sm" style={{ marginTop: 6 }} disabled={proposal?.loading} onClick={requestProposal}>
+                          {proposal?.loading ? 'Escrevendo proposta…' : 'Gerar proposta com IA'}
+                        </button>
+                        {proposal?.error && <span className="clp-muted" style={{ color: '#dc2626' }}>{proposal.error}</span>}
+                        {proposal?.proposta && (
+                          <div className="clp-proposal">
+                            <b>{proposal.titulo}</b>
+                            <p>{proposal.proposta}</p>
+                            <button type="button" className="btn btn-sm btn-primary" onClick={() => setInputText(proposal.proposta)}>Usar na mensagem</button>
+                          </div>
+                        )}
                         <span className="clp-label" style={{ marginTop: 6 }}>Quebrar objeções</span>
                         <ul className="intel-list">
                           {salesKit.objections.map((o) => (

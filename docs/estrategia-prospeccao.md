@@ -78,3 +78,12 @@ Quem responde **SAIR, PARAR, "não tenho interesse", "me tira da lista"** entra 
 ## 8. Auto-aperfeiçoamento
 
 Cada envio guarda o texto final e o resultado (resposta, silêncio, descadastro). Em **Inteligência Artificial → Aprendizado** você vê taxa de resposta, melhores horários e nichos. Na criação da campanha, **✨ Melhorar com IA** reescreve a mensagem e o follow-up com base no que teve resposta. A pesquisa de cada lead também recebe esses aprendizados.
+
+## 9. Fluxo diário no P4J3
+
+1. **Nova Extração** com meta de 150 novos: carregue os bairros automaticamente e deixe a variação de termos ligada.
+2. A **triagem** roda sozinha e manda os de alto potencial para a **fila**.
+3. No Scraper, **Montar fila** nos Disponíveis restantes; em **Revisar fila**, ajuste e aprove.
+4. O envio sai no ritmo seguro. Quem responde gera aviso: responda rápido com **Sugerir resposta**; use o **roteiro de objeções** e, só depois, a **comparação com o concorrente**.
+5. Interessado? **Gerar proposta**. Sem resposta? A fila prepara o follow-up (3 dias) e a nova oferta (7 dias) para você aprovar.
+6. Acompanhe **Hoje** na Visão Geral e o **teste A/B** na fila; o Analista ajusta o playbook sozinho.

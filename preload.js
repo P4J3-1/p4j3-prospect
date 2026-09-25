@@ -144,6 +144,12 @@ contextBridge.exposeInMainWorld("agentsAPI", {
   onProgress: subscribe("agent-progress"),
 });
 
+contextBridge.exposeInMainWorld("backupAPI", {
+  status: () => ipcRenderer.invoke("backup-status"),
+  run: () => ipcRenderer.invoke("backup-now"),
+  openFolder: () => ipcRenderer.invoke("backup-open-folder"),
+});
+
 contextBridge.exposeInMainWorld("queueAPI", {
   get: () => ipcRenderer.invoke("queue-get"),
   prepare: (leads, limit) => ipcRenderer.invoke("queue-prepare", { leads, limit }),
@@ -162,6 +168,13 @@ contextBridge.exposeInMainWorld("triageAPI", {
 contextBridge.exposeInMainWorld("aiAPI", {
   gift: (lead) => ipcRenderer.invoke("ai-gift", { lead }),
   salesKit: (phone) => ipcRenderer.invoke("lead-sales-kit", { phone }),
+  proposal: (phone, messages) => ipcRenderer.invoke("ai-proposal", { phone, messages }),
+  leadMemory: () => ipcRenderer.invoke("lead-memory-all"),
+  onLeadReplied: (callback) => {
+    const listener = (_, payload) => callback(payload);
+    ipcRenderer.on("lead-replied", listener);
+    return () => ipcRenderer.removeListener("lead-replied", listener);
+  },
   suggestReply: (messages, lead) => ipcRenderer.invoke("ai-suggest-reply", { messages, lead }),
   researchLead: (lead) => ipcRenderer.invoke("ai-research-lead", { lead }),
   getInsights: () => ipcRenderer.invoke("ai-insights"),

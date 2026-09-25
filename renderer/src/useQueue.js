@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react';
 
 /** Fila de envio (itens, configuração e motivo de espera), ao vivo. */
 export function useQueue() {
-  const [queue, setQueue] = useState({ items: [], settings: {}, wait: '' });
+  const [queue, setQueue] = useState({ items: [], settings: {}, wait: '', ab: null });
   useEffect(() => {
     let alive = true;
     window.queueAPI?.get?.()
-      .then((res) => { if (alive && res?.success) setQueue({ items: res.items || [], settings: res.settings || {}, wait: res.wait || '' }); })
+      .then((res) => { if (alive && res?.success) setQueue({ items: res.items || [], settings: res.settings || {}, wait: res.wait || '', ab: res.ab || null }); })
       .catch(() => {});
     const offChanged = window.queueAPI?.onChanged?.((snap) => {
       if (snap) setQueue((current) => ({ ...current, items: snap.items || [], settings: snap.settings || current.settings }));

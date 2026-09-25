@@ -107,6 +107,13 @@ export default function QueuePanel({ onClose }) {
         </div>
 
         <div className="queue-status"><Clock size={13} /> {WAIT_LABEL[queue.wait] || 'Pronto.'}</div>
+        {queue.ab && (queue.ab.A.sent + queue.ab.B.sent) > 0 && (
+          <div className="queue-ab">
+            Teste A/B do primeiro contato · <b>A (pergunta)</b> {queue.ab.A.rate}% de resposta em {queue.ab.A.sent} ·{' '}
+            <b>B (diagnóstico grátis)</b> {queue.ab.B.rate}% em {queue.ab.B.sent}
+            {queue.ab.winner ? ` · Vencedora: ${queue.ab.winner} (usada em 80% dos próximos)` : ' · vencedora definida com 20+ envios de cada'}
+          </div>
+        )}
 
         <div className="queue-settings">
           <label>

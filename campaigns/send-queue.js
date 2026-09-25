@@ -15,7 +15,11 @@ const DEFAULT_SETTINGS = {
   intervalSec: 120, // mínimo entre envios; +0–40% de variação aleatória
   followUpDays: 3,
   newOfferDays: 7,
+  dailyGoal: 40, // meta de envios por dia (painel "Hoje")
 };
+
+const AB_MIN_SAMPLE = 20;
+const AB_MIN_LIFT = 3; // pontos percentuais
 const MAX_ITEMS = 5000;
 
 function phoneCore(phone) {
@@ -100,6 +104,7 @@ class SendQueue {
         name: String(d.name || "").slice(0, 160),
         lead: d.lead || {},
         message: String(d.message || "").slice(0, 1000),
+        variant: d.variant === "B" ? "B" : d.variant === "A" ? "A" : "",
         ai: !!d.ai,
         reason: String(d.reason || "").slice(0, 300),
         status: "rascunho",
@@ -152,6 +157,7 @@ class SendQueue {
     if (patch.intervalSec !== undefined) next.intervalSec = Math.max(30, Math.min(3600, Math.round(Number(patch.intervalSec) || 120)));
     if (patch.followUpDays !== undefined) next.followUpDays = Math.max(1, Math.min(30, Math.round(Number(patch.followUpDays) || 3)));
     if (patch.newOfferDays !== undefined) next.newOfferDays = Math.max(1, Math.min(60, Math.round(Number(patch.newOfferDays) || 7)));
+    if (patch.dailyGoal !== undefined) next.dailyGoal = Math.max(1, Math.min(1000, Math.round(Number(patch.dailyGoal) || 40)));
     this.settings = next;
     this.save();
     return next;
@@ -194,6 +200,35 @@ class SendQueue {
     }
     this.save();
     return item;
+  }
+
+  /**
+   * Teste A/B do primeiro contato: A = pergunta de permissão, B = diagnóstico
+   * gratuito (presente de valor). Vencedor só com amostra mínima e diferença clara.
+   */
+  abStats(contactOf) {
+    const stats = { A: { sent: 0, replied: 0, rate: 0 }, B: { sent: 0, replied: 0, rate: 0 }, winner: "" };
+    for (const item of this.items) {
+      if (item.kind !== "primeiro" || item.status !== "enviado" || !stats[item.variant]) continue;
+      stats[item.variant].sent += 1;
+      const contact = contactOf(item.phoneCore);
+      if (contact?.status === "respondeu" || (contact?.repliedAt && contact.repliedAt > (item.sentAt || 0))) stats[item.variant].replied += 1;
+    }
+    for (const v of ["A", "B"]) stats[v].rate = stats[v].sent ? Math.round((stats[v].replied / stats[v].sent) * 1000) / 10 : 0;
+    if (stats.A.sent >= AB_MIN_SAMPLE && stats.B.sent >= AB_MIN_SAMPLE && Math.abs(stats.A.rate - stats.B.rate) >= AB_MIN_LIFT) {
+      stats.winner = stats.A.rate > stats.B.rate ? "A" : "B";
+    }
+    return stats;
+  }
+
+  /** Variante para o próximo rascunho: alterna até haver vencedor; depois 80/20. */
+  pickVariant(contactOf, random = Math.random()) {
+    const stats = this.abStats(contactOf);
+    if (stats.winner) return random < 0.8 ? stats.winner : stats.winner === "A" ? "B" : "A";
+    const pending = this.items.filter((i) => i.kind === "primeiro" && i.variant);
+    const a = pending.filter((i) => i.variant === "A").length;
+    const b = pending.length - a;
+    return a <= b ? "A" : "B";
   }
 
   /**
