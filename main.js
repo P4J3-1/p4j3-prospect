@@ -3451,7 +3451,7 @@ ipcMain.handle("lead-scoring-update-settings", async (_, { patch }) => {
   }
 });
 
-// ─── IA: agentes (triagem, pesquisa, presente, copy, respostas, analista) ─────
+// ─── IA: agentes (triagem, pesquisa, copy, respostas, analista) ─────
 function currentAiSettings() {
   return leadScoringService?.store?.getSettings?.() || {};
 }
@@ -3477,11 +3477,13 @@ function hasAiConfigured(settings) {
 function agentAi(agentId) {
   const settings = currentAiSettings();
   if (!hasAiConfigured(settings) || !agentStore || agentStore.remaining(agentId) <= 0) return null;
-  const playbook = agentStore.playbookText();
+  // O Analista já recebe o playbook anterior completo (playbook_anterior); não repetir.
+  const playbook = agentId === "analista" ? "" : agentStore.playbookText();
   return async (task) => {
     const payload = playbook ? { ...task.payload, playbook_do_analista: playbook } : task.payload;
     const result = await runAiTask(settings, { ...task, payload });
     agentStore.consume(agentId, 1);
+    agentStore.addTokens(agentId, result.usage);
     return result;
   };
 }
@@ -3523,7 +3525,9 @@ async function runTriageAgent(rawLeads, { auto = false, force = false } = {}) {
   try {
     const { results, aiUsed, aiError } = await triageLeads(leads, {
       settings,
-      runAi: budget ? (task) => runAiTask(settings, task) : null,
+      runAi: budget
+        ? (task) => runAiTask(settings, task).then((r) => { agentStore.addTokens("triagem", r.usage); return r; })
+        : null,
       playbook: agentStore.playbookText(),
       aiBudget: budget,
       onProgress: (progress) => safeSend("agent-progress", { agent: "triagem", ...progress }),
@@ -3613,7 +3617,7 @@ ipcMain.handle("ai-gift", async (_, { lead } = {}) => {
     const clean = cleanLeadInput(lead);
     if (!clean.name) return { success: false, error: "Lead sem nome." };
     const settings = currentAiSettings();
-    const runAi = agentAi("presente");
+    const runAi = agentAi("triagem");
     // A triagem só manda para a IA leads com telefone; o presente é sob demanda.
     const { results, aiError } = await triageLeads([{ ...clean, phone: clean.phone || "0000000000" }], {
       settings,
@@ -3623,7 +3627,7 @@ ipcMain.handle("ai-gift", async (_, { lead } = {}) => {
     });
     const result = { ...results[0], key: triageKey(clean), hasPhone: !!clean.phone };
     triageStore.putMany([result]);
-    agentStore.log("presente", `Presente de valor para ${clean.name}${result.aiApplied ? "" : " (por regras)"}.`, !aiError);
+    agentStore.log("triagem", `Presente de valor para ${clean.name}${result.aiApplied ? "" : " (por regras)"}.`, !aiError);
     return { success: true, triage: result, aiError };
   } catch (error) {
     return { success: false, error: error.message };
@@ -3668,7 +3672,6 @@ ipcMain.handle("ai-suggest-reply", async (_, { messages, lead } = {}) => {
       messages: list,
       lead: { ...clean, triagem: triage ? { segmentos: triage.segmentLabels, problemas: triage.findings } : null },
       commercial: currentAiSettings().commercial || {},
-      playbook: agentStore.playbookText(),
     }, runAi);
     agentStore.log("respostas", `Sugestões para ${clean.name || "conversa"} (lead ${result.momento.replace(/_/g, " ")}).`);
     return { success: true, ...result };

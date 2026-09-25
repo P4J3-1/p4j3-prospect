@@ -25,8 +25,8 @@ export const PROVIDERS = {
   deepseek: {
     name: 'DeepSeek',
     base: 'https://api.deepseek.com',
-    defaultModel: 'deepseek-chat',
-    models: ['deepseek-chat', 'deepseek-reasoner']
+    defaultModel: 'deepseek-flash',
+    models: ['deepseek-flash', 'deepseek-v4-pro']
   },
   opencode: {
     name: 'OpenCode',

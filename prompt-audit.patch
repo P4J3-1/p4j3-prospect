@@ -1,0 +1,468 @@
+diff --git a/README.md b/README.md
+index 6b4dbea..75b2b46 100644
+--- a/README.md
++++ b/README.md
+@@ -28,7 +28,7 @@ O app combina scraping, tratamento de dados, análise comercial e execução de
+ ### IA e agentes
+ 
+ - **Inteligência Artificial** (menu 7): provedor (DeepSeek, OpenRouter, NVIDIA, OpenCode ou API própria), chave cifrada pelo Windows, perfil do seu negócio e aprendizado das campanhas.
+-- **Agentes** (menu 8): Triagem, Pesquisador, Presente de Valor, Copywriter, Respostas e Analista, cada um com liga/desliga, modo automático e limite diário de uso da API.
++- **Agentes** (menu 8): Triagem (inclui o presente de valor), Pesquisador, Copywriter, Respostas e Analista, cada um com liga/desliga, modo automático e limite diário de uso da API.
+ - **Triagem**: classifica cada lead em sem site, site fraco/fora do ar, WhatsApp sem automação, já automatizado e alto potencial; monta a entrevista de qualificação e um diagnóstico gratuito para abrir a conversa entregando valor.
+ - **Localizador** (pino no Scraper Maps): busca na web, CNPJ, quadro de sócios (dono), abordagem e chance de fechar.
+ - **Auto-aperfeiçoamento**: o Analista estuda os resultados e escreve um playbook que os outros agentes seguem.
+diff --git a/agents/agent-store.js b/agents/agent-store.js
+index 5df8d98..74bd0fc 100644
+--- a/agents/agent-store.js
++++ b/agents/agent-store.js
+@@ -9,8 +9,8 @@ const path = require("path");
+ const AGENTS = {
+   triagem: {
+     name: "Agente de Triagem",
+-    role: "Classifica cada lead: sem site, site fraco, WhatsApp sem automação ou alto potencial. Monta a entrevista de qualificação e o diagnóstico gratuito.",
+-    trigger: "Roda sozinho ao fim de cada extração (só leads com telefone).",
++    role: "Classifica cada lead: sem site, site fraco, WhatsApp sem automação ou alto potencial. Monta a entrevista de qualificação e o presente de valor (diagnóstico gratuito para abrir a conversa).",
++    trigger: "Roda sozinho ao fim de cada extração (só leads com telefone) e pelo botão “Gerar presente” na ficha do lead.",
+     unit: "leads/dia com IA",
+     defaults: { enabled: true, auto: true, dailyLimit: 150 },
+   },
+@@ -21,13 +21,6 @@ const AGENTS = {
+     unit: "pesquisas/dia com IA",
+     defaults: { enabled: true, auto: false, dailyLimit: 60 },
+   },
+-  presente: {
+-    name: "Agente Presente de Valor",
+-    role: "Escreve um mini-diagnóstico gratuito e personalizado para abrir a conversa entregando valor antes de vender.",
+-    trigger: "Botão “Gerar presente” na ficha do lead.",
+-    unit: "diagnósticos/dia",
+-    defaults: { enabled: true, auto: false, dailyLimit: 60 },
+-  },
+   copywriter: {
+     name: "Agente Copywriter",
+     role: "Reescreve a mensagem e o follow-up das campanhas com base no que teve resposta.",
+@@ -66,7 +59,7 @@ class AgentStore {
+     } catch { /* primeira execução */ }
+     this.state = {
+       settings: raw.settings || {},
+-      usage: raw.usage || { date: todayKey(), byAgent: {} },
++      usage: raw.usage || { date: todayKey(), byAgent: {}, tokens: {} },
+       log: Array.isArray(raw.log) ? raw.log : [],
+       playbook: raw.playbook || null,
+     };
+@@ -100,7 +93,7 @@ class AgentStore {
+ 
+   _roll(now = Date.now()) {
+     const key = todayKey(now);
+-    if (this.state.usage.date !== key) this.state.usage = { date: key, byAgent: {} };
++    if (this.state.usage.date !== key) this.state.usage = { date: key, byAgent: {}, tokens: {} };
+   }
+ 
+   usedToday(id, now = Date.now()) {
+@@ -122,6 +115,21 @@ class AgentStore {
+     this.save();
+   }
+ 
++  /** Soma os tokens (entrada + saída) que o provedor informou para o agente hoje. */
++  addTokens(id, usage, now = Date.now()) {
++    const total = Number(usage?.total_tokens) || (Number(usage?.prompt_tokens) || 0) + (Number(usage?.completion_tokens) || 0);
++    if (!total) return;
++    this._roll(now);
++    this.state.usage.tokens = this.state.usage.tokens || {};
++    this.state.usage.tokens[id] = (Number(this.state.usage.tokens[id]) || 0) + total;
++    this.save();
++  }
++
++  tokensToday(id, now = Date.now()) {
++    this._roll(now);
++    return Number(this.state.usage.tokens?.[id] || 0);
++  }
++
+   log(agent, text, ok = true, now = Date.now()) {
+     const entry = { at: now, agent, text: String(text).slice(0, 300), ok };
+     this.state.log.push(entry);
+@@ -163,6 +171,7 @@ class AgentStore {
+         unit: info.unit,
+         settings: this.settings(id),
+         usedToday: this.usedToday(id, now),
++        tokensToday: this.tokensToday(id, now),
+         remaining: this.remaining(id, now),
+       })),
+       log: [...this.state.log].reverse().slice(0, 60),
+diff --git a/agents/ai-agents.js b/agents/ai-agents.js
+index 08e9987..e7821c4 100644
+--- a/agents/ai-agents.js
++++ b/agents/ai-agents.js
+@@ -11,7 +11,7 @@ const ANALYST_SYSTEM_PROMPT = [
+ 
+ const REPLY_SYSTEM_PROMPT = [
+   "Voce e um SDR brasileiro experiente conversando pelo WhatsApp com um lead de prospeccao.",
+-  "Recebe a conversa (mais recente por ultimo), dados do lead, o perfil de quem vende e o playbook.",
++  "Recebe a conversa (mais recente por ultimo), dados do lead, o perfil de quem vende e, quando existir, o playbook do analista.",
+   "Classifique o momento do lead e sugira 3 respostas curtas (ate 280 caracteres cada), naturais, sem parecer robo, cada uma levando a um proximo passo (entender a dor, marcar conversa, mandar proposta).",
+   "Se o lead pediu para sair ou demonstrou irritacao, sugira apenas um encerramento educado.",
+   "Nunca invente precos, prazos ou resultados que o vendedor nao informou.",
+@@ -46,7 +46,7 @@ async function runAnalyst({ insights, commercial, previous }, runAi) {
+   };
+ }
+ 
+-async function suggestReplies({ messages, lead, commercial, playbook }, runAi) {
++async function suggestReplies({ messages, lead, commercial }, runAi) {
+   const conversation = (Array.isArray(messages) ? messages : [])
+     .slice(-16)
+     .map((m) => ({ de: m.fromMe ? "vendedor" : "lead", texto: String(m.text || "").slice(0, 600) }))
+@@ -54,7 +54,7 @@ async function suggestReplies({ messages, lead, commercial, playbook }, runAi) {
+   if (!conversation.length) throw new Error("A conversa ainda não tem mensagens de texto para analisar.");
+   const { result } = await runAi({
+     system: REPLY_SYSTEM_PROMPT,
+-    payload: { conversa: conversation, lead: lead || {}, vendedor: commercial || {}, playbook: playbook || null },
++    payload: { conversa: conversation, lead: lead || {}, vendedor: commercial || {} },
+   });
+   const sugestoes = list(result?.sugestoes, 3, 400);
+   if (!sugestoes.length) throw new Error("A IA não sugeriu respostas. Tente novamente.");
+diff --git a/lead-scoring/ai-sales-analyzer.js b/lead-scoring/ai-sales-analyzer.js
+index 755f84d..76e3819 100644
+--- a/lead-scoring/ai-sales-analyzer.js
++++ b/lead-scoring/ai-sales-analyzer.js
+@@ -77,6 +77,7 @@ async function requestChatCompletion(providerConfig, payload, options = {}) {
+   // Nem todo provedor aceita o modo JSON estrito; ele é opcional e cai no
+   // segundo passo quando o provedor recusa.
+   if (options.jsonMode !== false) body.response_format = { type: "json_object" };
++  if (providerConfig.maxTokens) body.max_tokens = providerConfig.maxTokens;
+   try {
+     const res = await fetch(providerConfig.chatCompletionsUrl, {
+       method: "POST",
+@@ -334,8 +335,10 @@ function resolveProviderConfig(ai = {}) {
+     return {
+       provider: "deepseek",
+       apiKey: ai.apiKey || "",
+-      model: ai.model || "deepseek-chat",
+-      defaultModel: "deepseek-chat",
++      model: ai.model || "deepseek-flash",
++      defaultModel: "deepseek-flash",
++      // Padrão do DeepSeek é 8K de saída; um lote de 8 análises passa disso e o JSON volta cortado.
++      maxTokens: 32000,
+       apiStyle: "chat-completions",
+       endpointUrl,
+       chatCompletionsUrl: endpointUrl,
+@@ -434,51 +437,6 @@ function parseExtraHeaders(value) {
+   }
+ }
+ 
+-function buildPromptPayload(lead, siteAnalysis, score, settings) {
+-  return {
+-    tarefa: "Determinar se vale investir tempo tentando vender um novo site, landing page ou sistema.",
+-    idioma: settings?.analysis?.language || "pt-BR",
+-    oferta: settings?.analysis?.offerType || "site_landing_sistema",
+-    empresa: lead.company,
+-    score_base: score,
+-    dados_tecnicos_resumidos: {
+-      url: siteAnalysis.finalUrl,
+-      cms: siteAnalysis.cms,
+-      tecnologias: (siteAnalysis.technologies || []).map((t) => t.name),
+-      frameworks: (siteAnalysis.frameworks || []).map((t) => t.name),
+-      tracking: siteAnalysis.tracking,
+-      performance: siteAnalysis.performance,
+-      conteudo: siteAnalysis.content,
+-      conversao: siteAnalysis.conversion,
+-      seo: siteAnalysis.seoBasics,
+-      paginas: siteAnalysis.crawl?.pagesFound,
+-      erros: siteAnalysis.crawl?.httpErrors?.length || 0,
+-      mobile: siteAnalysis.mobile,
+-    },
+-    json_obrigatorio: {
+-      score: "0-100",
+-      prioridade: "ignorar | baixa | boa | alta",
+-      vale_prospectar: "boolean",
+-      chance_resposta: "baixa | media | alta",
+-      chance_reuniao: "baixa | media | alta",
+-      ticket_estimado: "baixo | medio | alto",
+-      grau_de_urgencia: "baixo | medio | alto",
+-      facilidade_de_convencer: "baixa | media | alta",
+-      principais_dores: ["", "", ""],
+-      principais_oportunidades: ["", "", ""],
+-      resumo: "",
+-      resumo_empresa: "",
+-      problemas_encontrados: ["", "", ""],
+-      argumento_principal_venda: "",
+-      mensagem_whatsapp: "",
+-      assunto_email: "",
+-      primeiro_email: "",
+-      mensagem_follow_up: "",
+-      objecoes_provaveis: [{ objecao: "", resposta: "" }],
+-    },
+-  };
+-}
+-
+ function buildBatchPromptPayload(items, settings) {
+   return {
+     tarefa: "Avaliar em lote se cada lead vale prospeccao para vender site, landing page ou sistema.",
+@@ -698,7 +656,7 @@ async function runAiTask(settings, { system, payload }) {
+     try {
+       const json = await attemptProvider(providerConfig, payload, system);
+       const parsed = parseJsonResponse(extractProviderText(json));
+-      return { result: parsed, provider: providerConfig.provider, model: providerConfig.model };
++      return { result: parsed, provider: providerConfig.provider, model: providerConfig.model, usage: json?.usage || null };
+     } catch (error) {
+       lastError = error;
+       if (!shouldTryNextProvider(error)) break;
+diff --git a/lead-scoring/lead-intel.js b/lead-scoring/lead-intel.js
+index bf6ac67..23616cc 100644
+--- a/lead-scoring/lead-intel.js
++++ b/lead-scoring/lead-intel.js
+@@ -246,12 +246,12 @@ const INTEL_SYSTEM_PROMPT = [
+   "Voce e um SDR senior e estrategista comercial B2B no Brasil.",
+   "Recebe dados publicos de uma empresa local (Google Maps, busca web, Receita Federal), o perfil de quem vende e aprendizados de campanhas anteriores.",
+   "Tarefas:",
+-  "1) decisor: identifique o provavel dono/decisor SOMENTE com nomes presentes nos dados. Nunca invente nomes. Sem nome confiavel, nome vazio.",
++  "1) decisor: o provavel dono/decisor, usando apenas nomes que aparecem nos dados, porque esse nome vai na mensagem enviada ao dono e um nome errado queima o contato. Sem nome confiavel, deixe o nome vazio.",
+   "2) saudacao: como chamar a pessoa no WhatsApp (ex.: 'Dr. Paulo', 'Marina'). Nunca trate o nome da empresa como pessoa; sem nome confiavel use 'pessoal da <empresa curta>'.",
+   "3) abordagem: melhor angulo para este negocio e uma primeira mensagem de ate 300 caracteres, sem link, que use a saudacao e termine com uma pergunta simples.",
+   "4) chance_fechamento: chance realista (0-100) de fechar negocio partindo de lead frio, com justificativa honesta, sinais positivos e riscos. Seja conservador.",
+   "5) proximos_passos: ate 3 acoes objetivas.",
+-  "Responda apenas JSON: {\"decisor\":{\"nome\":\"\",\"cargo\":\"\",\"confianca\":\"alta|media|baixa\",\"fonte\":\"\"},\"saudacao\":\"\",\"abordagem\":{\"angulo\":\"\",\"mensagem\":\"\",\"gatilho\":\"\"},\"chance_fechamento\":{\"percentual\":0,\"classificacao\":\"alta|media|baixa\",\"justificativa\":\"\",\"sinais_positivos\":[],\"riscos\":[]},\"proximos_passos\":[],\"resumo\":\"\"}",
++  "Responda apenas JSON: {\"decisor\":{\"nome\":\"\",\"cargo\":\"\",\"confianca\":\"alta|media|baixa\",\"fonte\":\"\"},\"saudacao\":\"\",\"abordagem\":{\"angulo\":\"\",\"mensagem\":\"\"},\"chance_fechamento\":{\"percentual\":0,\"classificacao\":\"alta|media|baixa\",\"justificativa\":\"\",\"sinais_positivos\":[],\"riscos\":[]},\"proximos_passos\":[]}",
+ ].join("\n");
+ 
+ function textCorpus(lead, results, company) {
+@@ -304,7 +304,6 @@ async function researchLead(lead = {}, settings = {}, { fetchImpl, runAi, insigh
+   let chance = heuristicChance(lead, company);
+   let abordagem = null;
+   let proximosPassos = [];
+-  let resumo = "";
+   let saudacao = deriveGreeting({ ...lead, saudacao: "", decisor: decisor?.nome || "" });
+   let ai = null;
+   let aiError = "";
+@@ -345,7 +344,6 @@ async function researchLead(lead = {}, settings = {}, { fetchImpl, runAi, insigh
+         abordagem = {
+           angulo: String(result.abordagem.angulo || "").slice(0, 300),
+           mensagem: String(result.abordagem.mensagem || "").slice(0, 600),
+-          gatilho: String(result.abordagem.gatilho || "").slice(0, 200),
+         };
+       }
+       if (result?.chance_fechamento) {
+@@ -360,7 +358,6 @@ async function researchLead(lead = {}, settings = {}, { fetchImpl, runAi, insigh
+         };
+       }
+       proximosPassos = (Array.isArray(result?.proximos_passos) ? result.proximos_passos : []).map(String).slice(0, 3);
+-      resumo = String(result?.resumo || "").slice(0, 600);
+     } catch (error) {
+       aiError = error.message;
+     }
+@@ -376,7 +373,6 @@ async function researchLead(lead = {}, settings = {}, { fetchImpl, runAi, insigh
+     abordagem,
+     chance,
+     proximosPassos,
+-    resumo,
+     ai,
+     aiError,
+   };
+diff --git a/lead-scoring/lead-triage.js b/lead-scoring/lead-triage.js
+index 224161d..94dfe86 100644
+--- a/lead-scoring/lead-triage.js
++++ b/lead-scoring/lead-triage.js
+@@ -253,10 +253,10 @@ function fallbackGift(lead, triage) {
+ }
+ 
+ const TRIAGE_SYSTEM_PROMPT = [
+-  "Voce e um agente de triagem comercial B2B no Brasil. Recebe leads com sinais ja coletados (site, WhatsApp, avaliacoes) e o perfil de quem vende.",
+-  "Para cada lead: 1) confirme o segmento principal a partir dos sinais (nao invente sinais); 2) indique o servico do vendedor que mais se encaixa; 3) escreva uma triagem em 1-2 frases; 4) monte uma entrevista de qualificacao curta (4-6 perguntas abertas, em ordem, para descobrir dor, urgencia, decisor e orcamento); 5) sinais de compra e 2 objecoes com resposta; 6) um presente de valor: mini-diagnostico gratuito de ate 600 caracteres, pronto para WhatsApp, citando so os problemas encontrados, sem link, tratando a pessoa pela saudacao informada e terminando com uma pergunta.",
++  "Voce e um agente de triagem comercial B2B no Brasil. Recebe leads com segmentos e problemas ja calculados pelo sistema (site, WhatsApp, avaliacoes) e o perfil de quem vende.",
++  "Para cada lead: 1) indique o servico do vendedor que mais se encaixa; 2) escreva uma triagem em 1-2 frases; 3) monte uma entrevista de qualificacao curta (4-6 perguntas abertas, em ordem, para descobrir dor, urgencia, decisor e orcamento); 4) sinais de compra e 2 objecoes com resposta; 5) um presente de valor: mini-diagnostico gratuito de ate 600 caracteres, pronto para WhatsApp, citando so os problemas encontrados, sem link, tratando a pessoa pela saudacao informada e terminando com uma pergunta.",
+   "Use o playbook do analista quando existir.",
+-  "Responda apenas JSON: {\"leads\":[{\"key\":\"\",\"segmento_principal\":\"\",\"servico_recomendado\":\"\",\"resumo\":\"\",\"prioridade\":\"alta|media|baixa\",\"entrevista\":{\"perguntas\":[],\"sinais_de_compra\":[],\"objecoes\":[{\"objecao\":\"\",\"resposta\":\"\"}]},\"presente\":{\"titulo\":\"\",\"mensagem\":\"\"}}]}",
++  "Responda apenas JSON: {\"leads\":[{\"key\":\"\",\"servico_recomendado\":\"\",\"resumo\":\"\",\"prioridade\":\"alta|media|baixa\",\"entrevista\":{\"perguntas\":[],\"sinais_de_compra\":[],\"objecoes\":[{\"objecao\":\"\",\"resposta\":\"\"}]},\"presente\":{\"titulo\":\"\",\"mensagem\":\"\"}}]}",
+ ].join("\n");
+ 
+ function cleanList(value, max, len = 240) {
+diff --git a/lead-scoring/message-optimizer.js b/lead-scoring/message-optimizer.js
+index 0433a88..b8d8ee3 100644
+--- a/lead-scoring/message-optimizer.js
++++ b/lead-scoring/message-optimizer.js
+@@ -5,14 +5,14 @@
+ const OPTIMIZER_SYSTEM_PROMPT = [
+   "Voce e copywriter especialista em prospeccao B2B por WhatsApp no Brasil.",
+   "Reescreva a mensagem de primeiro contato e o follow-up usando os aprendizados reais das campanhas (mensagens que tiveram resposta x ignoradas, nichos e horarios).",
+-  "Regras obrigatorias:",
+-  "- Primeiro contato: ate 350 caracteres, sem link, sem preco, termina com UMA pergunta facil de responder.",
+-  "- Use {{saudacao}} para chamar a pessoa (nunca o nome da empresa como se fosse pessoa) e {{name}} so para citar a empresa.",
+-  "- Use spintax {opcao1|opcao2} em 2 a 4 pontos para que as mensagens nao saiam identicas.",
+-  "- Follow-up: curto, gentil, e termina oferecendo a saida: responder SAIR.",
+-  "- Preserve o que o vendedor oferece; nao prometa resultados que nao pode garantir.",
++  "Regras e seus motivos:",
++  "- Primeiro contato com ate 350 caracteres, sem link e sem preco, terminando com uma pergunta facil de responder: mensagem curta e sem link de desconhecido gera menos denuncia, e pergunta facil gera resposta.",
++  "- Use {{saudacao}} para chamar a pessoa e {{name}} so para citar a empresa, porque ninguem se chama pelo nome da empresa.",
++  "- Use spintax {opcao1|opcao2} em 2 a 4 pontos: mensagens identicas em massa sao o principal gatilho de bloqueio do numero.",
++  "- Follow-up curto e gentil, terminando com a opcao de responder SAIR (o sistema descadastra quem responde SAIR).",
++  "- Mantenha o que o vendedor oferece e nao prometa resultados que ele nao pode garantir.",
+   "- Com poucos dados, siga boas praticas e diga isso na explicacao.",
+-  "Responda apenas JSON: {\"mensagem\":\"\",\"follow_up\":\"\",\"explicacao\":\"\",\"hipoteses\":[]}",
++  "Responda apenas JSON: {\"mensagem\":\"\",\"follow_up\":\"\",\"explicacao\":\"\"}",
+ ].join("\n");
+ 
+ const REQUIRED_VAR = "{{saudacao}}";
+@@ -42,7 +42,6 @@ async function optimizeCampaignMessage({ template, followUp, insights, commercia
+     mensagem,
+     followUp: sanitizeTemplate(result?.follow_up, 400),
+     explicacao: String(result?.explicacao || "").slice(0, 800),
+-    hipoteses: (Array.isArray(result?.hipoteses) ? result.hipoteses : []).map(String).slice(0, 4),
+     provider,
+     model,
+   };
+diff --git a/main.js b/main.js
+index bbb8d8b..62664c8 100644
+--- a/main.js
++++ b/main.js
+@@ -3451,7 +3451,7 @@ ipcMain.handle("lead-scoring-update-settings", async (_, { patch }) => {
+   }
+ });
+ 
+-// ─── IA: agentes (triagem, pesquisa, presente, copy, respostas, analista) ─────
++// ─── IA: agentes (triagem, pesquisa, copy, respostas, analista) ─────
+ function currentAiSettings() {
+   return leadScoringService?.store?.getSettings?.() || {};
+ }
+@@ -3477,11 +3477,13 @@ function hasAiConfigured(settings) {
+ function agentAi(agentId) {
+   const settings = currentAiSettings();
+   if (!hasAiConfigured(settings) || !agentStore || agentStore.remaining(agentId) <= 0) return null;
+-  const playbook = agentStore.playbookText();
++  // O Analista já recebe o playbook anterior completo (playbook_anterior); não repetir.
++  const playbook = agentId === "analista" ? "" : agentStore.playbookText();
+   return async (task) => {
+     const payload = playbook ? { ...task.payload, playbook_do_analista: playbook } : task.payload;
+     const result = await runAiTask(settings, { ...task, payload });
+     agentStore.consume(agentId, 1);
++    agentStore.addTokens(agentId, result.usage);
+     return result;
+   };
+ }
+@@ -3523,7 +3525,9 @@ async function runTriageAgent(rawLeads, { auto = false, force = false } = {}) {
+   try {
+     const { results, aiUsed, aiError } = await triageLeads(leads, {
+       settings,
+-      runAi: budget ? (task) => runAiTask(settings, task) : null,
++      runAi: budget
++        ? (task) => runAiTask(settings, task).then((r) => { agentStore.addTokens("triagem", r.usage); return r; })
++        : null,
+       playbook: agentStore.playbookText(),
+       aiBudget: budget,
+       onProgress: (progress) => safeSend("agent-progress", { agent: "triagem", ...progress }),
+@@ -3613,7 +3617,7 @@ ipcMain.handle("ai-gift", async (_, { lead } = {}) => {
+     const clean = cleanLeadInput(lead);
+     if (!clean.name) return { success: false, error: "Lead sem nome." };
+     const settings = currentAiSettings();
+-    const runAi = agentAi("presente");
++    const runAi = agentAi("triagem");
+     // A triagem só manda para a IA leads com telefone; o presente é sob demanda.
+     const { results, aiError } = await triageLeads([{ ...clean, phone: clean.phone || "0000000000" }], {
+       settings,
+@@ -3623,7 +3627,7 @@ ipcMain.handle("ai-gift", async (_, { lead } = {}) => {
+     });
+     const result = { ...results[0], key: triageKey(clean), hasPhone: !!clean.phone };
+     triageStore.putMany([result]);
+-    agentStore.log("presente", `Presente de valor para ${clean.name}${result.aiApplied ? "" : " (por regras)"}.`, !aiError);
++    agentStore.log("triagem", `Presente de valor para ${clean.name}${result.aiApplied ? "" : " (por regras)"}.`, !aiError);
+     return { success: true, triage: result, aiError };
+   } catch (error) {
+     return { success: false, error: error.message };
+@@ -3668,7 +3672,6 @@ ipcMain.handle("ai-suggest-reply", async (_, { messages, lead } = {}) => {
+       messages: list,
+       lead: { ...clean, triagem: triage ? { segmentos: triage.segmentLabels, problemas: triage.findings } : null },
+       commercial: currentAiSettings().commercial || {},
+-      playbook: agentStore.playbookText(),
+     }, runAi);
+     agentStore.log("respostas", `Sugestões para ${clean.name || "conversa"} (lead ${result.momento.replace(/_/g, " ")}).`);
+     return { success: true, ...result };
+diff --git a/renderer/src/aiProviders.mjs b/renderer/src/aiProviders.mjs
+index f86d6fd..4fa383c 100644
+--- a/renderer/src/aiProviders.mjs
++++ b/renderer/src/aiProviders.mjs
+@@ -25,8 +25,8 @@ export const PROVIDERS = {
+   deepseek: {
+     name: 'DeepSeek',
+     base: 'https://api.deepseek.com',
+-    defaultModel: 'deepseek-chat',
+-    models: ['deepseek-chat', 'deepseek-reasoner']
++    defaultModel: 'deepseek-flash',
++    models: ['deepseek-flash', 'deepseek-v4-pro']
+   },
+   opencode: {
+     name: 'OpenCode',
+diff --git a/renderer/src/components/AgentsPage.jsx b/renderer/src/components/AgentsPage.jsx
+index 206ca8d..41ca600 100644
+--- a/renderer/src/components/AgentsPage.jsx
++++ b/renderer/src/components/AgentsPage.jsx
+@@ -150,7 +150,7 @@ export default function AgentsPage({ onNavigate }) {
+               <span>{agent.unit}</span>
+             </div>
+             <UsageBar used={agent.usedToday} limit={agent.settings.dailyLimit} />
+-            <span className="camp-hint">Hoje: {agent.usedToday} usado(s) · {agent.remaining} restante(s)</span>
++            <span className="camp-hint">Hoje: {agent.usedToday} usado(s) · {agent.remaining} restante(s){agent.tokensToday ? ` · ${agent.tokensToday.toLocaleString('pt-BR')} tokens` : ''}</span>
+             {agent.id === 'triagem' && (
+               <button type="button" className="btn btn-sm" disabled={!!busy || !agent.settings.enabled} onClick={() => run('triagem')}>
+                 <Play size={13} /> {busy === 'triagem' ? `Triando${progress?.agent === 'triagem' ? ` ${progress.done}/${progress.total}` : '…'}` : 'Triar leads sem triagem'}
+diff --git a/renderer/src/components/AiSettingsPage.jsx b/renderer/src/components/AiSettingsPage.jsx
+index 3379cbc..7342295 100644
+--- a/renderer/src/components/AiSettingsPage.jsx
++++ b/renderer/src/components/AiSettingsPage.jsx
+@@ -148,7 +148,7 @@ export default function AiSettingsPage() {
+             ))}
+           </div>
+           {draft.provider === 'deepseek' && (
+-            <span className="camp-hint">Crie a chave em platform.deepseek.com → API Keys. Modelo recomendado: deepseek-chat.</span>
++            <span className="camp-hint">Crie a chave em platform.deepseek.com → API Keys. Modelo recomendado: deepseek-flash (rápido); deepseek-v4-pro para análises mais profundas.</span>
+           )}
+         </div>
+ 
+diff --git a/renderer/src/components/LeadIntelPanel.jsx b/renderer/src/components/LeadIntelPanel.jsx
+index e765052..5650f2c 100644
+--- a/renderer/src/components/LeadIntelPanel.jsx
++++ b/renderer/src/components/LeadIntelPanel.jsx
+@@ -26,7 +26,7 @@ export default function LeadIntelPanel({ lead, triage, onClose, onSave, onOpenWh
+   const [giftBusy, setGiftBusy] = useState(false);
+   const [giftError, setGiftError] = useState('');
+ 
+-  // Agente Presente de Valor (e triagem sob demanda): o resultado volta pelo useTriage.
++  // Triagem sob demanda com o presente de valor: o resultado volta pelo useTriage.
+   const generateGift = async () => {
+     if (!window.aiAPI?.gift) return;
+     setGiftBusy(true);
+diff --git a/test/agents-triage.test.js b/test/agents-triage.test.js
+index 0d9ce9d..ec1a348 100644
+--- a/test/agents-triage.test.js
++++ b/test/agents-triage.test.js
+@@ -121,7 +121,7 @@ describe('agentes', () => {
+     store.setPlaybook({ resumo: 'Foque em padarias', regras: ['Mande às 9h'], nichos: ['padaria'] });
+     assert.ok(store.playbookText().includes('Mande às 9h'));
+     const snap = store.snapshot();
+-    assert.equal(snap.agents.length, 6);
++    assert.equal(snap.agents.length, 5);
+   });
+ 
+   it('analista e respostas validam a saída da IA', async () => {
+diff --git a/test/ai-intel.test.js b/test/ai-intel.test.js
+index c95ef3b..12200cd 100644
+--- a/test/ai-intel.test.js
++++ b/test/ai-intel.test.js
+@@ -71,7 +71,7 @@ describe('pesquisa do lead', () => {
+       payloads.push(payload);
+       return {
+         provider: 'deepseek',
+-        model: 'deepseek-chat',
++        model: 'deepseek-flash',
+         result: {
+           decisor: { nome: 'Wasghton da Conceicao', cargo: 'Sócio', confianca: 'alta' },
+           saudacao: 'Wasghton',
+diff --git a/test/lead-scoring.test.js b/test/lead-scoring.test.js
+index 544fad2..bb65d27 100644
+--- a/test/lead-scoring.test.js
++++ b/test/lead-scoring.test.js
+@@ -158,7 +158,7 @@ test("NVIDIA Build provider resolves its chat completions endpoint", () => {
+ 
+ test("DeepSeek provider resolves its chat completions endpoint", () => {
+   const config = resolveProviderConfig({ provider: "deepseek", apiKey: "ds-key" });
+-  assert.equal(config.model, "deepseek-chat");
++  assert.equal(config.model, "deepseek-flash");
+   assert.equal(config.apiStyle, "chat-completions");
+   assert.equal(config.endpointUrl, "https://api.deepseek.com/chat/completions");
+ });

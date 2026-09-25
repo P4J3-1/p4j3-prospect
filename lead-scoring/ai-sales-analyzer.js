@@ -77,6 +77,7 @@ async function requestChatCompletion(providerConfig, payload, options = {}) {
   // Nem todo provedor aceita o modo JSON estrito; ele é opcional e cai no
   // segundo passo quando o provedor recusa.
   if (options.jsonMode !== false) body.response_format = { type: "json_object" };
+  if (providerConfig.maxTokens) body.max_tokens = providerConfig.maxTokens;
   try {
     const res = await fetch(providerConfig.chatCompletionsUrl, {
       method: "POST",
@@ -334,8 +335,10 @@ function resolveProviderConfig(ai = {}) {
     return {
       provider: "deepseek",
       apiKey: ai.apiKey || "",
-      model: ai.model || "deepseek-chat",
-      defaultModel: "deepseek-chat",
+      model: ai.model || "deepseek-flash",
+      defaultModel: "deepseek-flash",
+      // Padrão do DeepSeek é 8K de saída; um lote de 8 análises passa disso e o JSON volta cortado.
+      maxTokens: 32000,
       apiStyle: "chat-completions",
       endpointUrl,
       chatCompletionsUrl: endpointUrl,
@@ -432,51 +435,6 @@ function parseExtraHeaders(value) {
   } catch {
     return {};
   }
-}
-
-function buildPromptPayload(lead, siteAnalysis, score, settings) {
-  return {
-    tarefa: "Determinar se vale investir tempo tentando vender um novo site, landing page ou sistema.",
-    idioma: settings?.analysis?.language || "pt-BR",
-    oferta: settings?.analysis?.offerType || "site_landing_sistema",
-    empresa: lead.company,
-    score_base: score,
-    dados_tecnicos_resumidos: {
-      url: siteAnalysis.finalUrl,
-      cms: siteAnalysis.cms,
-      tecnologias: (siteAnalysis.technologies || []).map((t) => t.name),
-      frameworks: (siteAnalysis.frameworks || []).map((t) => t.name),
-      tracking: siteAnalysis.tracking,
-      performance: siteAnalysis.performance,
-      conteudo: siteAnalysis.content,
-      conversao: siteAnalysis.conversion,
-      seo: siteAnalysis.seoBasics,
-      paginas: siteAnalysis.crawl?.pagesFound,
-      erros: siteAnalysis.crawl?.httpErrors?.length || 0,
-      mobile: siteAnalysis.mobile,
-    },
-    json_obrigatorio: {
-      score: "0-100",
-      prioridade: "ignorar | baixa | boa | alta",
-      vale_prospectar: "boolean",
-      chance_resposta: "baixa | media | alta",
-      chance_reuniao: "baixa | media | alta",
-      ticket_estimado: "baixo | medio | alto",
-      grau_de_urgencia: "baixo | medio | alto",
-      facilidade_de_convencer: "baixa | media | alta",
-      principais_dores: ["", "", ""],
-      principais_oportunidades: ["", "", ""],
-      resumo: "",
-      resumo_empresa: "",
-      problemas_encontrados: ["", "", ""],
-      argumento_principal_venda: "",
-      mensagem_whatsapp: "",
-      assunto_email: "",
-      primeiro_email: "",
-      mensagem_follow_up: "",
-      objecoes_provaveis: [{ objecao: "", resposta: "" }],
-    },
-  };
 }
 
 function buildBatchPromptPayload(items, settings) {
@@ -698,7 +656,7 @@ async function runAiTask(settings, { system, payload }) {
     try {
       const json = await attemptProvider(providerConfig, payload, system);
       const parsed = parseJsonResponse(extractProviderText(json));
-      return { result: parsed, provider: providerConfig.provider, model: providerConfig.model };
+      return { result: parsed, provider: providerConfig.provider, model: providerConfig.model, usage: json?.usage || null };
     } catch (error) {
       lastError = error;
       if (!shouldTryNextProvider(error)) break;

@@ -150,7 +150,7 @@ export default function AgentsPage({ onNavigate }) {
               <span>{agent.unit}</span>
             </div>
             <UsageBar used={agent.usedToday} limit={agent.settings.dailyLimit} />
-            <span className="camp-hint">Hoje: {agent.usedToday} usado(s) · {agent.remaining} restante(s)</span>
+            <span className="camp-hint">Hoje: {agent.usedToday} usado(s) · {agent.remaining} restante(s){agent.tokensToday ? ` · ${agent.tokensToday.toLocaleString('pt-BR')} tokens` : ''}</span>
             {agent.id === 'triagem' && (
               <button type="button" className="btn btn-sm" disabled={!!busy || !agent.settings.enabled} onClick={() => run('triagem')}>
                 <Play size={13} /> {busy === 'triagem' ? `Triando${progress?.agent === 'triagem' ? ` ${progress.done}/${progress.total}` : '…'}` : 'Triar leads sem triagem'}

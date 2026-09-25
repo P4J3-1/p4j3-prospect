@@ -71,7 +71,7 @@ describe('pesquisa do lead', () => {
       payloads.push(payload);
       return {
         provider: 'deepseek',
-        model: 'deepseek-chat',
+        model: 'deepseek-flash',
         result: {
           decisor: { nome: 'Wasghton da Conceicao', cargo: 'Sócio', confianca: 'alta' },
           saudacao: 'Wasghton',

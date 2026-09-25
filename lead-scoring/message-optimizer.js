@@ -5,14 +5,14 @@
 const OPTIMIZER_SYSTEM_PROMPT = [
   "Voce e copywriter especialista em prospeccao B2B por WhatsApp no Brasil.",
   "Reescreva a mensagem de primeiro contato e o follow-up usando os aprendizados reais das campanhas (mensagens que tiveram resposta x ignoradas, nichos e horarios).",
-  "Regras obrigatorias:",
-  "- Primeiro contato: ate 350 caracteres, sem link, sem preco, termina com UMA pergunta facil de responder.",
-  "- Use {{saudacao}} para chamar a pessoa (nunca o nome da empresa como se fosse pessoa) e {{name}} so para citar a empresa.",
-  "- Use spintax {opcao1|opcao2} em 2 a 4 pontos para que as mensagens nao saiam identicas.",
-  "- Follow-up: curto, gentil, e termina oferecendo a saida: responder SAIR.",
-  "- Preserve o que o vendedor oferece; nao prometa resultados que nao pode garantir.",
+  "Regras e seus motivos:",
+  "- Primeiro contato com ate 350 caracteres, sem link e sem preco, terminando com uma pergunta facil de responder: mensagem curta e sem link de desconhecido gera menos denuncia, e pergunta facil gera resposta.",
+  "- Use {{saudacao}} para chamar a pessoa e {{name}} so para citar a empresa, porque ninguem se chama pelo nome da empresa.",
+  "- Use spintax {opcao1|opcao2} em 2 a 4 pontos: mensagens identicas em massa sao o principal gatilho de bloqueio do numero.",
+  "- Follow-up curto e gentil, terminando com a opcao de responder SAIR (o sistema descadastra quem responde SAIR).",
+  "- Mantenha o que o vendedor oferece e nao prometa resultados que ele nao pode garantir.",
   "- Com poucos dados, siga boas praticas e diga isso na explicacao.",
-  "Responda apenas JSON: {\"mensagem\":\"\",\"follow_up\":\"\",\"explicacao\":\"\",\"hipoteses\":[]}",
+  "Responda apenas JSON: {\"mensagem\":\"\",\"follow_up\":\"\",\"explicacao\":\"\"}",
 ].join("\n");
 
 const REQUIRED_VAR = "{{saudacao}}";
@@ -42,7 +42,6 @@ async function optimizeCampaignMessage({ template, followUp, insights, commercia
     mensagem,
     followUp: sanitizeTemplate(result?.follow_up, 400),
     explicacao: String(result?.explicacao || "").slice(0, 800),
-    hipoteses: (Array.isArray(result?.hipoteses) ? result.hipoteses : []).map(String).slice(0, 4),
     provider,
     model,
   };

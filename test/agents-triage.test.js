@@ -121,7 +121,7 @@ describe('agentes', () => {
     store.setPlaybook({ resumo: 'Foque em padarias', regras: ['Mande às 9h'], nichos: ['padaria'] });
     assert.ok(store.playbookText().includes('Mande às 9h'));
     const snap = store.snapshot();
-    assert.equal(snap.agents.length, 6);
+    assert.equal(snap.agents.length, 5);
   });
 
   it('analista e respostas validam a saída da IA', async () => {

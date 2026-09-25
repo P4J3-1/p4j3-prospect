@@ -28,7 +28,7 @@ O app combina scraping, tratamento de dados, análise comercial e execução de 
 ### IA e agentes
 
 - **Inteligência Artificial** (menu 7): provedor (DeepSeek, OpenRouter, NVIDIA, OpenCode ou API própria), chave cifrada pelo Windows, perfil do seu negócio e aprendizado das campanhas.
-- **Agentes** (menu 8): Triagem, Pesquisador, Presente de Valor, Copywriter, Respostas e Analista, cada um com liga/desliga, modo automático e limite diário de uso da API.
+- **Agentes** (menu 8): Triagem (inclui o presente de valor), Pesquisador, Copywriter, Respostas e Analista, cada um com liga/desliga, modo automático e limite diário de uso da API.
 - **Triagem**: classifica cada lead em sem site, site fraco/fora do ar, WhatsApp sem automação, já automatizado e alto potencial; monta a entrevista de qualificação e um diagnóstico gratuito para abrir a conversa entregando valor.
 - **Localizador** (pino no Scraper Maps): busca na web, CNPJ, quadro de sócios (dono), abordagem e chance de fechar.
 - **Auto-aperfeiçoamento**: o Analista estuda os resultados e escreve um playbook que os outros agentes seguem.

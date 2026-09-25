@@ -246,12 +246,12 @@ const INTEL_SYSTEM_PROMPT = [
   "Voce e um SDR senior e estrategista comercial B2B no Brasil.",
   "Recebe dados publicos de uma empresa local (Google Maps, busca web, Receita Federal), o perfil de quem vende e aprendizados de campanhas anteriores.",
   "Tarefas:",
-  "1) decisor: identifique o provavel dono/decisor SOMENTE com nomes presentes nos dados. Nunca invente nomes. Sem nome confiavel, nome vazio.",
+  "1) decisor: o provavel dono/decisor, usando apenas nomes que aparecem nos dados, porque esse nome vai na mensagem enviada ao dono e um nome errado queima o contato. Sem nome confiavel, deixe o nome vazio.",
   "2) saudacao: como chamar a pessoa no WhatsApp (ex.: 'Dr. Paulo', 'Marina'). Nunca trate o nome da empresa como pessoa; sem nome confiavel use 'pessoal da <empresa curta>'.",
   "3) abordagem: melhor angulo para este negocio e uma primeira mensagem de ate 300 caracteres, sem link, que use a saudacao e termine com uma pergunta simples.",
   "4) chance_fechamento: chance realista (0-100) de fechar negocio partindo de lead frio, com justificativa honesta, sinais positivos e riscos. Seja conservador.",
   "5) proximos_passos: ate 3 acoes objetivas.",
-  "Responda apenas JSON: {\"decisor\":{\"nome\":\"\",\"cargo\":\"\",\"confianca\":\"alta|media|baixa\",\"fonte\":\"\"},\"saudacao\":\"\",\"abordagem\":{\"angulo\":\"\",\"mensagem\":\"\",\"gatilho\":\"\"},\"chance_fechamento\":{\"percentual\":0,\"classificacao\":\"alta|media|baixa\",\"justificativa\":\"\",\"sinais_positivos\":[],\"riscos\":[]},\"proximos_passos\":[],\"resumo\":\"\"}",
+  "Responda apenas JSON: {\"decisor\":{\"nome\":\"\",\"cargo\":\"\",\"confianca\":\"alta|media|baixa\",\"fonte\":\"\"},\"saudacao\":\"\",\"abordagem\":{\"angulo\":\"\",\"mensagem\":\"\"},\"chance_fechamento\":{\"percentual\":0,\"classificacao\":\"alta|media|baixa\",\"justificativa\":\"\",\"sinais_positivos\":[],\"riscos\":[]},\"proximos_passos\":[]}",
 ].join("\n");
 
 function textCorpus(lead, results, company) {
@@ -304,7 +304,6 @@ async function researchLead(lead = {}, settings = {}, { fetchImpl, runAi, insigh
   let chance = heuristicChance(lead, company);
   let abordagem = null;
   let proximosPassos = [];
-  let resumo = "";
   let saudacao = deriveGreeting({ ...lead, saudacao: "", decisor: decisor?.nome || "" });
   let ai = null;
   let aiError = "";
@@ -345,7 +344,6 @@ async function researchLead(lead = {}, settings = {}, { fetchImpl, runAi, insigh
         abordagem = {
           angulo: String(result.abordagem.angulo || "").slice(0, 300),
           mensagem: String(result.abordagem.mensagem || "").slice(0, 600),
-          gatilho: String(result.abordagem.gatilho || "").slice(0, 200),
         };
       }
       if (result?.chance_fechamento) {
@@ -360,7 +358,6 @@ async function researchLead(lead = {}, settings = {}, { fetchImpl, runAi, insigh
         };
       }
       proximosPassos = (Array.isArray(result?.proximos_passos) ? result.proximos_passos : []).map(String).slice(0, 3);
-      resumo = String(result?.resumo || "").slice(0, 600);
     } catch (error) {
       aiError = error.message;
     }
@@ -376,7 +373,6 @@ async function researchLead(lead = {}, settings = {}, { fetchImpl, runAi, insigh
     abordagem,
     chance,
     proximosPassos,
-    resumo,
     ai,
     aiError,
   };

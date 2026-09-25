@@ -9,8 +9,8 @@ const path = require("path");
 const AGENTS = {
   triagem: {
     name: "Agente de Triagem",
-    role: "Classifica cada lead: sem site, site fraco, WhatsApp sem automação ou alto potencial. Monta a entrevista de qualificação e o diagnóstico gratuito.",
-    trigger: "Roda sozinho ao fim de cada extração (só leads com telefone).",
+    role: "Classifica cada lead: sem site, site fraco, WhatsApp sem automação ou alto potencial. Monta a entrevista de qualificação e o presente de valor (diagnóstico gratuito para abrir a conversa).",
+    trigger: "Roda sozinho ao fim de cada extração (só leads com telefone) e pelo botão “Gerar presente” na ficha do lead.",
     unit: "leads/dia com IA",
     defaults: { enabled: true, auto: true, dailyLimit: 150 },
   },
@@ -19,13 +19,6 @@ const AGENTS = {
     role: "Busca a empresa na web, confere o CNPJ, acha o dono no quadro de sócios e estima a chance de fechar.",
     trigger: "Botão Localizar (pino) no Scraper Maps.",
     unit: "pesquisas/dia com IA",
-    defaults: { enabled: true, auto: false, dailyLimit: 60 },
-  },
-  presente: {
-    name: "Agente Presente de Valor",
-    role: "Escreve um mini-diagnóstico gratuito e personalizado para abrir a conversa entregando valor antes de vender.",
-    trigger: "Botão “Gerar presente” na ficha do lead.",
-    unit: "diagnósticos/dia",
     defaults: { enabled: true, auto: false, dailyLimit: 60 },
   },
   copywriter: {
@@ -66,7 +59,7 @@ class AgentStore {
     } catch { /* primeira execução */ }
     this.state = {
       settings: raw.settings || {},
-      usage: raw.usage || { date: todayKey(), byAgent: {} },
+      usage: raw.usage || { date: todayKey(), byAgent: {}, tokens: {} },
       log: Array.isArray(raw.log) ? raw.log : [],
       playbook: raw.playbook || null,
     };
@@ -100,7 +93,7 @@ class AgentStore {
 
   _roll(now = Date.now()) {
     const key = todayKey(now);
-    if (this.state.usage.date !== key) this.state.usage = { date: key, byAgent: {} };
+    if (this.state.usage.date !== key) this.state.usage = { date: key, byAgent: {}, tokens: {} };
   }
 
   usedToday(id, now = Date.now()) {
@@ -120,6 +113,21 @@ class AgentStore {
     this._roll(now);
     this.state.usage.byAgent[id] = this.usedToday(id, now) + amount;
     this.save();
+  }
+
+  /** Soma os tokens (entrada + saída) que o provedor informou para o agente hoje. */
+  addTokens(id, usage, now = Date.now()) {
+    const total = Number(usage?.total_tokens) || (Number(usage?.prompt_tokens) || 0) + (Number(usage?.completion_tokens) || 0);
+    if (!total) return;
+    this._roll(now);
+    this.state.usage.tokens = this.state.usage.tokens || {};
+    this.state.usage.tokens[id] = (Number(this.state.usage.tokens[id]) || 0) + total;
+    this.save();
+  }
+
+  tokensToday(id, now = Date.now()) {
+    this._roll(now);
+    return Number(this.state.usage.tokens?.[id] || 0);
   }
 
   log(agent, text, ok = true, now = Date.now()) {
@@ -163,6 +171,7 @@ class AgentStore {
         unit: info.unit,
         settings: this.settings(id),
         usedToday: this.usedToday(id, now),
+        tokensToday: this.tokensToday(id, now),
         remaining: this.remaining(id, now),
       })),
       log: [...this.state.log].reverse().slice(0, 60),

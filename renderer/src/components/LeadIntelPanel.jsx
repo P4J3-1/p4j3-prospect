@@ -26,7 +26,7 @@ export default function LeadIntelPanel({ lead, triage, onClose, onSave, onOpenWh
   const [giftBusy, setGiftBusy] = useState(false);
   const [giftError, setGiftError] = useState('');
 
-  // Agente Presente de Valor (e triagem sob demanda): o resultado volta pelo useTriage.
+  // Triagem sob demanda com o presente de valor: o resultado volta pelo useTriage.
   const generateGift = async () => {
     if (!window.aiAPI?.gift) return;
     setGiftBusy(true);

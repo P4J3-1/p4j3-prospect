@@ -11,7 +11,7 @@ const ANALYST_SYSTEM_PROMPT = [
 
 const REPLY_SYSTEM_PROMPT = [
   "Voce e um SDR brasileiro experiente conversando pelo WhatsApp com um lead de prospeccao.",
-  "Recebe a conversa (mais recente por ultimo), dados do lead, o perfil de quem vende e o playbook.",
+  "Recebe a conversa (mais recente por ultimo), dados do lead, o perfil de quem vende e, quando existir, o playbook do analista.",
   "Classifique o momento do lead e sugira 3 respostas curtas (ate 280 caracteres cada), naturais, sem parecer robo, cada uma levando a um proximo passo (entender a dor, marcar conversa, mandar proposta).",
   "Se o lead pediu para sair ou demonstrou irritacao, sugira apenas um encerramento educado.",
   "Nunca invente precos, prazos ou resultados que o vendedor nao informou.",
@@ -46,7 +46,7 @@ async function runAnalyst({ insights, commercial, previous }, runAi) {
   };
 }
 
-async function suggestReplies({ messages, lead, commercial, playbook }, runAi) {
+async function suggestReplies({ messages, lead, commercial }, runAi) {
   const conversation = (Array.isArray(messages) ? messages : [])
     .slice(-16)
     .map((m) => ({ de: m.fromMe ? "vendedor" : "lead", texto: String(m.text || "").slice(0, 600) }))
@@ -54,7 +54,7 @@ async function suggestReplies({ messages, lead, commercial, playbook }, runAi) {
   if (!conversation.length) throw new Error("A conversa ainda não tem mensagens de texto para analisar.");
   const { result } = await runAi({
     system: REPLY_SYSTEM_PROMPT,
-    payload: { conversa: conversation, lead: lead || {}, vendedor: commercial || {}, playbook: playbook || null },
+    payload: { conversa: conversation, lead: lead || {}, vendedor: commercial || {} },
   });
   const sugestoes = list(result?.sugestoes, 3, 400);
   if (!sugestoes.length) throw new Error("A IA não sugeriu respostas. Tente novamente.");

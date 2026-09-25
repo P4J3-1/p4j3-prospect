@@ -148,7 +148,7 @@ export default function AiSettingsPage() {
             ))}
           </div>
           {draft.provider === 'deepseek' && (
-            <span className="camp-hint">Crie a chave em platform.deepseek.com → API Keys. Modelo recomendado: deepseek-chat.</span>
+            <span className="camp-hint">Crie a chave em platform.deepseek.com → API Keys. Modelo recomendado: deepseek-flash (rápido); deepseek-v4-pro para análises mais profundas.</span>
           )}
         </div>
 

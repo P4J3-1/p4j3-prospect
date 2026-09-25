@@ -158,7 +158,7 @@ test("NVIDIA Build provider resolves its chat completions endpoint", () => {
 
 test("DeepSeek provider resolves its chat completions endpoint", () => {
   const config = resolveProviderConfig({ provider: "deepseek", apiKey: "ds-key" });
-  assert.equal(config.model, "deepseek-chat");
+  assert.equal(config.model, "deepseek-flash");
   assert.equal(config.apiStyle, "chat-completions");
   assert.equal(config.endpointUrl, "https://api.deepseek.com/chat/completions");
 });

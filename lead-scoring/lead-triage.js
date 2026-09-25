@@ -253,10 +253,10 @@ function fallbackGift(lead, triage) {
 }
 
 const TRIAGE_SYSTEM_PROMPT = [
-  "Voce e um agente de triagem comercial B2B no Brasil. Recebe leads com sinais ja coletados (site, WhatsApp, avaliacoes) e o perfil de quem vende.",
-  "Para cada lead: 1) confirme o segmento principal a partir dos sinais (nao invente sinais); 2) indique o servico do vendedor que mais se encaixa; 3) escreva uma triagem em 1-2 frases; 4) monte uma entrevista de qualificacao curta (4-6 perguntas abertas, em ordem, para descobrir dor, urgencia, decisor e orcamento); 5) sinais de compra e 2 objecoes com resposta; 6) um presente de valor: mini-diagnostico gratuito de ate 600 caracteres, pronto para WhatsApp, citando so os problemas encontrados, sem link, tratando a pessoa pela saudacao informada e terminando com uma pergunta.",
+  "Voce e um agente de triagem comercial B2B no Brasil. Recebe leads com segmentos e problemas ja calculados pelo sistema (site, WhatsApp, avaliacoes) e o perfil de quem vende.",
+  "Para cada lead: 1) indique o servico do vendedor que mais se encaixa; 2) escreva uma triagem em 1-2 frases; 3) monte uma entrevista de qualificacao curta (4-6 perguntas abertas, em ordem, para descobrir dor, urgencia, decisor e orcamento); 4) sinais de compra e 2 objecoes com resposta; 5) um presente de valor: mini-diagnostico gratuito de ate 600 caracteres, pronto para WhatsApp, citando so os problemas encontrados, sem link, tratando a pessoa pela saudacao informada e terminando com uma pergunta.",
   "Use o playbook do analista quando existir.",
-  "Responda apenas JSON: {\"leads\":[{\"key\":\"\",\"segmento_principal\":\"\",\"servico_recomendado\":\"\",\"resumo\":\"\",\"prioridade\":\"alta|media|baixa\",\"entrevista\":{\"perguntas\":[],\"sinais_de_compra\":[],\"objecoes\":[{\"objecao\":\"\",\"resposta\":\"\"}]},\"presente\":{\"titulo\":\"\",\"mensagem\":\"\"}}]}",
+  "Responda apenas JSON: {\"leads\":[{\"key\":\"\",\"servico_recomendado\":\"\",\"resumo\":\"\",\"prioridade\":\"alta|media|baixa\",\"entrevista\":{\"perguntas\":[],\"sinais_de_compra\":[],\"objecoes\":[{\"objecao\":\"\",\"resposta\":\"\"}]},\"presente\":{\"titulo\":\"\",\"mensagem\":\"\"}}]}",
 ].join("\n");
 
 function cleanList(value, max, len = 240) {
