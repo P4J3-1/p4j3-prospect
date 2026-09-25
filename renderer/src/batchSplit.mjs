@@ -5,7 +5,8 @@
  */
 
 export const MAX_BATCH_ITEMS = 50;
-export const MAX_MATRIX_TARGETS = 200;
+// Bairros automáticos de uma capital passam de 200; a meta de novos encerra antes.
+export const MAX_MATRIX_TARGETS = 1000;
 
 function foldKey(value) {
   return String(value || '')

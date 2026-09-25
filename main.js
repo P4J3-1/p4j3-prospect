@@ -33,7 +33,8 @@ let ffmpegPath = "ffmpeg";
 try {
   ffmpegPath = require("ffmpeg-static") || "ffmpeg";
 } catch (e) {}
-const { scrapeGoogleMaps } = require("./scraper");
+const { scrapeGoogleMaps, placeIdFromUrl, nameKey } = require("./scraper");
+const { AreaCache, cityGrid, fetchNeighborhoods, nicheVariations } = require("./utils/area-discovery");
 const { saveToCSV } = require("./utils/csv");
 const { saveReport } = require("./utils/report");
 const {
@@ -1473,6 +1474,9 @@ app.whenReady().then(() => {
   contactStatus = new ContactStatusStore(app.getPath("userData"), {
     onChange: (phone, entry) => safeSend("contact-status-changed", { phone, entry }),
   });
+  // Contatados sempre atualizados: logo após abrir e a cada 15 min (pega o que foi enviado pelo celular).
+  scheduleContactHistorySync(20000);
+  setInterval(() => scheduleContactHistorySync(0), 15 * 60 * 1000);
   campaignManager = new CampaignManager(app.getPath("userData"));
   campaignManager.setProvidersMap(whatsappProviders);
   campaignManager.setCampaignSettingsProvider(() => {
@@ -1930,12 +1934,21 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId, progressC
   const cleanMaxResults = clampInteger(maxResults, 1, MAX_SCRAPE_RESULTS, 30);
   const key = limitString(queryId, 80, "") || `scrape_${Date.now()}`;
   const rawProgressContext = progressContext && typeof progressContext === "object" ? progressContext : {};
-  const totalNeighborhoods = clampInteger(rawProgressContext.totalNeighborhoods, 1, 100, 1);
+  const totalNeighborhoods = clampInteger(rawProgressContext.totalNeighborhoods, 1, 5000, 1);
   const scrapeProgressContext = {
     neighborhood: limitString(rawProgressContext.neighborhood, 120, ""),
     neighborhoodIndex: clampInteger(rawProgressContext.neighborhoodIndex, 0, totalNeighborhoods - 1, 0),
     totalNeighborhoods,
     batchComplete: rawProgressContext.batchComplete === true,
+  };
+  // Busca por meta de novos: pula o que já está na base e para ao atingir a meta.
+  const coords = rawProgressContext.coords && Number.isFinite(Number(rawProgressContext.coords.lat)) && Number.isFinite(Number(rawProgressContext.coords.lng))
+    ? { lat: Number(rawProgressContext.coords.lat), lng: Number(rawProgressContext.coords.lng) }
+    : null;
+  const scrapeOptions = {
+    skipKeys: rawProgressContext.skipKnown === true ? knownLeadKeys() : new Set(),
+    maxNew: clampInteger(rawProgressContext.maxNew, 0, MAX_SCRAPE_RESULTS, 0),
+    coords,
   };
   const cancelToken = { cancelled: false };
   activeScrapes.set(key, cancelToken);
@@ -1970,6 +1983,7 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId, progressC
         });
       },
       cancelToken,
+      scrapeOptions,
     );
     if (!result || result.success === false) {
       const error = new Error(result?.error || "Não foi possível concluir a busca no Google Maps.");
@@ -2511,9 +2525,7 @@ function onChatEvent(event) {
       connectionId: event.connectionId,
     });
   } else if (event.type === "message-received") {
-    contactStatus?.recordReply(event.phoneJid || event.jid, {
-      optOut: isOptOutMessage(messageText(event.message)),
-    });
+    recordIncomingReply(event);
     if (campaignManager) {
       campaignManager.trackIncomingMessage(
         event.phoneJid || event.jid,
@@ -2536,6 +2548,7 @@ function onChatEvent(event) {
       stats: event.stats,
       connectionId: event.connectionId,
     });
+    if (event.type === "sync-done") scheduleContactHistorySync(5000);
   } else if (event.type === "message-status") {
     contactStatus?.recordReceipt(event.messageId, event.status);
     if (campaignManager) {
@@ -2765,8 +2778,10 @@ ipcMain.handle("whatsapp-send-message", async (_, { to, content, connectionId } 
   const result = await provider.sendMessage(to, content);
   if (result?.success && result.messageId) {
     const jid = String(result.jid || to || "");
-    const phoneJid = jid.endsWith("@lid") ? provider._getPhoneJid?.(jid) || "" : jid;
-    if (!phoneJid.endsWith("@g.us")) contactStatus?.recordSent(phoneJid, { messageId: result.messageId, source: "manual" });
+    const phoneJid = jid.endsWith("@lid")
+      ? (await provider.resolvePhoneJid?.(jid).catch(() => null)) || provider._getPhoneJid?.(jid) || ""
+      : jid;
+    if (phoneJid && !phoneJid.endsWith("@g.us")) contactStatus?.recordSent(phoneJid, { messageId: result.messageId, source: "manual" });
   }
   return result;
 });
@@ -2785,8 +2800,164 @@ function recordCampaignContact(campaignId, leadId) {
   }
 }
 
+// ─── COBERTURA DA EXTRAÇÃO (bairros, grade, variações) ───
+let areaCache = null;
+function getAreaCache() {
+  if (!areaCache) areaCache = new AreaCache(app.getPath("userData"));
+  return areaCache;
+}
+
+/** Chaves (placeId e nome) de todos os leads da base: a extração não os repete. */
+function knownLeadKeys() {
+  const keys = new Set();
+  try {
+    const raw = getLeadsFileStore().load();
+    const leads = raw ? JSON.parse(raw) : [];
+    for (const lead of Array.isArray(leads) ? leads : []) {
+      const pid = lead?.placeId || placeIdFromUrl(lead?.googleMapsUrl);
+      if (pid) keys.add(`pid:${pid}`);
+      const name = nameKey(lead?.name);
+      if (name) keys.add(`name:${name}`);
+    }
+  } catch (error) {
+    console.warn("[SCRAPE] base para pular:", error.message);
+  }
+  return keys;
+}
+
+ipcMain.handle("extraction-neighborhoods", async (_, { city, uf } = {}) => {
+  try {
+    const names = await fetchNeighborhoods(limitString(city, 120, ""), limitString(uf, 2, ""), { cache: getAreaCache() });
+    return { success: true, neighborhoods: names };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("extraction-grid", async (_, { city, uf, size } = {}) => {
+  try {
+    const points = await cityGrid(limitString(city, 120, ""), limitString(uf, 2, ""), { size: clampInteger(size, 2, 8, 4), cache: getAreaCache() });
+    return { success: true, points };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("extraction-variations", async (_, { niche } = {}) => {
+  try {
+    const runAi = agentAi("pesquisador");
+    const terms = await nicheVariations(limitString(niche, 80, ""), { runAi, cache: getAreaCache() });
+    return { success: true, terms };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle("contact-status-get-all", async () => {
-  return { success: true, contacts: contactStatus?.getAll() || {} };
+  return { success: true, contacts: contactStatus?.getAll() || {}, waCheck: contactStatus?.getWaCheck() || {} };
+});
+
+async function recordIncomingReply(event) {
+  try {
+    let phone = event.phoneJid || event.jid;
+    if (String(phone || "").endsWith("@lid")) {
+      const provider = event.connectionId ? whatsappProviders.get(event.connectionId) : null;
+      phone = (await provider?.resolvePhoneJid?.(phone).catch(() => null)) || phone;
+    }
+    contactStatus?.recordReply(phone, { optOut: isOptOutMessage(messageText(event.message)) });
+  } catch (error) {
+    console.warn("[CONTACT-STATUS] resposta:", error.message);
+  }
+}
+
+/**
+ * Traz para o status de contato tudo o que você já conversou no WhatsApp,
+ * inclusive pelo celular: é isso que tira do "Disponíveis" quem já foi chamado.
+ */
+let contactSyncTimer = null;
+let contactSyncRunning = null;
+async function syncContactHistory() {
+  if (contactSyncRunning) return contactSyncRunning;
+  contactSyncRunning = (async () => {
+    let changed = 0;
+    let found = 0;
+    const errors = [];
+    for (const [connectionId, provider] of whatsappProviders.entries()) {
+      if (typeof provider.getOutreachHistory !== "function") continue;
+      try {
+        const history = await provider.getOutreachHistory();
+        found += history.length;
+        changed += contactStatus?.importHistory(history) || 0;
+      } catch (error) {
+        errors.push(`${connectionId}: ${error.message}`);
+      }
+    }
+    contactStatus?.flush();
+    return { success: true, found, changed, errors };
+  })();
+  try {
+    return await contactSyncRunning;
+  } finally {
+    contactSyncRunning = null;
+  }
+}
+
+function scheduleContactHistorySync(delayMs = 5000) {
+  if (contactSyncTimer) clearTimeout(contactSyncTimer);
+  contactSyncTimer = setTimeout(() => {
+    contactSyncTimer = null;
+    syncContactHistory().catch((error) => console.warn("[CONTACT-STATUS] sync:", error.message));
+  }, delayMs);
+}
+
+ipcMain.handle("contact-status-sync", async () => {
+  try {
+    return await syncContactHistory();
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("contact-status-mark", async (_, { phone, mode, name } = {}) => {
+  try {
+    const entry = contactStatus.setManual(limitString(phone, 40, ""), String(mode || ""), { name: limitString(name, 120, "") });
+    // "Não contatar" vale também para as campanhas (lista global de descadastro).
+    const dnc = campaignManager?.doNotContact;
+    if (dnc && mode === "nao_contatar") dnc.add(phone, "marcado manualmente");
+    if (dnc && mode === "limpar") dnc.remove(phone);
+    return { success: true, entry };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+let waCheckRunning = false;
+ipcMain.handle("whatsapp-check-numbers", async (_, { phones } = {}) => {
+  if (waCheckRunning) return { success: false, error: "Já existe uma checagem em andamento." };
+  const provider = getActiveWhatsAppProvider();
+  if (!provider || provider.getStatus?.() !== "connected" || typeof provider.checkWhatsAppNumbers !== "function") {
+    return { success: false, error: "Conecte o WhatsApp para checar os números." };
+  }
+  const list = (Array.isArray(phones) ? phones : []).slice(0, 2000).map((p) => limitString(String(p || ""), 40, "")).filter(Boolean);
+  waCheckRunning = true;
+  try {
+    let done = 0;
+    let withWhatsapp = 0;
+    for (let i = 0; i < list.length; i += 40) {
+      const result = await provider.checkWhatsAppNumbers(list.slice(i, i + 40));
+      const changed = contactStatus.recordWaCheck(result);
+      withWhatsapp += Object.values(result).filter(Boolean).length;
+      done += Object.keys(result).length;
+      safeSend("wa-check-changed", { changed, done, total: list.length });
+      // Ritmo leve: a checagem usa a mesma sessão do seu número.
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+    return { success: true, checked: done, withWhatsapp };
+  } catch (error) {
+    return { success: false, error: error.message };
+  } finally {
+    waCheckRunning = false;
+  }
 });
 
 ipcMain.handle("whatsapp-chat-action", async (_, { jid, action, connectionId } = {}) => {

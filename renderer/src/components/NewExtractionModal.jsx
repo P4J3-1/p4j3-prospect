@@ -71,6 +71,12 @@ export default function NewExtractionModal({
 
   const [bairroInput, setBairroInput] = useState('');
   const [bairros, setBairros] = useState([]);
+  // Bairros sugeridos pelo OpenStreetMap para o município escolhido.
+  const [autoBairros, setAutoBairros] = useState([]);
+  const [autoState, setAutoState] = useState({ loading: false, error: '' });
+  const [goal, setGoal] = useState(150);
+  const [useVariations, setUseVariations] = useState(true);
+  const [useGrid, setUseGrid] = useState(true);
 
   const carViewRef = useRef(null);
 
@@ -85,6 +91,8 @@ export default function NewExtractionModal({
       setCidadeError(false);
       setBairroInput('');
       setBairros([]);
+      setAutoBairros([]);
+      setAutoState({ loading: false, error: '' });
     }
   }, [isOpen]);
 
@@ -153,6 +161,27 @@ export default function NewExtractionModal({
     setBairroInput('');
   };
 
+  const loadAutoBairros = async () => {
+    const city = cidadeObj?.n || cidadeInput.trim();
+    const uf = cidadeObj?.uf || cidadeUf;
+    if (!city || !window.electronAPI?.getNeighborhoods) return;
+    setAutoState({ loading: true, error: '' });
+    try {
+      const res = await window.electronAPI.getNeighborhoods(city, uf);
+      if (!res?.success) throw new Error(res?.error || 'Não foi possível carregar os bairros.');
+      setAutoBairros(res.neighborhoods || []);
+      setAutoState({ loading: false, error: res.neighborhoods?.length ? '' : 'O mapa não tem bairros cadastrados para esta cidade: a busca usa a grade de regiões.' });
+    } catch (error) {
+      setAutoState({ loading: false, error: error?.message || 'Falha ao carregar bairros.' });
+    }
+  };
+
+  const toggleBairro = (name) => {
+    setBairros((prev) => (prev.some((b) => b.toLowerCase() === name.toLowerCase())
+      ? prev.filter((b) => b.toLowerCase() !== name.toLowerCase())
+      : [...prev, name]));
+  };
+
   const removeBairro = (index) => {
     setBairros(bairros.filter((_, i) => i !== index));
   };
@@ -191,7 +220,9 @@ export default function NewExtractionModal({
       neigh,
       neighborhoods: [...bairros],
       city,
-      limit: 1000
+      limit: 1000,
+      goal: Math.max(0, Math.min(5000, Number(goal) || 0)),
+      coverage: { variations: useVariations, grid: useGrid },
     });
     onClose();
   };
@@ -355,6 +386,33 @@ export default function NewExtractionModal({
           {step === 3 && (
             <div className="wz-step">
               <div className="field">
+                <div className="auto-hood-bar">
+                  <button type="button" className="btn btn-sm btn-primary" disabled={autoState.loading} onClick={loadAutoBairros}>
+                    {autoState.loading ? 'Carregando bairros…' : `Carregar bairros de ${cidadeObj?.n || cidadeInput || 'município'} automaticamente`}
+                  </button>
+                  {autoBairros.length > 0 && (
+                    <>
+                      <button type="button" className="btn btn-sm" onClick={() => setBairros([...new Set([...bairros, ...autoBairros])])}>Selecionar todos ({autoBairros.length})</button>
+                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => setBairros([])}>Limpar</button>
+                    </>
+                  )}
+                </div>
+                {autoState.error && <span className="auto-hood-error">{autoState.error}</span>}
+                {autoBairros.length > 0 && (
+                  <div className="auto-hood-list" role="group" aria-label="Bairros do município">
+                    {autoBairros.map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        aria-pressed={bairros.some((b) => b.toLowerCase() === name.toLowerCase())}
+                        className={`quality-chip ${bairros.some((b) => b.toLowerCase() === name.toLowerCase()) ? 'on' : ''}`}
+                        onClick={() => toggleBairro(name)}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <label htmlFor="wzBairro">Bairros (opcional — deixe em branco para o município inteiro)</label>
                 <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>
                   Pode colar vários de uma vez separados por vírgula.
@@ -389,6 +447,20 @@ export default function NewExtractionModal({
                     </button>
                   </div>
                 ))}
+              </div>
+
+              <div className="goal-box">
+                <label htmlFor="wzGoal">Meta de leads novos</label>
+                <input id="wzGoal" type="number" min={0} max={5000} value={goal} onChange={(e) => setGoal(e.target.value)} />
+                <span>Só conta empresas que ainda não estão na sua base. 0 = sem meta.</span>
+                <label className="goal-option">
+                  <input type="checkbox" checked={useVariations} onChange={(e) => setUseVariations(e.target.checked)} />
+                  Variar o termo do nicho para achar mais empresas (ex.: dentista → clínica odontológica)
+                </label>
+                <label className="goal-option">
+                  <input type="checkbox" checked={useGrid} onChange={(e) => setUseGrid(e.target.checked)} />
+                  Se faltar, completar buscando por regiões do mapa
+                </label>
               </div>
 
               <div className="wz-review" style={{ marginTop: '12px' }}>

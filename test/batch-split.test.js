@@ -51,8 +51,8 @@ describe('batch split', () => {
   });
 
   it('caps giant matrices', () => {
-    const niches = Array.from({ length: 30 }, (_, i) => `n${i}`);
-    const neighs = Array.from({ length: 30 }, (_, i) => `b${i}`);
+    const niches = Array.from({ length: 40 }, (_, i) => `n${i}`);
+    const neighs = Array.from({ length: 40 }, (_, i) => `b${i}`);
     assert.equal(buildExtractionTargets(niches, neighs).length, MAX_MATRIX_TARGETS);
   });
 });

@@ -48,8 +48,8 @@ import { useTriage } from '../useTriage';
 import { CONTACT_STATUS, contactFor, timeAgo } from '../contactStatus.mjs';
 import { triageFor } from '../triage.mjs';
 
-const CONTACT_SYMBOL = { enviado: '→', entregue: '✓', lido: '✓✓', respondeu: '↩', descadastrado: '⊘' };
-const CONTACT_RANK = { enviado: 1, entregue: 2, lido: 3, respondeu: 4, descadastrado: 5 };
+const CONTACT_SYMBOL = { enviado: '→', entregue: '✓', lido: '✓✓', respondeu: '↩', descadastrado: '⊘', nao_contatar: '⊘' };
+const CONTACT_RANK = { enviado: 1, entregue: 2, lido: 3, respondeu: 4, descadastrado: 5, nao_contatar: 5 };
 
 const DEFAULT_COLS = [
   { id: 'nome', label: 'Empresa' },

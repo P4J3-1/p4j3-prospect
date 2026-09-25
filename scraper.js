@@ -27,6 +27,26 @@ function normalizePlaceText(place = {}) {
   };
 }
 
+/** Identificador estável do lugar no Google Maps (vem no link do resultado). */
+function placeIdFromUrl(url) {
+  const match = String(url || '').match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
+  return match ? match[1].toLowerCase() : '';
+}
+
+/** Chave de nome para pular empresas já na base (redes/filiais contam como a mesma). */
+function nameKey(name) {
+  return String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** Atributo de um resultado da lista; vazio se não der para ler. */
+async function readAttr(el, name) {
+  try {
+    return (await el?.getAttribute?.(name)) || '';
+  } catch {
+    return '';
+  }
+}
+
 function checkCancelled(cancelToken) {
   if (cancelToken?.cancelled) {
     const err = new Error('Scrape cancelled');
@@ -49,7 +69,18 @@ function describeExtractedPlace(place, current, total) {
   return `Empresa ${current} de ${total} extraída: ${place.name}${ratingText}${detailsText}.`;
 }
 
-async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = console.log, cancelToken = null) {
+/**
+ * @param {object} [options]
+ * @param {Set<string>} [options.skipKeys] placeIds e chaves de nome já conhecidos: pulados sem abrir.
+ * @param {number} [options.maxNew] para ao atingir este número de empresas novas.
+ * @param {{lat:number,lng:number}} [options.coords] busca centrada neste ponto do mapa.
+ */
+async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = console.log, cancelToken = null, options = {}) {
+  const skipKeys = options.skipKeys instanceof Set ? options.skipKeys : new Set();
+  const maxNew = Number(options.maxNew) > 0 ? Number(options.maxNew) : Infinity;
+  let skippedKnown = 0;
+  // O Maps repete a mesma empresa (anúncio + resultado orgânico): abre só uma vez.
+  const seenInRun = new Set();
   onProgress('Abrindo o navegador para a extração…');
   let browser;
   const launchAttempts = [
@@ -98,8 +129,11 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
     }
 
     const encodedQuery = encodeURIComponent(searchQuery);
+    const at = options.coords && Number.isFinite(options.coords.lat) && Number.isFinite(options.coords.lng)
+      ? `/@${options.coords.lat},${options.coords.lng},14z`
+      : '';
     checkCancelled(cancelToken);
-    await gotoWithRetry(page, `https://www.google.com/maps/search/${encodedQuery}`, onProgress);
+    await gotoWithRetry(page, `https://www.google.com/maps/search/${encodedQuery}${at}`, onProgress);
     await page.waitForTimeout(CONFIG.INITIAL_WAIT);
     checkCancelled(cancelToken);
 
@@ -133,8 +167,27 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
     onProgress(`Iniciando a extração de ${total} empresa${total === 1 ? '' : 's'}…`);
 
     for (let i = 0; i < total; i++) {
+      if (places.length >= maxNew) {
+        onProgress(`Meta de novos atingida nesta busca (${places.length}).`);
+        break;
+      }
       try {
         checkCancelled(cancelToken);
+        // Já na base (ou já contatado): pula sem abrir, o que economiza tempo e resultados.
+        const listingPid = placeIdFromUrl(await readAttr(listings[i], 'href'));
+        if (listingPid) {
+          if (seenInRun.has(listingPid)) continue;
+          seenInRun.add(listingPid);
+        }
+        if (skipKeys.size) {
+          const label = await readAttr(listings[i], 'aria-label');
+          const pid = listingPid;
+          if ((pid && skipKeys.has(`pid:${pid}`)) || (label && skipKeys.has(`name:${nameKey(label)}`))) {
+            skippedKnown += 1;
+            onProgress({ type: 'skipped-known', current: i + 1, total, found: places.length, message: `${label || 'Empresa'} já está na sua base; pulando.` });
+            continue;
+          }
+        }
         await listings[i].click();
         try { await page.waitForSelector('h1.DUwDvf', { timeout: 3000 }); } catch {}
         await page.waitForTimeout(500);
@@ -146,12 +199,14 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
         checkCancelled(cancelToken);
 
         let place = normalizePlaceText(await extractBusinessData(page));
+        place.placeId = placeIdFromUrl(place.googleMapsUrl) || placeIdFromUrl(await readAttr(listings[i], 'href'));
         if (!place.latitude || place.coordSource === 'none') {
           await page.waitForTimeout(700);
-          const retry = normalizePlaceText(await extractBusinessData(page));
+          const retry = { ...normalizePlaceText(await extractBusinessData(page)), placeId: place.placeId };
           if (retry.latitude && retry.coordSource !== 'none') place = retry;
         }
 
+        if (place.placeId && places.some((p) => p.placeId === place.placeId)) continue;
         if (place.name) {
           const lat = parseFloat(place.latitude);
           const lng = parseFloat(place.longitude);
@@ -258,6 +313,7 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
 
   onProgress(`Extração concluída: ${places.length} empresa${places.length === 1 ? '' : 's'} extraída${places.length === 1 ? '' : 's'}.`);
   statistics.total = places.length;
+  statistics.skippedKnown = skippedKnown;
   return { success: true, data: places, count: places.length, statistics };
 }
 
@@ -308,4 +364,4 @@ async function scrapeEmails(browser, url, onProgress, cancelToken = null) {
   }
 }
 
-module.exports = { scrapeGoogleMaps };
+module.exports = { scrapeGoogleMaps, placeIdFromUrl, nameKey };

@@ -24,6 +24,8 @@ class ContactStatusStore {
     const loaded = this._load();
     this.contacts = loaded.contacts || {};
     this.messageIndex = loaded.messageIndex || {};
+    // Resultado da checagem "tem WhatsApp?" por telefone (sem DDI).
+    this.waCheck = loaded.waCheck || {};
   }
 
   _load() {
@@ -49,7 +51,7 @@ class ContactStatusStore {
       this._prune();
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
       const tmp = `${this.filePath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ contacts: this.contacts, messageIndex: this.messageIndex }), { mode: 0o600 });
+      fs.writeFileSync(tmp, JSON.stringify({ contacts: this.contacts, messageIndex: this.messageIndex, waCheck: this.waCheck }), { mode: 0o600 });
       fs.renameSync(tmp, this.filePath);
     } catch (error) {
       console.warn("[CONTACT-STATUS] save:", error.message);
@@ -121,6 +123,87 @@ class ContactStatusStore {
     };
     this._emit(key);
     return this.contacts[key];
+  }
+
+  /**
+   * Importa o histórico do WhatsApp (conversas em que você mandou mensagem,
+   * inclusive pelo celular). Só sobe o status; nunca rebaixa nem apaga.
+   * @returns {number} quantos números mudaram
+   */
+  importHistory(entries = [], at = Date.now()) {
+    let changed = 0;
+    for (const item of entries) {
+      const key = phoneCore(item?.phone);
+      if (!key || key.length < 10) continue;
+      const prev = this.contacts[key] || {};
+      const status = item.repliedAt ? "respondeu" : "enviado";
+      const keepStatus = prev.status === "descadastrado" || prev.status === "nao_contatar" || (RANK[prev.status] || 0) >= RANK[status];
+      const next = {
+        ...prev,
+        status: keepStatus ? prev.status : status,
+        firstSentAt: Math.min(prev.firstSentAt || Infinity, item.firstSentAt || item.sentAt || at),
+        sentAt: Math.max(prev.sentAt || 0, item.sentAt || 0) || prev.sentAt || at,
+        repliedAt: prev.repliedAt || item.repliedAt || undefined,
+        messages: Math.max(Number(prev.messages) || 0, Number(item.messages) || 0),
+        replies: Math.max(Number(prev.replies) || 0, Number(item.replies) || 0),
+        lastEventAt: Math.max(prev.lastEventAt || 0, item.repliedAt || 0, item.sentAt || 0) || at,
+        source: prev.source || "historico",
+        name: prev.name || item.name || "",
+      };
+      if (JSON.stringify(next) === JSON.stringify(prev)) continue;
+      this.contacts[key] = next;
+      changed += 1;
+      this._emit(key);
+    }
+    return changed;
+  }
+
+  /**
+   * Marcação manual: "contatado" (já falei por fora), "nao_contatar"
+   * (nunca prospectar) ou "limpar" (volta a disponível).
+   */
+  setManual(phone, mode, { name = "", at = Date.now() } = {}) {
+    const key = phoneCore(phone);
+    if (!key || key.length < 10) throw new Error("Telefone inválido");
+    const prev = this.contacts[key] || {};
+    if (mode === "limpar") {
+      delete this.contacts[key];
+    } else if (mode === "nao_contatar") {
+      this.contacts[key] = { ...prev, status: "nao_contatar", manual: true, lastEventAt: at, name: prev.name || name };
+    } else if (mode === "contatado") {
+      this.contacts[key] = {
+        ...prev,
+        status: RANK[prev.status] ? prev.status : "enviado",
+        sentAt: prev.sentAt || at,
+        firstSentAt: prev.firstSentAt || at,
+        messages: Math.max(1, Number(prev.messages) || 0),
+        source: prev.source || "manual",
+        manual: true,
+        lastEventAt: at,
+        name: prev.name || name,
+      };
+    } else {
+      throw new Error("Marcação desconhecida");
+    }
+    this._emit(key);
+    return this.contacts[key] || null;
+  }
+
+  /** Guarda o resultado de "tem WhatsApp?" ({ dígitos: true|false }). */
+  recordWaCheck(map = {}, at = Date.now()) {
+    const changed = {};
+    for (const [phone, exists] of Object.entries(map)) {
+      const key = phoneCore(phone);
+      if (!key) continue;
+      this.waCheck[key] = { exists: !!exists, at };
+      changed[key] = this.waCheck[key];
+    }
+    this._scheduleSave();
+    return changed;
+  }
+
+  getWaCheck() {
+    return this.waCheck;
   }
 
   /** Resposta do lead. Só conta para números que já contatamos. */

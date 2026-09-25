@@ -476,14 +476,68 @@ function AppInner() {
       failedKeys: [...(job.failedKeys || [])],
       currentNeighborhood: '',
       foundCount: job.foundCount || 0,
+      goal: Number(job.goal) || 0,
+      newCount: Number(job.newCount) || 0,
     });
     const warnings = [];
     let addedThisRun = 0;
     let cancelled = false;
+    const goal = Number(job.goal) || 0;
+    const newSoFar = () => (Number(job.newCount) || 0) + addedThisRun;
+    const queue = [...remaining];
+
+    // Quando os alvos acabam antes da meta: variações do termo, depois a grade no mapa.
+    const expandCoverage = async () => {
+      const stored = readExtractionJobs().find((item) => String(item?.id) === String(searchId)) || job;
+      const cityName = job.municipality || String(job.city || '').split(',')[0].trim();
+      let extra = [];
+      if (job.coverage?.variations && !stored.variationsDone) {
+        for (const niche of job.niches) {
+          const res = await window.electronAPI.getNicheVariations?.(niche).catch(() => null);
+          for (const term of res?.terms || []) {
+            const places = job.neighborhoods.length ? job.neighborhoods : [''];
+            for (const neighborhood of places) {
+              extra.push({ niche: term, neighborhood, key: `var:${term}||${neighborhood}` });
+            }
+          }
+        }
+        updateExtractionJob(searchId, { variationsDone: true });
+      } else if (job.coverage?.grid && !stored.gridDone && cityName && job.uf) {
+        const res = await window.electronAPI.getCityGrid?.(cityName, job.uf, 4).catch(() => null);
+        (res?.points || []).forEach((coords, index) => {
+          for (const niche of job.niches) {
+            extra.push({ niche, neighborhood: `região ${index + 1} do mapa`, coords, key: `grid:${niche}||${index}` });
+          }
+        });
+        updateExtractionJob(searchId, { gridDone: true });
+      }
+      const known = new Set((stored.targets || job.targets).map((t) => t.key));
+      extra = extra.filter((t) => !known.has(t.key));
+      if (!extra.length) return false;
+      job.targets = [...(stored.targets || job.targets), ...extra];
+      updateExtractionJob(searchId, { targets: job.targets });
+      setActiveExtraction((current) => (current && current.id === searchId ? { ...current, targets: job.targets } : current));
+      queue.push(...extra);
+      return true;
+    };
+
     try {
-      for (const target of remaining) {
+      while (true) {
+        if (goal && newSoFar() >= goal) break;
+        if (!queue.length) {
+          if (!goal) break;
+          const expanded = await expandCoverage();
+          if (!expanded) {
+            // Ainda pode haver outra etapa (variações feitas, grade pendente).
+            if (!(await expandCoverage())) break;
+          }
+          continue;
+        }
+        const target = queue.shift();
         const display = target.neighborhood ? `${target.niche} — ${target.neighborhood}` : target.niche;
-        const targetQuery = [target.niche, target.neighborhood, job.city].filter(Boolean).join(' ').trim();
+        const targetQuery = target.coords
+          ? [target.niche, job.city].filter(Boolean).join(' ').trim()
+          : [target.niche, target.neighborhood, job.city].filter(Boolean).join(' ').trim();
         const flatIndex = Math.max(0, job.targets.findIndex((item) => item.key === target.key));
         setActiveExtraction((current) => (current && current.id === searchId
           ? { ...current, currentNeighborhood: display }
@@ -495,6 +549,9 @@ function AppInner() {
             neighborhoodIndex: flatIndex,
             totalNeighborhoods: job.targets.length,
             batchComplete: flatIndex === job.targets.length - 1,
+            skipKnown: true,
+            maxNew: goal ? Math.max(1, goal - newSoFar()) : 0,
+            coords: target.coords || null,
           });
         } catch (err) {
           res = { success: false, error: err?.message || 'Falha na busca.' };
@@ -518,13 +575,14 @@ function AppInner() {
         const stored = readExtractionJobs().find((item) => String(item?.id) === String(searchId)) || {};
         const completedKeys = [...new Set([...(stored.completedKeys || []), target.key])];
         const foundCount = (stored.foundCount || 0) + targetLeads.length;
-        updateExtractionJob(searchId, { completedKeys, foundCount });
+        updateExtractionJob(searchId, { completedKeys, foundCount, newCount: newSoFar() });
         setActiveExtraction((current) => (current && current.id === searchId
           ? {
             ...current,
             completedNeighborhoods: [...new Set([...current.completedNeighborhoods, display])],
             completedKeys: [...new Set([...current.completedKeys, target.key])],
             foundCount,
+            newCount: newSoFar(),
           }
           : current));
       }
@@ -548,9 +606,10 @@ function AppInner() {
         type: warnings.length ? 'info' : 'success',
         category: 'scraper',
         title: warnings.length ? 'Extração concluída parcialmente' : 'Extração concluída',
-        message: warnings.length
+        message: (warnings.length
           ? `${addedThisRun} novos leads adicionados. ${warnings[0]}`
-          : `${addedThisRun} novos leads adicionados à base.`,
+          : `${addedThisRun} novos leads adicionados à base.`)
+          + (goal && newSoFar() < goal ? ` A região esgotou antes da meta de ${goal}: tente outro nicho ou cidade.` : ''),
         duration: 5000,
       });
     } catch (err) {
@@ -566,7 +625,7 @@ function AppInner() {
     }
   };
 
-  const handleStartExtraction = async ({ niche, niches, neigh, neighborhoods, city, limit }) => {
+  const handleStartExtraction = async ({ niche, niches, neigh, neighborhoods, city, limit, goal, coverage }) => {
     if (activeExtraction || extractionRunningRef.current) {
       addNotification({
         type: 'info',
@@ -579,7 +638,7 @@ function AppInner() {
     const nicheList = (Array.isArray(niches) && niches.length ? niches : splitBatchInput(niche, { max: 20 })).slice(0, 20);
     const neighList = (Array.isArray(neighborhoods) && neighborhoods.length
       ? neighborhoods
-      : splitBatchInput(neigh, { max: 50 })).slice(0, 50);
+      : splitBatchInput(neigh, { max: 50 })).slice(0, 600);
     if (!nicheList.length) {
       addNotification({ type: 'error', category: 'scraper', title: 'Falta o nicho', message: 'Informe ao menos um nicho para iniciar a extração.' });
       return;
@@ -613,6 +672,10 @@ function AppInner() {
       qstr,
       label: `${nicheList.length > 1 ? `${nicheList.length} nichos` : nicheList[0]} · ${neighList.length ? `${neighList.length} bairro(s)` : 'município inteiro'}${city ? ` · ${city}` : ''}`,
       limit: Number.isFinite(Number(limit)) ? Number(limit) : 1000,
+      // Meta de leads novos (sem repetir a base). 0 = percorre todos os alvos.
+      goal: Math.max(0, Math.min(5000, Number(goal) || 0)),
+      coverage: { variations: coverage?.variations !== false, grid: coverage?.grid !== false },
+      newCount: 0,
       targets,
       status: 'running',
       completedKeys: [],

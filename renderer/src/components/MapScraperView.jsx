@@ -35,9 +35,9 @@ import {
 } from '../leadData';
 import { useNotifications } from './NotificationCenter';
 import LeadIntelPanel from './LeadIntelPanel';
-import { useContactStatus } from '../useContactStatus';
+import { useContactStatus, useWaCheck } from '../useContactStatus';
 import { useTriage } from '../useTriage';
-import { CONTACT_STATUS, contactFor, timeAgo } from '../contactStatus.mjs';
+import { CONTACT_STATUS, contactBucket, contactFor, phoneCore, timeAgo } from '../contactStatus.mjs';
 import { SEGMENTS, triageFor } from '../triage.mjs';
 
 // Filtros de qualidade: segmentos da triagem (qualquer um marcado) + requisitos.
@@ -47,13 +47,23 @@ const QUALITY_CHIPS = [
   { id: 'site_fraco', label: 'Site fraco', kind: 'segment' },
   { id: 'atendimento_manual', label: 'WhatsApp sem automação', kind: 'segment' },
   { id: 'tel', label: 'Com telefone', kind: 'require' },
+  { id: 'whatsapp', label: 'Tem WhatsApp', kind: 'require' },
   { id: 'decisor', label: 'Dono identificado', kind: 'require' },
+];
+
+// Abas por situação do contato; o lead muda de aba sozinho quando o WhatsApp confirma.
+const SCRAPER_TABS = [
+  ['disponiveis', 'Disponíveis', 'Ainda não receberam mensagem'],
+  ['contatados', 'Contatados', 'Já receberam mensagem (pelo app ou pelo celular)'],
+  ['responderam', 'Responderam', 'Responderam depois da sua mensagem'],
+  ['nao_contatar', 'Não contatar', 'Marcados para não prospectar ou que pediram para sair'],
+  ['todos', 'Todos', 'Todos os leads da busca'],
 ];
 
 function readScraperTab() {
   try {
     const saved = localStorage.getItem('sigma_scraper_tab');
-    return ['disponiveis', 'contatados', 'todos'].includes(saved) ? saved : 'disponiveis';
+    return SCRAPER_TABS.some(([id]) => id === saved) ? saved : 'disponiveis';
   } catch {
     return 'disponiveis';
   }
@@ -288,7 +298,11 @@ export default function MapScraperView({
   const [qualityChips, setQualityChips] = useState([]);
   const [triageProgress, setTriageProgress] = useState(null);
   const contacts = useContactStatus();
+  const waCheck = useWaCheck();
   const triage = useTriage();
+  const [groupBy, setGroupBy] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [waChecking, setWaChecking] = useState(null);
 
   // Filtros do Feed Dock / List Pop
   const [feedSearch, setFeedSearch] = useState('');
@@ -485,9 +499,9 @@ export default function MapScraperView({
     const wantedSegments = new Set(segmentChips.flatMap((c) => [c.id, ...(c.also || [])]));
     return displayLeads.filter((lead) => {
       const contact = contactFor(contacts, lead);
-      if (scraperTab === 'disponiveis' && contact) return false;
-      if (scraperTab === 'contatados' && !contact) return false;
+      if (scraperTab !== 'todos' && contactBucket(contact) !== scraperTab) return false;
       if (qualityChips.includes('tel') && !getLeadPhone(lead)) return false;
+      if (qualityChips.includes('whatsapp') && waCheck[phoneCore(getLeadPhone(lead))]?.exists !== true) return false;
       if (qualityChips.includes('decisor') && !lead.decisor) return false;
       if (wantedSegments.size) {
         const t = triageFor(triage, lead);
@@ -521,8 +535,18 @@ export default function MapScraperView({
 
       return true;
     }).sort((a, b) => {
+      if (groupBy) {
+        const ga = groupBy === 'bairro' ? (getLeadBairro(a) || 'Sem bairro') : getLeadCat(a);
+        const gb = groupBy === 'bairro' ? (getLeadBairro(b) || 'Sem bairro') : getLeadCat(b);
+        if (ga !== gb) return ga.localeCompare(gb, 'pt-BR');
+      }
       if (filterOrd === 'potencial') return (triageFor(triage, b)?.score ?? -1) - (triageFor(triage, a)?.score ?? -1);
-      if (scraperTab === 'contatados') return (contactFor(contacts, b)?.lastEventAt || 0) - (contactFor(contacts, a)?.lastEventAt || 0);
+      if (filterOrd === 'reviews') return Number(getLeadReviews(b) || 0) - Number(getLeadReviews(a) || 0);
+      if (filterOrd === 'recente') return (contactFor(contacts, b)?.lastEventAt || 0) - (contactFor(contacts, a)?.lastEventAt || 0);
+      if (filterOrd === 'antigo') return (contactFor(contacts, a)?.lastEventAt || Infinity) - (contactFor(contacts, b)?.lastEventAt || Infinity);
+      if (scraperTab !== 'disponiveis' && scraperTab !== 'todos' && filterOrd === 'score') {
+        return (contactFor(contacts, b)?.lastEventAt || 0) - (contactFor(contacts, a)?.lastEventAt || 0);
+      }
       if (filterOrd === 'score') return getLeadScore(b) - getLeadScore(a);
       if (filterOrd === 'rating') return getLeadRating(b) - getLeadRating(a);
       if (filterOrd === 'name') return getLeadName(a).localeCompare(getLeadName(b), 'pt-BR');
@@ -543,13 +567,71 @@ export default function MapScraperView({
     qualityChips,
     contacts,
     triage,
+    waCheck,
+    groupBy,
   ]);
 
   const tabCounts = useMemo(() => {
-    let contacted = 0;
-    for (const lead of displayLeads) if (contactFor(contacts, lead)) contacted += 1;
-    return { todos: displayLeads.length, contatados: contacted, disponiveis: displayLeads.length - contacted };
+    const counts = { todos: displayLeads.length, disponiveis: 0, contatados: 0, responderam: 0, nao_contatar: 0 };
+    for (const lead of displayLeads) counts[contactBucket(contactFor(contacts, lead))] += 1;
+    return counts;
   }, [displayLeads, contacts]);
+
+  const uncheckedPhones = useMemo(
+    () => visibleLeads.map(getLeadPhone).filter((p) => p && !waCheck[phoneCore(p)]),
+    [visibleLeads, waCheck],
+  );
+
+  const handleSyncContacts = async () => {
+    if (!window.contactAPI?.sync) return;
+    setSyncing(true);
+    try {
+      const res = await window.contactAPI.sync();
+      if (!res?.success) throw new Error(res?.error || 'Não foi possível sincronizar.');
+      addNotification({
+        type: 'success',
+        category: 'whatsapp',
+        title: 'Contatados sincronizados',
+        message: res.found
+          ? `${res.found} conversa(s) com mensagem sua no WhatsApp · ${res.changed} status atualizado(s).`
+          : 'Nenhuma conversa encontrada. Conecte o WhatsApp e aguarde a sincronização terminar.',
+      });
+    } catch (error) {
+      addNotification({ type: 'warning', category: 'whatsapp', title: 'Sincronização', message: error?.message || 'Falhou.' });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleCheckWhatsApp = async () => {
+    if (!window.contactAPI?.checkWhatsApp || !uncheckedPhones.length) return;
+    setWaChecking({ done: 0, total: uncheckedPhones.length });
+    const off = window.contactAPI.onWaCheck?.(({ done, total }) => setWaChecking({ done, total }));
+    try {
+      const res = await window.contactAPI.checkWhatsApp(uncheckedPhones);
+      if (!res?.success) throw new Error(res?.error || 'Não foi possível checar.');
+      addNotification({
+        type: 'success',
+        category: 'whatsapp',
+        title: 'Checagem concluída',
+        message: `${res.withWhatsapp} de ${res.checked} número(s) têm WhatsApp.`,
+      });
+    } catch (error) {
+      addNotification({ type: 'warning', category: 'whatsapp', title: 'Checar WhatsApp', message: error?.message || 'Falhou.' });
+    } finally {
+      if (typeof off === 'function') off();
+      setWaChecking(null);
+    }
+  };
+
+  const markLead = async (lead, mode) => {
+    const phone = getLeadPhone(lead);
+    if (!phone || !window.contactAPI?.mark) return;
+    const res = await window.contactAPI.mark(phone, mode, getLeadName(lead));
+    if (!res?.success) {
+      addNotification({ type: 'warning', category: 'system', title: 'Marcação', message: res?.error || 'Não foi possível marcar.' });
+    }
+  };
 
   useEffect(() => {
     try { localStorage.setItem('sigma_scraper_tab', scraperTab); } catch {}
@@ -1447,6 +1529,9 @@ export default function MapScraperView({
             >
               <option value="score">Maior score</option>
               <option value="potencial">Maior potencial (triagem)</option>
+              <option value="reviews">Mais avaliações</option>
+              <option value="recente">Contato mais recente</option>
+              <option value="antigo">Contato mais antigo</option>
               <option value="rating">Melhor avaliados</option>
               <option value="name">Nome A–Z</option>
             </select>
@@ -1482,6 +1567,9 @@ export default function MapScraperView({
           {isProgressDetailsOpen && (
             <section className="map-progress-detail" aria-label="Detalhes da extração em andamento">
               <div className="map-progress-stats">
+                {Number(activeExtraction?.goal) > 0 && (
+                  <span><b>{Number(activeExtraction?.newCount) || 0}/{activeExtraction.goal}</b><small>novos na base (meta)</small></span>
+                )}
                 <span><b>{foundSoFar}</b><small>empresas encontradas</small></span>
                 <span><b>{completedNeighborhoods.length}/{plannedNeighborhoods.length}</b><small>{activeExtraction?.hasNeighborhoodPlan ? 'bairros concluídos' : 'etapas concluídas'}</small></span>
                 <span><b>{pendingNeighborhoods.length}</b><small>{activeExtraction?.hasNeighborhoodPlan ? 'bairros pendentes' : 'etapas pendentes'}</small></span>
@@ -1558,11 +1646,7 @@ export default function MapScraperView({
         </div>
 
         <div className="scraper-tabs" role="tablist" aria-label="Situação do lead">
-          {[
-            ['disponiveis', 'Disponíveis', 'Ainda não receberam mensagem'],
-            ['contatados', 'Contatados', 'Já receberam mensagem pelo WhatsApp'],
-            ['todos', 'Todos', 'Todos os leads da busca'],
-          ].map(([id, label, hint]) => (
+          {SCRAPER_TABS.map(([id, label, hint]) => (
             <button
               key={id}
               type="button"
@@ -1589,6 +1673,26 @@ export default function MapScraperView({
               {chip.label}
             </button>
           ))}
+        </div>
+
+        <div className="scraper-sync-bar">
+          <button type="button" className="btn btn-sm" disabled={syncing} onClick={handleSyncContacts} title="Traz do WhatsApp quem você já chamou, inclusive pelo celular">
+            {syncing ? 'Sincronizando…' : '↻ Sincronizar contatados'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!!waChecking || !uncheckedPhones.length}
+            onClick={handleCheckWhatsApp}
+            title="Pergunta ao WhatsApp quais números desta lista têm conta"
+          >
+            {waChecking ? `Checando ${waChecking.done}/${waChecking.total}` : `Checar WhatsApp (${uncheckedPhones.length})`}
+          </button>
+          <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} aria-label="Agrupar lista">
+            <option value="">Sem agrupar</option>
+            <option value="bairro">Agrupar por bairro</option>
+            <option value="nicho">Agrupar por nicho</option>
+          </select>
         </div>
 
         {(untriagedVisible > 0 || triageProgress) && (
@@ -1727,9 +1831,15 @@ export default function MapScraperView({
                 straightDist = fmtD(meters);
               }
 
+              const groupKey = groupBy ? (groupBy === 'bairro' ? (getLeadBairro(lead) || 'Sem bairro') : getLeadCat(lead)) : '';
+              const prevLead = pos > 0 ? visibleLeads[pos - 1] : null;
+              const prevKey = groupBy && prevLead ? (groupBy === 'bairro' ? (getLeadBairro(prevLead) || 'Sem bairro') : getLeadCat(prevLead)) : null;
+              const leadWa = phone ? waCheck[phoneCore(phone)] : null;
+              const bucket = contactBucket(leadContact);
               return (
+                <React.Fragment key={leadId}>
+                {groupBy && groupKey !== prevKey && <div className="feed-group-head">{groupKey}</div>}
                 <button
-                  key={leadId}
                   ref={(el) => (leadCardRefs.current[leadId] = el)}
                   type="button"
                   className="lead-card"
@@ -1754,7 +1864,7 @@ export default function MapScraperView({
                     {hood || city ? `${hood || city}${uf ? ` · ${uf}` : ''}` : getLeadCat(lead)}
                   </div>
 
-                  {(leadTriage || leadContact) && (
+                  {(leadTriage || leadContact || leadWa) && (
                     <div className="lead-badges">
                       {leadContact && (
                         <span className="lead-badge" style={{ '--badge': CONTACT_STATUS[leadContact.status]?.color }} title={`${CONTACT_STATUS[leadContact.status]?.label} ${timeAgo(leadContact.lastEventAt)}`}>
@@ -1766,6 +1876,7 @@ export default function MapScraperView({
                           Potencial {leadTriage.score}
                         </span>
                       )}
+                      {leadWa && !leadWa.exists && <span className="lead-badge" style={{ '--badge': '#94a3b8' }}>Sem WhatsApp</span>}
                       {leadTriage?.segments.filter((seg) => seg !== 'alto_potencial').slice(0, 2).map((seg) => (
                         <span key={seg} className="lead-badge" style={{ '--badge': SEGMENTS[seg]?.color }}>
                           {SEGMENTS[seg]?.label}
@@ -1859,6 +1970,16 @@ export default function MapScraperView({
                       </button>
                     )}
 
+                    {phone && bucket === 'disponiveis' && (
+                      <>
+                        <button type="button" className="icon-btn lead-mark" title="Já contatei (sai de Disponíveis)" aria-label="Marcar como já contatado" onClick={(e) => { e.stopPropagation(); markLead(lead, 'contatado'); }}>✓</button>
+                        <button type="button" className="icon-btn lead-mark" title="Não contatar (sai da prospecção e das campanhas)" aria-label="Marcar para não contatar" onClick={(e) => { e.stopPropagation(); markLead(lead, 'nao_contatar'); }}>⊘</button>
+                      </>
+                    )}
+                    {phone && bucket !== 'disponiveis' && (leadContact?.manual || bucket === 'nao_contatar') && (
+                      <button type="button" className="icon-btn lead-mark" title="Voltar para Disponíveis" aria-label="Desfazer marcação" onClick={(e) => { e.stopPropagation(); markLead(lead, 'limpar'); }}>↺</button>
+                    )}
+
                     {straightDist && (
                       <span className="dist" title="Distância em linha reta">
                         {straightDist}
@@ -1866,6 +1987,7 @@ export default function MapScraperView({
                     )}
                   </div>
                 </button>
+                </React.Fragment>
               );
             })
           )}

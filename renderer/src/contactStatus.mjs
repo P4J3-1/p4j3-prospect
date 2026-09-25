@@ -5,7 +5,16 @@ export const CONTACT_STATUS = {
   lido: { label: 'Lido', short: 'Lido', color: '#0ea5e9' },
   respondeu: { label: 'Respondeu', short: 'Respondeu', color: '#10a37f' },
   descadastrado: { label: 'Pediu para sair', short: 'Saiu', color: '#dc2626' },
+  nao_contatar: { label: 'Não contatar', short: 'Não contatar', color: '#475569' },
 };
+
+/** Aba do Scraper em que o lead aparece, pelo status de contato. */
+export function contactBucket(entry) {
+  if (!entry) return 'disponiveis';
+  if (entry.status === 'nao_contatar' || entry.status === 'descadastrado') return 'nao_contatar';
+  if (entry.status === 'respondeu') return 'responderam';
+  return 'contatados';
+}
 
 export function phoneCore(phone) {
   const digits = String(phone || '').replace(/@.*$/, '').replace(/\D/g, '');

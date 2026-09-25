@@ -1432,6 +1432,107 @@ class BaileysProvider extends WhatsAppProvider {
    * Lista contatos conhecidos (agenda/sincronizados) + chats individuais.
    * Usado na montagem de campanhas manuais.
    */
+  /** Telefone de um JID, inclusive @lid (tabela local + mapeamento do próprio WhatsApp). */
+  async resolvePhoneJid(jid) {
+    if (!jid) return null;
+    const known = this._getPhoneJid(jid);
+    if (known) return known;
+    if (!this._isLidJid(jid)) return null;
+    try {
+      const pn = await this.sock?.signalRepository?.lidMapping?.getPNForLID?.(jid);
+      if (pn) {
+        const phoneJid = String(pn).replace(/:\d+(?=@)/, "");
+        if (this._isPhoneJid(phoneJid)) {
+          this._registerAlias(jid, phoneJid);
+          return phoneJid;
+        }
+      }
+    } catch { /* mapeamento indisponível: segue sem telefone */ }
+    return null;
+  }
+
+  /**
+   * Histórico de prospecção: conversas individuais em que você já mandou
+   * mensagem (inclusive pelo celular, que o WhatsApp sincroniza), com o
+   * telefone resolvido e se houve resposta depois do primeiro envio.
+   */
+  async getOutreachHistory() {
+    const out = [];
+    const jids = new Set([...Object.keys(this._chats || {}), ...Object.keys(this._messages || {})]);
+    for (const jid of jids) {
+      if (!jid || jid.endsWith("@g.us") || jid.includes("@broadcast") || jid.includes("@newsletter")) continue;
+      const msgs = this._messages[jid] || [];
+      let firstSent = 0;
+      let lastSent = 0;
+      let sent = 0;
+      for (const m of msgs) {
+        if (!m?.key?.fromMe) continue;
+        const ts = this._timestampToNumber(m.messageTimestamp) * 1000;
+        sent += 1;
+        if (ts && (!firstSent || ts < firstSent)) firstSent = ts;
+        if (ts > lastSent) lastSent = ts;
+      }
+      const chat = this._chats?.[jid];
+      if (!sent && String(chat?.lastMessage || "").startsWith("Você: ")) {
+        sent = 1;
+        firstSent = lastSent = this._timestampToNumber(chat.timestamp) * 1000;
+      }
+      if (!sent) continue;
+      let repliedAt = 0;
+      let replies = 0;
+      for (const m of msgs) {
+        if (m?.key?.fromMe) continue;
+        const ts = this._timestampToNumber(m.messageTimestamp) * 1000;
+        if (firstSent && ts > firstSent) {
+          replies += 1;
+          if (!repliedAt || ts < repliedAt) repliedAt = ts;
+        }
+      }
+      const phoneJid = await this.resolvePhoneJid(jid);
+      if (!phoneJid) continue;
+      out.push({
+        phone: phoneJid.replace(/@.*$/, ""),
+        firstSentAt: firstSent || null,
+        sentAt: lastSent || firstSent || null,
+        messages: sent,
+        repliedAt: repliedAt || null,
+        replies,
+        name: chat?.name || "",
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Quais números têm WhatsApp. Testa também a variante com/sem o 9 (BR).
+   * @returns {Promise<Record<string, boolean>>} dígitos informados → tem conta
+   */
+  async checkWhatsAppNumbers(phones = []) {
+    if (!this.sock || typeof this.sock.onWhatsApp !== "function") throw new Error("WhatsApp não conectado");
+    const result = {};
+    const unique = [...new Set(phones.map((p) => String(p || "").replace(/\D/g, "")).filter((d) => d.length >= 10))];
+    for (let i = 0; i < unique.length; i += 20) {
+      const batch = unique.slice(i, i + 20);
+      const variantOf = new Map();
+      for (const raw of batch) {
+        const d = raw.startsWith("55") ? raw : `55${raw}`;
+        const variants = [d];
+        if (d.length === 12) variants.push(d.slice(0, 4) + "9" + d.slice(4));
+        if (d.length === 13 && d[4] === "9") variants.push(d.slice(0, 4) + d.slice(5));
+        for (const v of variants) variantOf.set(v, raw);
+        result[raw] = false;
+      }
+      const found = await this.sock.onWhatsApp(...variantOf.keys());
+      for (const hit of Array.isArray(found) ? found : []) {
+        if (!hit || hit.exists === false || !hit.jid) continue;
+        const digits = String(hit.jid).replace(/@.*$/, "").replace(/:\d+$/, "");
+        const raw = variantOf.get(digits);
+        if (raw) result[raw] = true;
+      }
+    }
+    return result;
+  }
+
   getContacts() {
     const out = new Map();
 

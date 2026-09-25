@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
+  getNeighborhoods: (city, uf) => ipcRenderer.invoke("extraction-neighborhoods", { city, uf }),
+  getCityGrid: (city, uf, size) => ipcRenderer.invoke("extraction-grid", { city, uf, size }),
+  getNicheVariations: (niche) => ipcRenderer.invoke("extraction-variations", { niche }),
   startScrape: (query, maxResults, queryId, progressContext = {}) =>
     ipcRenderer.invoke("start-scrape", { query, maxResults, queryId, progressContext }),
   cancelScrape: (queryId) =>
@@ -112,6 +115,14 @@ contextBridge.exposeInMainWorld("kanbanAPI", {
 
 contextBridge.exposeInMainWorld("contactAPI", {
   getAll: () => ipcRenderer.invoke("contact-status-get-all"),
+  sync: () => ipcRenderer.invoke("contact-status-sync"),
+  mark: (phone, mode, name) => ipcRenderer.invoke("contact-status-mark", { phone, mode, name }),
+  checkWhatsApp: (phones) => ipcRenderer.invoke("whatsapp-check-numbers", { phones }),
+  onWaCheck: (callback) => {
+    const listener = (_, payload) => callback(payload);
+    ipcRenderer.on("wa-check-changed", listener);
+    return () => ipcRenderer.removeListener("wa-check-changed", listener);
+  },
   onChanged: (callback) => {
     const listener = (_, payload) => callback(payload);
     ipcRenderer.on("contact-status-changed", listener);

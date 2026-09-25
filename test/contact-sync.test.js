@@ -1,0 +1,92 @@
+const { describe, it, before } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { ContactStatusStore } = require('../utils/contact-status-store');
+const { BaileysProvider } = require('../whatsapp/baileys-provider');
+
+const tmp = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+
+let contactBucket;
+before(async () => {
+  ({ contactBucket } = await import('../renderer/src/contactStatus.mjs'));
+});
+
+function makeProvider() {
+  const provider = new BaileysProvider({}, () => {}, () => {}, tmp('p4j3-bp-'));
+  const sec = (ms) => Math.floor(ms / 1000);
+  const t0 = Date.UTC(2026, 8, 1, 12);
+  provider._chats = {
+    // Conversa por @lid, sem telefone na tabela local: resolve pelo mapeamento do WhatsApp.
+    '111@lid': { jid: '111@lid', name: 'Padaria', lastMessage: 'Oi', timestamp: sec(t0) },
+    // Só o resumo do chat indica que você mandou a última mensagem (pelo celular).
+    '5511900000002@s.whatsapp.net': { jid: '5511900000002@s.whatsapp.net', name: 'Clínica', lastMessage: 'Você: Olá!', timestamp: sec(t0) },
+    // Conversa só recebida: não é prospecção.
+    '5511900000003@s.whatsapp.net': { jid: '5511900000003@s.whatsapp.net', lastMessage: 'Promoção!', timestamp: sec(t0) },
+    '123@g.us': { jid: '123@g.us', lastMessage: 'Você: grupo', timestamp: sec(t0), isGroup: true },
+  };
+  provider._messages = {
+    '111@lid': [
+      { key: { fromMe: true, id: 'a' }, messageTimestamp: sec(t0) },
+      { key: { fromMe: false, id: 'b' }, messageTimestamp: sec(t0 + 60000) },
+    ],
+  };
+  provider.sock = {
+    signalRepository: { lidMapping: { getPNForLID: async (lid) => (lid === '111@lid' ? '5511900000001:3@s.whatsapp.net' : null) } },
+    onWhatsApp: async (...numbers) => numbers
+      .filter((n) => n === '5511900000001' || n === '551133334444')
+      .map((n) => ({ jid: `${n}@s.whatsapp.net`, exists: true })),
+  };
+  return { provider, t0 };
+}
+
+describe('sincronizar contatados', () => {
+  it('lê o histórico do WhatsApp, inclusive @lid e envios pelo celular', async () => {
+    const { provider, t0 } = makeProvider();
+    const history = await provider.getOutreachHistory();
+    const byPhone = Object.fromEntries(history.map((h) => [h.phone, h]));
+    assert.deepEqual(Object.keys(byPhone).sort(), ['5511900000001', '5511900000002']);
+    assert.equal(byPhone['5511900000001'].repliedAt, t0 + 60000);
+    assert.equal(byPhone['5511900000002'].messages, 1);
+    assert.equal(provider._getPhoneJid('111@lid'), '5511900000001@s.whatsapp.net', 'mapeamento fica memorizado');
+  });
+
+  it('checa WhatsApp testando com e sem o 9', async () => {
+    const { provider } = makeProvider();
+    const result = await provider.checkWhatsAppNumbers(['(11) 90000-0001', '1133334444', '11988887777']);
+    assert.deepEqual(result, { 11900000001: true, 1133334444: true, 11988887777: false });
+  });
+
+  it('importa histórico sem rebaixar status e respeita "não contatar"', () => {
+    const store = new ContactStatusStore(tmp('p4j3-cs-'));
+    store.recordSent('11900000001', { messageId: 'x' });
+    store.recordReceipt('x', 'read');
+    store.setManual('11900000009', 'nao_contatar');
+    const changed = store.importHistory([
+      { phone: '5511900000001', sentAt: 5, messages: 1 },
+      { phone: '5511900000002', sentAt: 5, messages: 2, repliedAt: 9, replies: 1 },
+      { phone: '5511900000009', sentAt: 5, messages: 1 },
+    ]);
+    assert.equal(store.get('11900000001').status, 'lido');
+    assert.equal(store.get('11900000002').status, 'respondeu');
+    assert.equal(store.get('11900000009').status, 'nao_contatar');
+    assert.ok(changed >= 1);
+    assert.equal(store.importHistory([{ phone: '5511900000002', sentAt: 5, messages: 2, repliedAt: 9, replies: 1 }]), 0, 'reimportar não muda nada');
+    store.flush();
+  });
+
+  it('marcações manuais e aba do Scraper', () => {
+    const store = new ContactStatusStore(tmp('p4j3-cs-'));
+    store.setManual('11911112222', 'contatado');
+    assert.equal(contactBucket(store.get('11911112222')), 'contatados');
+    store.setManual('11911112222', 'nao_contatar');
+    assert.equal(contactBucket(store.get('11911112222')), 'nao_contatar');
+    store.setManual('11911112222', 'limpar');
+    assert.equal(contactBucket(store.get('11911112222')), 'disponiveis');
+    assert.throws(() => store.setManual('123', 'contatado'));
+    store.recordWaCheck({ 11911112222: true });
+    assert.equal(store.getWaCheck()['11911112222'].exists, true);
+    store.flush();
+  });
+});
