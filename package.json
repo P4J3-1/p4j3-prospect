@@ -1,6 +1,6 @@
 {
   "name": "p4j3-prospect",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "P4J3 Prospect — prospecção com Google Maps, lead scoring e WhatsApp (Electron + Playwright)",
   "main": "main.js",
   "license": "MIT",
