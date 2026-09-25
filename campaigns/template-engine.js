@@ -1,3 +1,5 @@
+const { deriveGreeting } = require('./greeting');
+
 const VARIABLE_MAP = {
   'nome': 'name',
   'empresa': 'name',
@@ -21,16 +23,35 @@ const VARIABLE_MAP = {
   'mensagem_whatsapp_ia': 'mensagem_whatsapp_ia',
   'ticket_estimado': 'ticket_estimado',
   'chance_resposta': 'chance_resposta',
+  'saudacao': 'saudacao',
+  'decisor': 'decisor',
+};
+
+// Variáveis calculadas: sempre têm valor, mesmo sem dado salvo no lead.
+const COMPUTED_VARS = {
+  saudacao: (lead) => deriveGreeting(lead),
+  decisor: (lead) => (typeof lead.decisor === 'object' ? lead.decisor?.nome : lead.decisor) || '',
 };
 
 function resolveVar(varName, leadData) {
   const field = VARIABLE_MAP[varName.toLowerCase()] || varName.toLowerCase();
-  const value = leadData[field];
+  const lead = leadData || {};
+  const value = COMPUTED_VARS[field] ? COMPUTED_VARS[field](lead) : lead[field];
   if (value == null || value === '') return '';
   return String(value)
     .replace(/[<>]/g, '')
     .replace(/[\n\r]+/g, ' ')
     .trim();
+}
+
+// {{var}} ou {{var|padrão}}. Variável vazia vira o padrão ou some: mandar
+// "{{mensagem_whatsapp_ia}}" cru para o lead é pior do que omitir o trecho.
+const VAR_RE = /\{\{(\w+)(?:\|([^{}]*))?\}\}/g;
+
+function fillVars(text, leadData) {
+  return String(text).replace(VAR_RE, (match, varName, fallback) => (
+    resolveVar(varName, leadData) || String(fallback || '').trim()
+  ));
 }
 
 /**
@@ -73,33 +94,17 @@ function _resolveOneSpintax(text) {
 
 function interpolate(template, leadData) {
   if (typeof template === 'string') {
-    let result = template.replace(/\{\{(\w+)\}\}/g, (match, varName) => resolveVar(varName, leadData) || match);
-    result = resolveSpintax(result);
-    return result;
+    return resolveSpintax(fillVars(template, leadData));
   }
   if (typeof template === 'object' && template !== null) {
     const result = {};
-    if (template.text) {
-      result.text = resolveSpintax(
-        String(template.text).replace(/\{\{(\w+)\}\}/g, (match, varName) => resolveVar(varName, leadData) || match)
-      );
-    }
-    if (template.header) {
-      result.header = resolveSpintax(
-        String(template.header).replace(/\{\{(\w+)\}\}/g, (match, varName) => resolveVar(varName, leadData) || match)
-      );
-    }
-    if (template.footer) {
-      result.footer = resolveSpintax(
-        String(template.footer).replace(/\{\{(\w+)\}\}/g, (match, varName) => resolveVar(varName, leadData) || match)
-      );
-    }
+    if (template.text) result.text = resolveSpintax(fillVars(template.text, leadData));
+    if (template.header) result.header = resolveSpintax(fillVars(template.header, leadData));
+    if (template.footer) result.footer = resolveSpintax(fillVars(template.footer, leadData));
     if (Array.isArray(template.buttons)) {
       result.buttons = template.buttons.map(b => ({
         id: b.id || b.buttonId,
-        text: resolveSpintax(
-          String(b.text || b.buttonText || '').replace(/\{\{(\w+)\}\}/g, (match, varName) => resolveVar(varName, leadData) || match)
-        ),
+        text: resolveSpintax(fillVars(b.text || b.buttonText || '', leadData)),
       }));
     }
     // Pass media attachment through (no interpolation needed for binary)
@@ -118,8 +123,7 @@ function extractVariables(template) {
   } else if (typeof template === 'object' && template !== null) {
     text = [template.header, template.text, template.footer, ...(template.buttons || []).map(b => b.text || b.buttonText)].filter(Boolean).join(' ');
   }
-  const matches = text.match(/\{\{(\w+)\}\}/g) || [];
-  return [...new Set(matches.map(m => m.replace(/[{}]/g, '')))];
+  return [...new Set([...text.matchAll(VAR_RE)].map((m) => m[1]))];
 }
 
 module.exports = { interpolate, extractVariables, resolveSpintax };

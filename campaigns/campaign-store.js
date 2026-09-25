@@ -142,6 +142,8 @@ class CampaignStore {
           mensagem_whatsapp_ia: lid.mensagem_whatsapp_ia || '',
           ticket_estimado: lid.ticket_estimado || '',
           chance_resposta: lid.chance_resposta || '',
+          decisor: lid.decisor || '',
+          saudacao: lid.saudacao || '',
           kanbanStage: resolveKanbanStage(lid),
           kanbanOrder: resolveKanbanOrder(lid, idx),
           ...defaultLeadTrackingFields(),

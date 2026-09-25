@@ -13,6 +13,7 @@ import {
   Kanban,
   MessageCircle,
   Settings2,
+  Bot,
 } from 'lucide-react';
 import Overview from './components/Overview';
 import MapScraperView from './components/MapScraperView';
@@ -25,6 +26,7 @@ import OnboardingTour from './components/OnboardingTour';
 import { NotificationProvider, useNotifications } from './components/NotificationCenter';
 import UpdateBanner from './components/UpdateBanner';
 import UpdateSettingsCard from './components/UpdateSettingsCard';
+import AiSettingsPage from './components/AiSettingsPage';
 import { dedupeLeads, normalizeLeadCollection, readLocalArray } from './leadData';
 import { splitBatchInput, buildExtractionTargets, MAX_MATRIX_TARGETS } from './batchSplit.mjs';
 
@@ -155,6 +157,7 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
     { id: 'scoring', label: 'Ir para Lead Scoring', desc: 'Quem ligar primeiro', icon: '✦', action: () => { onNavigate('scoring'); onClose(false); } },
     { id: 'kanban', label: 'Ir para Kanban', desc: 'Funil comercial de todos os leads', icon: '▤', action: () => { onNavigate('kanban'); onClose(false); } },
     { id: 'whatsapp', label: 'Ir para WhatsApp', desc: 'Chats e campanhas', icon: '◐', action: () => { onNavigate('whatsapp'); onClose(false); } },
+    { id: 'ai', label: 'Configurar Inteligência Artificial', desc: 'Provedor, chave, perfil e aprendizado', icon: '✦', action: () => { onNavigate('ai'); onClose(false); } },
     { id: 'new', label: 'Nova Extração…', desc: 'Criar busca no Google Maps', icon: '＋', action: () => { onClose(false); onNewExtraction(); } },
   ];
   const filtered = q.trim() ? items.filter(i => (`${i.label} ${i.desc}`.toLowerCase().includes(q.toLowerCase()))) : items;
@@ -184,7 +187,7 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
 
 function AppInner() {
   const [activeTab, setActiveTab] = useState(() => {
-    try { const h = location.hash.slice(1); if(['overview','scraper','base','scoring','kanban','whatsapp','settings'].includes(h)) return h; } catch{}
+    try { const h = location.hash.slice(1); if(['overview','scraper','base','scoring','kanban','whatsapp','ai','settings'].includes(h)) return h; } catch{}
     return 'overview';
   });
   const [isNewExtractionOpen, setIsNewExtractionOpen] = useState(false);
@@ -270,16 +273,16 @@ function AppInner() {
   useEffect(() => {
     const onHashChange = () => {
       const next = String(location.hash || '').slice(1);
-      if (['overview', 'scraper', 'base', 'scoring', 'kanban', 'whatsapp', 'settings'].includes(next)) setActiveTab(next);
+      if (['overview', 'scraper', 'base', 'scoring', 'kanban', 'whatsapp', 'ai', 'settings'].includes(next)) setActiveTab(next);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
   useEffect(()=>{
     const onKey=(e)=>{
-      if((e.metaKey||e.ctrlKey) && /^[1-6]$/.test(e.key)){
+      if((e.metaKey||e.ctrlKey) && /^[1-7]$/.test(e.key)){
         e.preventDefault();
-        const map=['overview','scraper','base','scoring','kanban','whatsapp'];
+        const map=['overview','scraper','base','scoring','kanban','whatsapp','ai'];
         const i=Number(e.key)-1; if(map[i]) setActiveTab(map[i]);
       }
       if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k' && activeTab === 'overview'){
@@ -697,6 +700,12 @@ function AppInner() {
             <WhatsAppPanel waStatus={waStatus} setWaStatus={setWaStatus} addLog={(msg) => console.log(msg)} initialTab="campaigns" />
           </ErrorBoundaryLite>
         );
+      case 'ai':
+        return (
+          <ErrorBoundaryLite label="Inteligência Artificial">
+            <AiSettingsPage />
+          </ErrorBoundaryLite>
+        );
       case 'settings':
         return (
           <section className="settings-open-design-view">
@@ -885,6 +894,14 @@ function AppInner() {
           >
             <span className="ico" aria-hidden="true"><MessageCircle size={17} /></span>
             <span className="nav-label-text">WhatsApp</span><span className="nav-kbd">6</span>
+          </button>
+
+          <button
+            className={`nav-item ${activeTab === 'ai' ? 'active' : ''}`}
+            onClick={() => navigate('ai')}
+          >
+            <span className="ico" aria-hidden="true"><Bot size={17} /></span>
+            <span className="nav-label-text">Inteligência Artificial</span><span className="nav-kbd">7</span>
           </button>
 
         </nav>

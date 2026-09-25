@@ -31,6 +31,7 @@ import {
   resolveServiceGroupMembers,
   scoreBand,
 } from '../leadMatch.mjs';
+import { PROVIDERS } from '../aiProviders.mjs';
 
 const AUDITS = {
   sites: { name: 'Venda de Sites', hint: 'Qualidade e ausência de site, mobile, performance, SEO, hero, CTA e conversão.' },
@@ -38,43 +39,6 @@ const AUDITS = {
   mkt: { name: 'Marketing Digital', hint: 'Presença, conteúdo e canais como ativo de aquisição.' },
   pres: { name: 'Presença Digital', hint: 'Visão geral da pegada digital da empresa.' },
   custom: { name: 'Customizado', hint: 'Direcionado pelo objetivo definido abaixo.' }
-};
-
-const PROVIDERS = {
-  openrouter: {
-    name: 'OpenRouter',
-    base: 'https://openrouter.ai/api/v1',
-    defaultModel: 'openrouter/free',
-    models: [
-      'openrouter/free',
-      'openai/gpt-4o-mini',
-      'anthropic/claude-3.5-sonnet',
-      'google/gemini-2.0-flash-001',
-    ]
-  },
-  nvidia: {
-    name: 'NVIDIA Build',
-    base: 'https://integrate.api.nvidia.com/v1',
-    defaultModel: 'deepseek-ai/deepseek-v4-flash',
-    models: [
-      'deepseek-ai/deepseek-v4-flash',
-      'meta/llama-3.3-70b-instruct',
-      'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-    ]
-  },
-  deepseek: {
-    name: 'DeepSeek',
-    base: 'https://api.deepseek.com',
-    defaultModel: 'deepseek-chat',
-    models: ['deepseek-chat', 'deepseek-reasoner']
-  },
-  opencode: {
-    name: 'OpenCode',
-    base: 'https://opencode.ai/zen/v1',
-    defaultModel: 'glm-5.3-flash',
-    models: ['glm-5.3-flash', 'deepseek-v4-flash', 'minimax-m3', 'muse-spark-1.3']
-  },
-  custom: { name: 'Custom API', base: '', defaultModel: 'gpt-4.1-mini', models: [] }
 };
 
 function defaultAiConfig() {
@@ -706,6 +670,14 @@ export default function LeadScoring({ onUpdateScoringCount, addLog }) {
                 </button>
               </div>
             )}
+            <button
+              type="button"
+              className="btn btn-sm"
+              style={{ marginTop: 12 }}
+              onClick={() => { window.location.hash = '#ai'; }}
+            >
+              <Settings size={14} /> Configurar IA (provedor e API key)
+            </button>
           </div>
         </div>
       ) : (

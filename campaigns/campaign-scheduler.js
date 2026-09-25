@@ -362,6 +362,8 @@ class CampaignScheduler {
           if (result && result.success && result.messageId) {
             lead.status = 'sent';
             lead.sentAt = now;
+            // Texto final (spintax resolvido): base do aprendizado de mensagens.
+            lead.sentText = String(textPreview || '').slice(0, 1000);
             lead.messageId = result.messageId;
             lead.jid = result.jid || null;
             lead.connectionId = connectionId;
@@ -499,6 +501,7 @@ class CampaignScheduler {
         throw new Error(result?.error || 'Follow-up sem confirmação do WhatsApp (sem messageId)');
       }
       lead.followUpSentAt = now;
+      lead.followUpText = String(content.text).slice(0, 1000);
       lead.followUpMessageId = result.messageId;
       lead.followUpError = null;
       const quota = this._getDailyQuota();

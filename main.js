@@ -48,6 +48,10 @@ const {
 } = require("./campaigns/template-engine");
 const { LeadScoringService } = require("./lead-scoring");
 const { saveProspectingCSV } = require("./lead-scoring/export-service");
+const { runAiTask } = require("./lead-scoring/ai-sales-analyzer");
+const { researchLead } = require("./lead-scoring/lead-intel");
+const { optimizeCampaignMessage } = require("./lead-scoring/message-optimizer");
+const { computeInsights } = require("./campaigns/learning");
 const { KanbanStore } = require("./kanban/kanban-store");
 const { normalizeAddress } = require("./utils/address-normalizer");
 const { normalizeText } = require("./utils/text-normalizer");
@@ -807,6 +811,16 @@ function sanitizeCampaignRecipient(raw) {
     totalReviews: raw.totalReviews || "",
     score: raw.score || "",
     prioridade: limitString(raw.prioridade, 40, ""),
+    // Campos da análise de IA e da pesquisa do lead: sem eles as variáveis
+    // {{mensagem_whatsapp_ia}}, {{saudacao}} etc. chegavam vazias no disparo.
+    dor_principal: limitString(raw.dor_principal, 400, ""),
+    oportunidade_principal: limitString(raw.oportunidade_principal, 400, ""),
+    argumento_principal: limitString(raw.argumento_principal, 400, ""),
+    mensagem_whatsapp_ia: limitString(raw.mensagem_whatsapp_ia, 1000, ""),
+    ticket_estimado: limitString(raw.ticket_estimado, 80, ""),
+    chance_resposta: limitString(raw.chance_resposta, 40, ""),
+    decisor: limitString(typeof raw.decisor === "object" ? raw.decisor?.nome : raw.decisor, 120, ""),
+    saudacao: limitString(raw.saudacao, 80, ""),
     kanbanStage,
     kanbanOrder,
   };
@@ -3372,6 +3386,72 @@ ipcMain.handle("lead-scoring-update-settings", async (_, { patch }) => {
     return { success: true, settings: leadScoringService.updateSettings(patch || {}) };
   } catch (err) {
     return { success: false, error: err.message };
+  }
+});
+
+// ─── IA: pesquisa de lead, aprendizado e otimização de mensagens ─────
+function currentAiSettings() {
+  return leadScoringService?.store?.getSettings?.() || {};
+}
+
+function currentInsights() {
+  try {
+    return computeInsights(campaignManager?.getAll?.() || []);
+  } catch {
+    return null;
+  }
+}
+
+function hasAiConfigured(settings) {
+  const ai = settings?.ai || {};
+  return !!(ai.enabled && ai.apiKey);
+}
+
+ipcMain.handle("ai-research-lead", async (_, { lead } = {}) => {
+  try {
+    const input = lead && typeof lead === "object" ? lead : {};
+    const clean = {
+      name: limitString(normalizeText(input.name || input.company), 160, ""),
+      category: limitString(normalizeText(input.category), 120, ""),
+      address: limitString(input.address, 300, ""),
+      city: limitString(input.city, 120, ""),
+      phone: limitString(input.phone, 40, ""),
+      website: isHttpUrl(input.website) ? limitString(input.website, 300, "") : "",
+      instagram: limitString(input.instagram, 160, ""),
+      rating: limitString(String(input.rating ?? ""), 10, ""),
+      totalReviews: limitString(String(input.totalReviews ?? input.reviews ?? ""), 12, ""),
+    };
+    if (!clean.name) return { success: false, error: "Lead sem nome para pesquisar." };
+    const settings = currentAiSettings();
+    const intel = await researchLead(clean, settings, {
+      runAi: hasAiConfigured(settings) ? (task) => runAiTask(settings, task) : null,
+      insights: currentInsights(),
+    });
+    return { success: true, intel, aiConfigured: hasAiConfigured(settings) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("ai-insights", async () => {
+  return { success: true, insights: currentInsights() };
+});
+
+ipcMain.handle("ai-optimize-message", async (_, { template, followUp } = {}) => {
+  try {
+    const settings = currentAiSettings();
+    if (!hasAiConfigured(settings)) {
+      return { success: false, error: "Configure um provedor de IA em Configurações → Inteligência Artificial." };
+    }
+    const result = await optimizeCampaignMessage({
+      template: limitString(template, 2000, ""),
+      followUp: limitString(followUp, 1000, ""),
+      insights: currentInsights(),
+      commercial: settings.commercial || {},
+    }, (task) => runAiTask(settings, task));
+    return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 });
 

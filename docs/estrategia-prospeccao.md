@@ -8,13 +8,24 @@ Objetivo: gerar **conversas** com empresas locais pelo WhatsApp sem queimar núm
 2. **Rode o Lead Scoring antes de disparar.** Priorize `prioridade alta`: empresa com telefone, avaliações e sinais claros de problema (sem site, site sem HTTPS, sem WhatsApp no site, poucas avaliações).
 3. **Monte grupos por dor, não por nicho.** "Dentistas sem site" e "Dentistas com site lento" recebem mensagens diferentes.
 
+## 1b. Pesquise o lead antes de abordar
+
+No Scraper Maps, o botão **Localizar** (pino) abre a ficha do lead:
+
+- **Busca na web** da empresa e **CNPJ** conferido por nome, cidade e telefone.
+- **Quadro de sócios** (Receita Federal): nome do dono/decisor.
+- **IA**: com quem falar, saudação ("Dra. Ana", "Wasghton"), abordagem sugerida e **chance de fechar** partindo de lead frio.
+- CNPJ **inapto/baixado** aparece como risco: melhor não investir tempo.
+
+A saudação fica salva no lead e vira a variável `{{saudacao}}` nas campanhas. Sem nome confiável, ela vira "pessoal da <empresa>", porque ninguém se chama "Clínica Sorriso".
+
 ## 2. Mensagem: pedir permissão, não vender
 
 O padrão do app já segue esta estrutura:
 
 ```
-{Oi|Olá}, tudo bem? Vi a {{name}} no Google Maps e {tive|pensei em} uma ideia {rápida|simples}
-para trazer mais clientes pelo WhatsApp. Posso te mandar em 2 linhas?
+{Oi|Olá}, {{saudacao}}! Tudo bem? Vi {vocês|o perfil de vocês} no Google Maps e {tive|pensei em}
+uma ideia {rápida|simples} para trazer mais clientes pelo WhatsApp. Posso te mandar em 2 linhas?
 ```
 
 Por que funciona:
@@ -63,3 +74,7 @@ Quem responde **SAIR, PARAR, "não tenho interesse", "me tira da lista"** entra 
 - **Respostas após o follow-up** (mostra se o segundo toque compensa).
 - **Descadastros** (acima de 5% indica mensagem ou lista ruim).
 - **Conversas → reuniões/vendas** no Kanban.
+
+## 8. Auto-aperfeiçoamento
+
+Cada envio guarda o texto final e o resultado (resposta, silêncio, descadastro). Em **Inteligência Artificial → Aprendizado** você vê taxa de resposta, melhores horários e nichos. Na criação da campanha, **✨ Melhorar com IA** reescreve a mensagem e o follow-up com base no que teve resposta. A pesquisa de cada lead também recebe esses aprendizados.

@@ -34,6 +34,7 @@ import {
   readLocalArray,
 } from '../leadData';
 import { useNotifications } from './NotificationCenter';
+import LeadIntelPanel from './LeadIntelPanel';
 import { instagramProfileUrl, normalizeInstagram } from '../leadLinks.mjs';
 
 const BASEMAPS = {
@@ -846,6 +847,32 @@ export default function MapScraperView({
     }
   };
 
+  // Ficha de pesquisa (localizador): busca web + Receita + IA.
+  const [intelLead, setIntelLead] = useState(null);
+  const sameLead = (a, b) => (a?.id && b?.id ? a.id === b.id : getLeadName(a) === getLeadName(b) && getLeadPhone(a) === getLeadPhone(b));
+  const saveLeadIntel = useCallback((intel) => {
+    if (!intelLead) return;
+    setLeads((current) => current.map((item) => (sameLead(item, intelLead)
+      ? {
+        ...item,
+        intel,
+        decisor: intel?.decisor?.nome || '',
+        saudacao: intel?.saudacao || '',
+        chance_fechamento: intel?.chance?.percentual ?? '',
+      }
+      : item)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intelLead]);
+  const openWhatsAppWithDraft = (lead, draft) => {
+    const phone = getLeadPhone(lead);
+    if (!phone) return;
+    try {
+      localStorage.setItem('sigma_wa_pending', JSON.stringify({ name: getLeadName(lead), tel: phone, direct: true, draft }));
+    } catch {}
+    setIntelLead(null);
+    onNavigate?.('whatsapp');
+  };
+
   // Preparar WhatsApp
   const handleWhatsAppLead = (lead) => {
     const name = getLeadName(lead);
@@ -1614,12 +1641,13 @@ export default function MapScraperView({
                     <button
                       type="button"
                       className="icon-btn"
-                      title="Ver no mapa"
-                      aria-label="Ver no mapa"
+                      title="Localizar: ver no mapa e pesquisar dono, empresa e abordagem"
+                      aria-label="Localizar e pesquisar lead"
                       style={{ width: 32, height: 32, minHeight: 32, borderRadius: 8 }}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleSpotlightLead(lead, leadId, loc?.lat, loc?.lng, true);
+                        setIntelLead(lead);
                       }}
                     >
                       <svg
@@ -1679,6 +1707,14 @@ export default function MapScraperView({
           )}
         </div>
       </aside>
+      {intelLead && (
+        <LeadIntelPanel
+          lead={intelLead}
+          onClose={() => setIntelLead(null)}
+          onSave={saveLeadIntel}
+          onOpenWhatsApp={(draft) => openWhatsAppWithDraft(intelLead, draft)}
+        />
+      )}
     </div>
   );
 }

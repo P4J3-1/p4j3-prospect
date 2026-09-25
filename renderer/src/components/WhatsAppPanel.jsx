@@ -47,13 +47,16 @@ import { buildNewChatCandidates } from '../newChatCandidates.mjs';
 // Abordagem padrão: curta, sem link e terminando em pergunta. Pedir permissão
 // gera mais respostas e menos denúncias do que despejar a oferta no 1º toque.
 // {a|b} sorteia uma variação por lead (spintax) para as mensagens não saírem iguais.
-const DEFAULT_CAMPAIGN_TEMPLATE = '{Oi|Olá}, tudo bem? Vi a {{name}} no Google Maps e {tive|pensei em} uma ideia {rápida|simples} para trazer mais clientes pelo WhatsApp. Posso te mandar em 2 linhas?';
+// {{saudacao}} chama o decisor pelo nome ("Dra. Ana") ou "pessoal da <empresa>":
+// ninguém se chama "Clínica Sorriso".
+const DEFAULT_CAMPAIGN_TEMPLATE = '{Oi|Olá}, {{saudacao}}! Tudo bem? Vi {vocês|o perfil de vocês} no Google Maps e {tive|pensei em} uma ideia {rápida|simples} para trazer mais clientes pelo WhatsApp. Posso te mandar em 2 linhas?';
 const DEFAULT_FOLLOW_UP_TEMPLATE = '{Oi|Olá} de novo! Só confirmando se viu minha mensagem acima 🙂 Se não fizer sentido agora, é só responder SAIR que não te chamo mais.';
 const DEFAULT_FOLLOW_UP_HOURS = 48;
 
 function previewTemplate(text) {
   return String(text || '…')
-    .replace(/\{\{name\}\}/gi, 'Maria')
+    .replace(/\{\{saudacao(\|[^{}]*)?\}\}/gi, 'Dra. Ana')
+    .replace(/\{\{name\}\}/gi, 'Clínica Sorriso')
     .replace(/\{\{phone\}\}/gi, '11999990000')
     .replace(/\{\{website\}\}/gi, 'site.com.br')
     .replace(/\{([^{}|]*)\|[^{}]*\}/g, '$1');
@@ -427,6 +430,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const [followUpEnabled, setFollowUpEnabled] = useState(true);
   const [followUpHours, setFollowUpHours] = useState(DEFAULT_FOLLOW_UP_HOURS);
   const [followUpText, setFollowUpText] = useState(DEFAULT_FOLLOW_UP_TEMPLATE);
+  const [aiOptimizing, setAiOptimizing] = useState(false);
+  const [aiOptimizeNote, setAiOptimizeNote] = useState('');
   const [scheduleMode, setScheduleMode] = useState('interval');
   const [scheduleStartAt, setScheduleStartAt] = useState('');
 
@@ -2441,6 +2446,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     // Reseta mensagem + agendamento para não vazar da campanha anterior.
     setTemplateText(DEFAULT_CAMPAIGN_TEMPLATE);
     setFollowUpEnabled(true);
+    setAiOptimizeNote('');
     setFollowUpHours(DEFAULT_FOLLOW_UP_HOURS);
     setFollowUpText(DEFAULT_FOLLOW_UP_TEMPLATE);
     setIntervalSec(60);
@@ -4024,6 +4030,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         };
         setChats((current) => current.some((chat) => chat.jid === nextChat.jid) ? current : [nextChat, ...current]);
         if (!cancelled) await handleSelectChat(nextChat);
+        // Mensagem sugerida pela pesquisa do lead: fica no campo para revisar antes de enviar.
+        if (!cancelled && directChatPending.draft) setInputText(String(directChatPending.draft).slice(0, 4000));
       } catch (error) {
         if (!cancelled) {
           setNewChatSearch(String(directChatPending.tel));
@@ -5287,8 +5295,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                           />
                         </label>
                         <p className="camp-hint">
-                          Variáveis: <code>{'{{name}}'}</code>, <code>{'{{phone}}'}</code>, <code>{'{{website}}'}</code>
-                          {' '}· em grupos, name = nome do grupo
+                          Variáveis: <code>{'{{saudacao}}'}</code> (nome do decisor ou “pessoal da empresa”), <code>{'{{name}}'}</code> (empresa), <code>{'{{mensagem_whatsapp_ia}}'}</code>, <code>{'{{website}}'}</code>
+                          {' '}· padrão para vazio: <code>{'{{site|sem site}}'}</code>
                         </p>
                         <div className="camp-msg-preview">
                           <div className="camp-msg-preview-label">Prévia</div>
@@ -5299,6 +5307,32 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         <p className="camp-hint">
                           Use <code>{'{Oi|Olá}'}</code> para sortear variações por lead: mensagens idênticas em massa são o principal gatilho de bloqueio.
                         </p>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            disabled={aiOptimizing}
+                            onClick={async () => {
+                              setAiOptimizing(true);
+                              setAiOptimizeNote('');
+                              try {
+                                const res = await window.aiAPI?.optimizeMessage?.(templateText, followUpEnabled ? followUpText : '');
+                                if (!res?.success) throw new Error(res?.error || 'A IA não respondeu.');
+                                setTemplateText(res.mensagem);
+                                if (res.followUp && followUpEnabled) setFollowUpText(res.followUp);
+                                setAiOptimizeNote(res.explicacao || 'Mensagem reescrita pela IA.');
+                              } catch (err) {
+                                setAiOptimizeNote(err?.message || 'Não foi possível otimizar agora.');
+                              } finally {
+                                setAiOptimizing(false);
+                              }
+                            }}
+                          >
+                            {aiOptimizing ? 'Otimizando…' : '✨ Melhorar com IA'}
+                          </button>
+                          <span className="camp-hint">Reescreve a mensagem e o follow-up com base no que teve resposta nas suas campanhas.</span>
+                        </div>
+                        {aiOptimizeNote && <p className="camp-hint" role="status">{aiOptimizeNote}</p>}
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '12px 0 4px', fontSize: 13 }}>
                           <input
                             type="checkbox"

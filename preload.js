@@ -110,6 +110,12 @@ contextBridge.exposeInMainWorld("kanbanAPI", {
   resumeAutomation: (entityKey) => ipcRenderer.invoke("kanban-resume-automation", { entityKey }),
 });
 
+contextBridge.exposeInMainWorld("aiAPI", {
+  researchLead: (lead) => ipcRenderer.invoke("ai-research-lead", { lead }),
+  getInsights: () => ipcRenderer.invoke("ai-insights"),
+  optimizeMessage: (template, followUp) => ipcRenderer.invoke("ai-optimize-message", { template, followUp }),
+});
+
 contextBridge.exposeInMainWorld("leadScoringAPI", {
   analyzeLead: (lead, options) =>
     ipcRenderer.invoke("lead-scoring-analyze-lead", { lead, options }),

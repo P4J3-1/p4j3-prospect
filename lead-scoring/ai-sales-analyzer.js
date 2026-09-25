@@ -1,3 +1,5 @@
+const { deriveGreeting } = require("../campaigns/greeting");
+
 async function analyzeWithSalesAI(lead, siteAnalysis, score, settings) {
   const ai = settings?.ai || {};
   if (!ai.enabled || !ai.apiKey) {
@@ -50,6 +52,8 @@ async function analyzeBatchWithSalesAI(items, settings) {
 // `response_format` e devolver 5xx em picos. Sem timeout, um provedor pendurado
 // travava o lote inteiro sem forma de cancelar.
 const REQUEST_TIMEOUT_MS = 45000;
+const DEFAULT_SYSTEM_PROMPT =
+  "Voce e um analista CRO e closer B2B. Avalie copy, conversao, prova social e objecoes. Use os dados ja extraidos; nao invente. Retorne apenas JSON valido no schema pedido.";
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
 function sleep(ms) {
@@ -65,8 +69,7 @@ async function requestChatCompletion(providerConfig, payload, options = {}) {
     messages: [
       {
         role: "system",
-        content:
-          "Voce e um analista CRO e closer B2B. Avalie copy, conversao, prova social e objecoes. Use os dados ja extraidos; nao invente. Retorne apenas JSON valido no schema pedido.",
+        content: options.system || DEFAULT_SYSTEM_PROMPT,
       },
       { role: "user", content: JSON.stringify(payload) },
     ],
@@ -104,7 +107,7 @@ async function requestChatCompletion(providerConfig, payload, options = {}) {
   }
 }
 
-async function requestResponses(providerConfig, payload) {
+async function requestResponses(providerConfig, payload, system = DEFAULT_SYSTEM_PROMPT) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -117,8 +120,7 @@ async function requestResponses(providerConfig, payload) {
       },
       body: JSON.stringify({
         model: providerConfig.model || providerConfig.defaultModel,
-        instructions:
-          "Voce e um analista CRO e closer B2B. Avalie copy, conversao, prova social e objecoes. Use os dados ja extraidos; nao invente. Retorne apenas JSON valido no schema pedido.",
+        instructions: system,
         input: JSON.stringify(payload),
       }),
       signal: controller.signal,
@@ -147,12 +149,12 @@ async function requestResponses(providerConfig, payload) {
  * provedores que recusam `response_format`), com uma repetição em erro
  * temporário. Devolve o JSON ou lança o último erro real.
  */
-async function attemptProvider(providerConfig, payload) {
+async function attemptProvider(providerConfig, payload, system = DEFAULT_SYSTEM_PROMPT) {
   if (providerConfig.apiStyle === "responses") {
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        return await requestResponses(providerConfig, payload);
+        return await requestResponses(providerConfig, payload, system);
       } catch (error) {
         lastError = error;
         if (attempt > 0 || !RETRYABLE_STATUS.has(Number(error?.status || 0))) break;
@@ -165,7 +167,7 @@ async function attemptProvider(providerConfig, payload) {
   let lastError = null;
   for (const attempt of attempts) {
     try {
-      return await requestChatCompletion(providerConfig, payload, attempt);
+      return await requestChatCompletion(providerConfig, payload, { ...attempt, system });
     } catch (error) {
       lastError = error;
       const status = Number(error?.status || 0);
@@ -482,7 +484,7 @@ function buildBatchPromptPayload(items, settings) {
     tarefa: "Avaliar em lote se cada lead vale prospeccao para vender site, landing page ou sistema.",
     idioma: settings?.analysis?.language || "pt-BR",
     oferta: settings?.analysis?.offerType || "site_landing_sistema",
-    regra: "Use os campos siteSummary/conversion.likelyLeaks como insumo principal. Avalie copy real, clareza, CTA, confianca, quebra de objecoes e potencial comercial. Retorne JSON no formato {\"leads\": [...]} mantendo leadId.",
+    regra: "Use os campos siteSummary/conversion.likelyLeaks como insumo principal. Avalie copy real, clareza, CTA, confianca, quebra de objecoes e potencial comercial. Retorne JSON no formato {\"leads\": [...]} mantendo leadId. Em mensagem_whatsapp, mensagem_follow_up e primeiro_email nunca chame a empresa como se fosse uma pessoa: use o nome do responsavel se ele estiver nos dados ou 'pessoal da <empresa>'. Mensagem de WhatsApp sem link e terminando com uma pergunta.",
     leads: items.map((item) => ({
       leadId: item.lead.id,
       empresa: item.lead.company,
@@ -585,7 +587,8 @@ function fallbackSalesAnalysis(lead, siteAnalysis, score, settings, warning = ""
   const opportunity = pickOpportunity(c, siteAnalysis);
   const companyName = c.name || "sua empresa";
   const service = (settings?.commercial?.services || ["site", "landing page"])[0] || "site";
-  const message = `Oi, ${companyName}! Tudo bem? Vi a empresa no Google e notei uma oportunidade: ${mainPain.toLowerCase()} Trabalho com ${service} para transformar visitas em contatos pelo WhatsApp. Posso te mandar uma ideia rápida do que eu melhoraria?`;
+  const greeting = deriveGreeting({ name: companyName });
+  const message = `Oi, ${greeting}! Tudo bem? Vi a empresa no Google e notei uma oportunidade: ${mainPain.toLowerCase()} Trabalho com ${service} para transformar visitas em contatos pelo WhatsApp. Posso te mandar uma ideia rápida do que eu melhoraria?`;
   const priorityLabel = score.classification || "Prioridade a avaliar";
   return {
     score: score.value,
@@ -624,8 +627,8 @@ function fallbackSalesAnalysis(lead, siteAnalysis, score, settings, warning = ""
     argumento_principal_venda: opportunity,
     mensagem_whatsapp: message,
     assunto_email: `Ideia para gerar mais contatos pelo site da ${companyName}`,
-    primeiro_email: `Olá, ${companyName}.\n\nEncontrei vocês pelo Google e notei uma oportunidade: ${mainPain.toLowerCase()}\n\nTrabalho criando sites e páginas simples para transformar visitas em pedidos de orçamento. Acredito que a ${companyName} poderia aproveitar melhor a presença local e levar mais pessoas para o WhatsApp.\n\nPosso te mandar uma ideia objetiva do que eu mudaria?`,
-    mensagem_follow_up: `Oi, ${companyName}. Passando só para reforçar: minha sugestão é melhorar a conversão digital de quem já encontra vocês no Google. Faz sentido eu te mandar uma ideia rápida?`,
+    primeiro_email: `Olá, ${greeting}.\n\nEncontrei vocês pelo Google e notei uma oportunidade: ${mainPain.toLowerCase()}\n\nTrabalho criando sites e páginas simples para transformar visitas em pedidos de orçamento. Acredito que a ${companyName} poderia aproveitar melhor a presença local e levar mais pessoas para o WhatsApp.\n\nPosso te mandar uma ideia objetiva do que eu mudaria?`,
+    mensagem_follow_up: `Oi, ${greeting}. Passando só para reforçar: minha sugestão é melhorar a conversão digital de quem já encontra vocês no Google. Faz sentido eu te mandar uma ideia rápida?`,
     objecoes_provaveis: [
       { objecao: "Já tenho site.", resposta: "Perfeito. A ideia não é trocar por trocar — é ver se o site está gerando contatos de verdade." },
       { objecao: "Não preciso agora.", resposta: "Entendo. Posso te mandar uma análise curta para você guardar e avaliar quando fizer sentido." },
@@ -679,7 +682,33 @@ function clamp(value) {
   return Math.max(0, Math.min(100, Math.round(Number(value || 0))));
 }
 
+/**
+ * Tarefa de IA genérica (pesquisa de lead, otimização de mensagem...): usa a
+ * mesma cadeia de provedores/fallbacks da análise e devolve o JSON já parseado.
+ */
+async function runAiTask(settings, { system, payload }) {
+  const ai = settings?.ai || {};
+  if (!ai.enabled || !hasAnyProviderKey(ai)) {
+    const err = new Error("Configure um provedor de IA em Configurações → Inteligência Artificial.");
+    err.code = "AI_NOT_CONFIGURED";
+    throw err;
+  }
+  let lastError = null;
+  for (const providerConfig of resolveProviderChain(ai)) {
+    try {
+      const json = await attemptProvider(providerConfig, payload, system);
+      const parsed = parseJsonResponse(extractProviderText(json));
+      return { result: parsed, provider: providerConfig.provider, model: providerConfig.model };
+    } catch (error) {
+      lastError = error;
+      if (!shouldTryNextProvider(error)) break;
+    }
+  }
+  throw lastError || new Error("Nenhum provedor de IA respondeu.");
+}
+
 module.exports = {
+  runAiTask,
   analyzeWithSalesAI,
   analyzeBatchWithSalesAI,
   fallbackSalesAnalysis,
