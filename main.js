@@ -59,7 +59,11 @@ const { runAiTask } = require("./lead-scoring/ai-sales-analyzer");
 const { researchLead } = require("./lead-scoring/lead-intel");
 const { optimizeCampaignMessage } = require("./lead-scoring/message-optimizer");
 const { computeInsights } = require("./campaigns/learning");
-const { TriageStore, triageKey, triageLeads } = require("./lead-scoring/lead-triage");
+const { TriageStore, computeTriage, triageKey, triageLeads } = require("./lead-scoring/lead-triage");
+const { SendQueue } = require("./campaigns/send-queue");
+const { composeMessages } = require("./campaigns/outreach-composer");
+const { entryOffer, imageDiagnosis, nextOffer, objectionsFor, OFFERS } = require("./campaigns/offer-ladder");
+const { DailyQuota } = require("./campaigns/daily-quota");
 const { AgentStore } = require("./agents/agent-store");
 const { runAnalyst, suggestReplies } = require("./agents/ai-agents");
 const { KanbanStore } = require("./kanban/kanban-store");
@@ -92,6 +96,7 @@ let kanbanStore = null;
 let contactStatus = null;
 let agentStore = null;
 let triageStore = null;
+let sendQueue = null;
 const resultStore = new Map();
 const allowedMediaPaths = new Set();
 const activeScrapes = new Map();
@@ -485,7 +490,7 @@ function pauseActiveCampaignsFromTray() {
       console.warn("[TRAY] campaign pause:", error.message);
     }
   }
-      try { kanbanStore?.syncCampaigns(campaignManager?.getAll?.() || [], { replace: true, existingOnly: true }); } catch {}
+      try { kanbanStore?.syncCampaigns(campaignsForKanban(), { replace: true, existingOnly: true }); } catch {}
   updateTray();
 }
 
@@ -1471,8 +1476,18 @@ app.whenReady().then(() => {
   triageStore = new TriageStore(app.getPath("userData"), {
     onChange: (changed) => safeSend("triage-changed", changed),
   });
+  sendQueue = new SendQueue(app.getPath("userData"), {
+    onChange: (snapshot) => safeSend("queue-changed", snapshot),
+  });
+  // Envio aprovado sai no ritmo seguro; recontato é planejado de hora em hora (24/7).
+  setInterval(() => queueTick().catch((error) => console.warn("[FILA] envio:", error.message)), 15000);
+  setInterval(() => planQueueRecontacts().catch((error) => console.warn("[FILA] recontato:", error.message)), 60 * 60 * 1000);
+  setTimeout(() => planQueueRecontacts().catch(() => {}), 60000);
   contactStatus = new ContactStatusStore(app.getPath("userData"), {
-    onChange: (phone, entry) => safeSend("contact-status-changed", { phone, entry }),
+    onChange: (phone, entry) => {
+      safeSend("contact-status-changed", { phone, entry });
+      if (sendQueue?.historyFor(phone).length) scheduleKanbanQueueSync();
+    },
   });
   // Contatados sempre atualizados: logo após abrir e a cada 15 min (pega o que foi enviado pelo celular).
   scheduleContactHistorySync(20000);
@@ -1504,7 +1519,7 @@ app.whenReady().then(() => {
     if (event === "completed" || event === "lead-sent") {
       runAnalystAgent({ auto: true }).catch(() => {});
     }
-  try { kanbanStore?.syncCampaigns(campaignManager.getAll(), { replace: true, existingOnly: true }); } catch (error) { console.warn("[KANBAN] campaign sync:", error.message); }
+  try { kanbanStore?.syncCampaigns(campaignsForKanban(), { replace: true, existingOnly: true }); } catch (error) { console.warn("[KANBAN] campaign sync:", error.message); }
     safeSend("campaign-progress", {
       campaignId,
       event,
@@ -1718,7 +1733,7 @@ function syncKanbanServiceSources() {
     store.syncLeads(scoringLeads, "scoring", { replace: true, existingOnly: true });
   }
   if (campaignManager) {
-    const campaigns = campaignManager.getAll() || [];
+    const campaigns = campaignsForKanban();
     store.syncCampaigns(campaigns, { replace: true, existingOnly: true });
   }
   return store.getBoard();
@@ -3706,6 +3721,12 @@ async function runTriageAgent(rawLeads, { auto = false, force = false } = {}) {
     agentStore.consume("triagem", aiUsed);
     triageStore.putMany(results);
     const hot = results.filter((r) => r.level === "alto").length;
+    if (auto && hot) {
+      const hotLeads = leads.filter((lead) => results.find((r) => r.key === triageKey(lead))?.level === "alto");
+      prepareQueueDrafts(hotLeads, { source: "triagem automática" })
+        .then((res) => res.added && agentStore.log("triagem", `${res.added} lead(s) de alto potencial foram para a fila (aguardando sua aprovação).`))
+        .catch(() => {});
+    }
     agentStore.log("triagem", `${results.length} lead(s) triados · ${hot} de alto potencial · ${aiUsed} com IA.${aiError ? ` IA falhou: ${aiError}` : ""}`, !aiError);
     return { success: true, triaged: results.length, aiUsed, hot, aiError };
   } catch (error) {
@@ -3744,6 +3765,256 @@ async function runAnalystAgent({ auto = false } = {}) {
     analystRunning = false;
   }
 }
+
+// ─── FILA DE ENVIO (aprovação + ritmo seguro + recontato) ───
+function leadPeers(lead) {
+  try {
+    const raw = getLeadsFileStore().load();
+    const all = raw ? JSON.parse(raw) : [];
+    const cat = String(lead.category || "").toLowerCase();
+    const hood = String(lead.neighborhood || "").toLowerCase();
+    const sameCat = all.filter((l) => String(l?.category || "").toLowerCase() === cat);
+    const sameHood = hood ? sameCat.filter((l) => String(l?.neighborhood || "").toLowerCase() === hood) : [];
+    return sameHood.length >= 3 ? sameHood : sameCat;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Transforma leads em rascunhos na fila: oferta de entrada pela triagem,
+ * problemas encontrados (inclui diagnóstico de imagem) e mensagem pronta.
+ */
+async function prepareQueueDrafts(rawLeads, { limit = 200 } = {}) {
+  const skipped = { contatado: 0, na_fila: 0, sem_whatsapp: 0, sem_telefone: 0 };
+  const waCheck = contactStatus?.getWaCheck() || {};
+  const items = [];
+  for (const raw of (Array.isArray(rawLeads) ? rawLeads : []).slice(0, 2000)) {
+    if (items.length >= limit) break;
+    const lead = {
+      ...cleanLeadInput(raw),
+      neighborhood: limitString(raw?.neighborhood || raw?.bairro, 120, ""),
+      placeId: limitString(raw?.placeId, 80, ""),
+      photos: { count: Number(raw?.photos?.count) || 0 },
+    };
+    if (!lead.phone) { skipped.sem_telefone += 1; continue; }
+    if (contactStatus?.get(lead.phone)) { skipped.contatado += 1; continue; }
+    if (sendQueue.activeFor(lead.phone)) { skipped.na_fila += 1; continue; }
+    const digits = String(lead.phone).replace(/\D/g, "");
+    const core = digits.length >= 12 && digits.startsWith("55") ? digits.slice(2) : digits;
+    if (waCheck[core]?.exists === false) { skipped.sem_whatsapp += 1; continue; }
+    const triage = triageStore.getAll()[triageKey(lead)] || computeTriage(lead, null);
+    const offer = entryOffer(triage);
+    const image = imageDiagnosis(lead, leadPeers(lead));
+    const findings = [...(triage.findings || []), ...(offer === "imagem" ? image.findings : [])];
+    items.push({ key: `k${items.length}`, kind: "primeiro", offer, lead, findings, triage });
+  }
+  if (!items.length) return { success: true, added: 0, skipped };
+  const composed = await composeMessages(items, {
+    runAi: agentAi("copywriter"),
+    commercial: currentAiSettings().commercial || {},
+  });
+  const added = sendQueue.add(items.map((item) => ({
+    phone: item.lead.phone,
+    kind: "primeiro",
+    offer: item.offer,
+    name: item.lead.name,
+    lead: item.lead,
+    message: composed.get(item.key)?.mensagem || "",
+    ai: composed.get(item.key)?.ai,
+    reason: `${OFFERS[item.offer].label}: ${item.findings.slice(0, 2).join("; ") || "potencial " + (item.triage.score ?? "")}`,
+  })));
+  return { success: true, added: added.length, skipped };
+}
+
+async function planQueueRecontacts() {
+  if (!sendQueue || !contactStatus) return 0;
+  const plans = sendQueue.planRecontacts((phone) => contactStatus.get(phone));
+  if (!plans.length) return 0;
+  const items = [];
+  for (const plan of plans) {
+    const base = plan.base;
+    const lead = base.lead || { name: base.name, phone: base.phone };
+    if (plan.kind === "follow_up") {
+      items.push({ key: `r${items.length}`, kind: "follow_up", offer: base.offer, lead, base });
+    } else {
+      const entry = sendQueue.historyFor(base.phone).find((i) => i.kind === "primeiro")?.offer || base.offer;
+      const offer = nextOffer(entry, plan.tried);
+      if (!offer) continue;
+      items.push({ key: `r${items.length}`, kind: "nova_oferta", offer, previousOffer: base.offer, lead, base });
+    }
+  }
+  if (!items.length) return 0;
+  const composed = await composeMessages(items, { runAi: agentAi("copywriter"), commercial: currentAiSettings().commercial || {} });
+  const added = sendQueue.add(items.map((item) => ({
+    phone: item.base.phone,
+    kind: item.kind,
+    offer: item.offer,
+    previousOffer: item.previousOffer,
+    name: item.base.name,
+    lead: item.lead,
+    message: composed.get(item.key)?.mensagem || "",
+    ai: composed.get(item.key)?.ai,
+    reason: item.kind === "follow_up"
+      ? `Sem resposta há ${sendQueue.settings.followUpDays} dia(s)`
+      : `Sem resposta ao follow-up: nova oferta (${OFFERS[item.offer].label})`,
+  })));
+  return added.length;
+}
+
+let queueSending = false;
+let queueWait = "";
+async function queueTick() {
+  if (queueSending || !sendQueue) return;
+  const next = sendQueue.nextToSend();
+  if (!next.item) {
+    if (next.wait !== queueWait) {
+      queueWait = next.wait;
+      safeSend("queue-status", { wait: next.wait });
+    }
+    return;
+  }
+  const provider = getActiveWhatsAppProvider();
+  if (!provider || provider.getStatus?.() !== "connected") {
+    if (queueWait !== "sem_whatsapp") safeSend("queue-status", { wait: (queueWait = "sem_whatsapp") });
+    return;
+  }
+  const quota = campaignManager?.dailyQuota;
+  const limitCfg = DailyQuota.resolveLimitConfig(campaignManager?.getCampaignSettings?.() || {});
+  if (quota && activeWhatsAppId && !quota.check(activeWhatsAppId, limitCfg).allowed) {
+    if (queueWait !== "limite_diario") safeSend("queue-status", { wait: (queueWait = "limite_diario") });
+    return;
+  }
+  const item = next.item;
+  const contact = contactStatus?.get(item.phone);
+  if (item.kind === "primeiro" && contact) {
+    sendQueue.markResult(item.id, { skipReason: "Já contatado por outro caminho" });
+    return;
+  }
+  if (contact && ["respondeu", "descadastrado", "nao_contatar"].includes(contact.status)) {
+    sendQueue.markResult(item.id, { skipReason: contact.status === "respondeu" ? "Já respondeu" : "Não contatar" });
+    return;
+  }
+  if (campaignManager?.doNotContact?.has(item.phone)) {
+    sendQueue.markResult(item.id, { skipReason: "Pediu para não receber mensagens" });
+    return;
+  }
+  queueSending = true;
+  queueWait = "enviando";
+  sendQueue.markSending(item.id);
+  try {
+    const result = await provider.sendMessage(item.phone, { text: item.message });
+    if (result?.success && result.messageId) {
+      contactStatus?.recordSent(item.phone, { messageId: result.messageId, source: "fila", name: item.name });
+      if (quota && activeWhatsAppId) quota.recordSend(activeWhatsAppId, 1);
+      sendQueue.markResult(item.id, { ok: true, messageId: result.messageId });
+    } else {
+      const error = result?.error || "Envio sem confirmação do WhatsApp";
+      if (/não tem WhatsApp|sem WhatsApp/i.test(error)) contactStatus?.recordWaCheck({ [item.phone]: false });
+      sendQueue.markResult(item.id, { ok: false, error });
+    }
+  } catch (error) {
+    sendQueue.markResult(item.id, { ok: false, error: error.message });
+  } finally {
+    queueSending = false;
+  }
+}
+
+/**
+ * Campanhas + a fila de envio como uma "campanha" a mais, para o Kanban mover
+ * sozinho os leads da fila (enviado → respondeu) com as mesmas regras.
+ */
+function campaignsForKanban() {
+  const campaigns = campaignManager?.getAll?.() || [];
+  if (!sendQueue) return campaigns;
+  const latest = new Map();
+  for (const item of sendQueue.items) {
+    if (item.status !== "enviado") continue;
+    const prev = latest.get(item.phoneCore);
+    if (!prev || (item.sentAt || 0) > (prev.sentAt || 0)) latest.set(item.phoneCore, item);
+  }
+  if (!latest.size) return campaigns;
+  const leads = [...latest.values()].map((item) => ({
+    leadId: `fila_${item.phoneCore}`,
+    name: item.name,
+    phone: item.phone,
+    status: contactStatus?.get(item.phoneCore)?.status === "respondeu" ? "replied" : "sent",
+    sentAt: item.sentAt,
+  }));
+  return [...campaigns, { id: "fila", name: "Fila de envio", status: "running", leads }];
+}
+
+let kanbanQueueSyncTimer = null;
+function scheduleKanbanQueueSync() {
+  if (kanbanQueueSyncTimer) clearTimeout(kanbanQueueSyncTimer);
+  kanbanQueueSyncTimer = setTimeout(() => {
+    kanbanQueueSyncTimer = null;
+    try { kanbanStore?.syncCampaigns(campaignsForKanban(), { replace: true, existingOnly: true }); } catch { /* Kanban indisponível */ }
+  }, 1500);
+}
+
+/** Kit de venda do lead: oferta atual, roteiro de objeções e argumento de imagem. */
+function leadSalesKit(phone) {
+  const digits = String(phone || "").replace(/@.*$/, "").replace(/D/g, "");
+  const core = digits.length >= 12 && digits.startsWith("55") ? digits.slice(2) : digits;
+  if (core.length < 10) return null;
+  let lead = null;
+  try {
+    const raw = getLeadsFileStore().load();
+    const all = raw ? JSON.parse(raw) : [];
+    lead = all.find((l) => {
+      const d = String(l?.phone || l?.tel || "").replace(/D/g, "");
+      return (d.length >= 12 && d.startsWith("55") ? d.slice(2) : d) === core;
+    }) || null;
+  } catch { /* base indisponível */ }
+  const history = sendQueue?.historyFor(core) || [];
+  const lastOffer = [...history].reverse().find((i) => i.offer)?.offer;
+  const triage = lead ? triageStore?.getAll()?.[triageKey(lead)] || computeTriage(lead, null) : null;
+  const offer = lastOffer || (triage ? entryOffer(triage) : "imagem");
+  const image = lead ? imageDiagnosis(lead, leadPeers(lead)) : { findings: [], comparacao: null };
+  return {
+    offer,
+    offerLabel: OFFERS[offer]?.label || offer,
+    objections: objectionsFor(offer),
+    image,
+    contact: contactStatus?.get(core) || null,
+  };
+}
+
+ipcMain.handle("lead-sales-kit", async (_, { phone } = {}) => {
+  const kit = leadSalesKit(limitString(phone, 60, ""));
+  return kit ? { success: true, kit } : { success: false, error: "Número inválido." };
+});
+
+ipcMain.handle("queue-get", async () => ({ success: true, ...sendQueue.snapshot(), wait: queueWait }));
+
+ipcMain.handle("queue-prepare", async (_, { leads, limit } = {}) => {
+  try {
+    return await prepareQueueDrafts(leads, { limit: clampInteger(limit, 1, 500, 50) });
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("queue-update", async (_, { id, patch } = {}) => {
+  try {
+    const item = sendQueue.update(String(id || ""), patch || {});
+    setImmediate(() => queueTick().catch(() => {}));
+    return { success: true, item };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("queue-approve", async (_, { ids } = {}) => {
+  const approved = sendQueue.approveAll(Array.isArray(ids) ? ids.map(String) : null);
+  setImmediate(() => queueTick().catch(() => {}));
+  return { success: true, approved };
+});
+
+ipcMain.handle("queue-settings", async (_, { patch } = {}) => {
+  return { success: true, settings: sendQueue.updateSettings(patch || {}) };
+});
 
 ipcMain.handle("agents-state", async () => {
   return { success: true, ...agentStore.snapshot(), aiConfigured: hasAiConfigured(currentAiSettings()), insights: currentInsights() };
@@ -3841,7 +4112,15 @@ ipcMain.handle("ai-suggest-reply", async (_, { messages, lead } = {}) => {
     const triage = triageStore?.getAll()?.[triageKey(clean)] || null;
     const result = await suggestReplies({
       messages: list,
-      lead: { ...clean, triagem: triage ? { segmentos: triage.segmentLabels, problemas: triage.findings } : null },
+      lead: (() => {
+        const kit = leadSalesKit(clean.phone);
+        return {
+          ...clean,
+          triagem: triage ? { segmentos: triage.segmentLabels, problemas: triage.findings } : null,
+          oferta_atual: kit?.offerLabel,
+          roteiro_objecoes: kit?.objections?.slice(0, 6),
+        };
+      })(),
       commercial: currentAiSettings().commercial || {},
     }, runAi);
     agentStore.log("respostas", `Sugestões para ${clean.name || "conversa"} (lead ${result.momento.replace(/_/g, " ")}).`);
@@ -4193,7 +4472,7 @@ ipcMain.handle("campaign-create", async (_, data) => {
 ipcMain.handle("campaign-update", async (_, { id, updates }) => {
   try {
     const campaign = campaignManager.update(id, sanitizeCampaignUpdates(updates));
-    try { kanbanStore?.syncCampaigns(campaignManager?.getAll?.() || [], { replace: true, existingOnly: true }); } catch {}
+    try { kanbanStore?.syncCampaigns(campaignsForKanban(), { replace: true, existingOnly: true }); } catch {}
     safeSend("campaign-progress", { campaignId: id, event: "updated", data: { campaign } });
     updateTray();
     return { success: true, campaign };
@@ -4270,7 +4549,7 @@ ipcMain.handle("campaign-start", async (_, { id, connectionId, confirmRecovery =
 ipcMain.handle("campaign-pause", async (_, { id }) => {
   try {
     campaignManager.pause(id);
-    try { kanbanStore?.syncCampaigns(campaignManager?.getAll?.() || [], { replace: true, existingOnly: true }); } catch {}
+    try { kanbanStore?.syncCampaigns(campaignsForKanban(), { replace: true, existingOnly: true }); } catch {}
     refreshBackgroundHolds();
     return { success: true };
   } catch (err) {
@@ -4300,7 +4579,7 @@ ipcMain.handle("campaign-recovery-resolve", async (_, { id, choice, connectionId
       confirmRecovery: true,
     });
     if (result?.connectionId) activeWhatsAppId = result.connectionId;
-    try { kanbanStore?.syncCampaigns(campaignManager?.getAll?.() || [], { replace: true, existingOnly: true }); } catch {}
+    try { kanbanStore?.syncCampaigns(campaignsForKanban(), { replace: true, existingOnly: true }); } catch {}
     updateTray();
     return { success: true, ...result };
   } catch (err) {

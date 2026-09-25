@@ -4206,6 +4206,18 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const activeContact = contacts[activeLeadPhone] || null;
   const activeTriage = triageMap[`p:${activeLeadPhone}`] || (activeLead ? triageFor(triageMap, activeLead) : null);
   const leadPanelVisible = !!activeChatJid && showLeadPanel && !activeChatMeta?.isGroup;
+  // Kit de venda: oferta atual, objeções e argumento de imagem (este só depois da resposta).
+  const [salesKit, setSalesKit] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    setSalesKit(null);
+    if (!leadPanelVisible || !activeLeadPhone || activeLeadPhone.length < 10 || !window.aiAPI?.salesKit) return undefined;
+    window.aiAPI.salesKit(activeLeadPhone)
+      .then((res) => { if (alive && res?.success) setSalesKit(res.kit); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [leadPanelVisible, activeLeadPhone, activeContact?.status]);
+  const conversationStarted = activeContact?.status === 'respondeu';
 
   useEffect(() => { setAiReply(null); }, [activeChatJid]);
 
@@ -6212,6 +6224,46 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                             </li>
                           ))}
                         </ol>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {salesKit && (
+                  <div className="clp-section">
+                    <span className="clp-label">Oferta atual: {salesKit.offerLabel}</span>
+                    {!conversationStarted ? (
+                      <span className="clp-muted">Objeções e comparação com concorrentes aparecem quando o lead responder.</span>
+                    ) : (
+                      <>
+                        <span className="clp-label" style={{ marginTop: 6 }}>Quebrar objeções</span>
+                        <ul className="intel-list">
+                          {salesKit.objections.map((o) => (
+                            <li key={o.objecao}>
+                              <button type="button" className="clp-link" title="Colocar a resposta no campo de mensagem" onClick={() => setInputText(o.resposta)}>
+                                <b>“{o.objecao}”</b> → {o.resposta}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                        {(salesKit.image?.findings?.length > 0 || salesKit.image?.comparacao) && (
+                          <>
+                            <span className="clp-label" style={{ marginTop: 6 }}>Argumento de imagem (depois da objeção)</span>
+                            {salesKit.image.findings.length > 0 && (
+                              <ul className="intel-list bad">{salesKit.image.findings.map((x) => <li key={x}>{x}</li>)}</ul>
+                            )}
+                            {salesKit.image.comparacao?.destaque && (
+                              <button
+                                type="button"
+                                className="clp-link"
+                                title="Colocar no campo de mensagem"
+                                onClick={() => setInputText(`Olhando aqui na região, a ${salesKit.image.comparacao.destaque.nome} aparece com nota ${String(salesKit.image.comparacao.destaque.nota).replace('.', ',')} e ${salesKit.image.comparacao.destaque.avaliacoes} avaliações no Google. É isso que o cliente compara antes de escolher. Quer que eu te mostre como virar esse jogo?`)}
+                              >
+                                Comparar com {salesKit.image.comparacao.destaque.nome} ({String(salesKit.image.comparacao.destaque.nota).replace('.', ',')}★, {salesKit.image.comparacao.destaque.avaliacoes} avaliações)
+                              </button>
+                            )}
+                          </>
+                        )}
                       </>
                     )}
                   </div>

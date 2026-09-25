@@ -144,6 +144,16 @@ contextBridge.exposeInMainWorld("agentsAPI", {
   onProgress: subscribe("agent-progress"),
 });
 
+contextBridge.exposeInMainWorld("queueAPI", {
+  get: () => ipcRenderer.invoke("queue-get"),
+  prepare: (leads, limit) => ipcRenderer.invoke("queue-prepare", { leads, limit }),
+  update: (id, patch) => ipcRenderer.invoke("queue-update", { id, patch }),
+  approve: (ids) => ipcRenderer.invoke("queue-approve", { ids }),
+  settings: (patch) => ipcRenderer.invoke("queue-settings", { patch }),
+  onChanged: subscribe("queue-changed"),
+  onStatus: subscribe("queue-status"),
+});
+
 contextBridge.exposeInMainWorld("triageAPI", {
   getAll: () => ipcRenderer.invoke("triage-get-all"),
   onChanged: subscribe("triage-changed"),
@@ -151,6 +161,7 @@ contextBridge.exposeInMainWorld("triageAPI", {
 
 contextBridge.exposeInMainWorld("aiAPI", {
   gift: (lead) => ipcRenderer.invoke("ai-gift", { lead }),
+  salesKit: (phone) => ipcRenderer.invoke("lead-sales-kit", { phone }),
   suggestReply: (messages, lead) => ipcRenderer.invoke("ai-suggest-reply", { messages, lead }),
   researchLead: (lead) => ipcRenderer.invoke("ai-research-lead", { lead }),
   getInsights: () => ipcRenderer.invoke("ai-insights"),

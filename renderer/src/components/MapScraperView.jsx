@@ -35,6 +35,8 @@ import {
 } from '../leadData';
 import { useNotifications } from './NotificationCenter';
 import LeadIntelPanel from './LeadIntelPanel';
+import QueuePanel from './QueuePanel';
+import { useQueue, activeQueueByPhone } from '../useQueue';
 import { useContactStatus, useWaCheck } from '../useContactStatus';
 import { useTriage } from '../useTriage';
 import { CONTACT_STATUS, contactBucket, contactFor, phoneCore, timeAgo } from '../contactStatus.mjs';
@@ -54,6 +56,7 @@ const QUALITY_CHIPS = [
 // Abas por situação do contato; o lead muda de aba sozinho quando o WhatsApp confirma.
 const SCRAPER_TABS = [
   ['disponiveis', 'Disponíveis', 'Ainda não receberam mensagem'],
+  ['fila', 'Na fila', 'Na fila de envio: aguardando sua aprovação ou o horário de envio'],
   ['contatados', 'Contatados', 'Já receberam mensagem (pelo app ou pelo celular)'],
   ['responderam', 'Responderam', 'Responderam depois da sua mensagem'],
   ['nao_contatar', 'Não contatar', 'Marcados para não prospectar ou que pediram para sair'],
@@ -301,6 +304,12 @@ export default function MapScraperView({
   const waCheck = useWaCheck();
   const triage = useTriage();
   const [groupBy, setGroupBy] = useState('');
+  const queue = useQueue();
+  const queueByPhone = useMemo(() => activeQueueByPhone(queue.items), [queue.items]);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  // Aba do lead: fila de envio tem prioridade; depois o status do WhatsApp.
+  const bucketOf = (lead) => (queueByPhone[phoneCore(getLeadPhone(lead))] ? 'fila' : contactBucket(contactFor(contacts, lead)));
   const [syncing, setSyncing] = useState(false);
   const [waChecking, setWaChecking] = useState(null);
 
@@ -499,7 +508,7 @@ export default function MapScraperView({
     const wantedSegments = new Set(segmentChips.flatMap((c) => [c.id, ...(c.also || [])]));
     return displayLeads.filter((lead) => {
       const contact = contactFor(contacts, lead);
-      if (scraperTab !== 'todos' && contactBucket(contact) !== scraperTab) return false;
+      if (scraperTab !== 'todos' && bucketOf(lead) !== scraperTab) return false;
       if (qualityChips.includes('tel') && !getLeadPhone(lead)) return false;
       if (qualityChips.includes('whatsapp') && waCheck[phoneCore(getLeadPhone(lead))]?.exists !== true) return false;
       if (qualityChips.includes('decisor') && !lead.decisor) return false;
@@ -569,13 +578,45 @@ export default function MapScraperView({
     triage,
     waCheck,
     groupBy,
+    queueByPhone,
   ]);
 
   const tabCounts = useMemo(() => {
-    const counts = { todos: displayLeads.length, disponiveis: 0, contatados: 0, responderam: 0, nao_contatar: 0 };
-    for (const lead of displayLeads) counts[contactBucket(contactFor(contacts, lead))] += 1;
+    const counts = { todos: displayLeads.length, disponiveis: 0, fila: 0, contatados: 0, responderam: 0, nao_contatar: 0 };
+    for (const lead of displayLeads) counts[bucketOf(lead)] += 1;
     return counts;
-  }, [displayLeads, contacts]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayLeads, contacts, queueByPhone]);
+
+  const queueCandidates = useMemo(
+    () => visibleLeads.filter((lead) => getLeadPhone(lead) && bucketOf(lead) === 'disponiveis').slice(0, 150),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [visibleLeads, queueByPhone, contacts],
+  );
+  const queueDrafts = useMemo(() => queue.items.filter((i) => i.status === 'rascunho').length, [queue.items]);
+
+  const handlePrepareQueue = async () => {
+    if (!window.queueAPI?.prepare || !queueCandidates.length) return;
+    setPreparing(true);
+    try {
+      const res = await window.queueAPI.prepare(queueCandidates, 150);
+      if (!res?.success) throw new Error(res?.error || 'Não foi possível montar a fila.');
+      const sk = res.skipped || {};
+      addNotification({
+        type: res.added ? 'success' : 'info',
+        category: 'whatsapp',
+        title: 'Fila montada',
+        message: `${res.added} mensagem(ns) prontas para você aprovar.`
+          + (sk.sem_whatsapp ? ` ${sk.sem_whatsapp} sem WhatsApp ficaram de fora.` : '')
+          + (sk.contatado ? ` ${sk.contatado} já contatado(s).` : ''),
+      });
+      if (res.added) setQueueOpen(true);
+    } catch (error) {
+      addNotification({ type: 'warning', category: 'whatsapp', title: 'Fila', message: error?.message || 'Falhou.' });
+    } finally {
+      setPreparing(false);
+    }
+  };
 
   const uncheckedPhones = useMemo(
     () => visibleLeads.map(getLeadPhone).filter((p) => p && !waCheck[phoneCore(p)]),
@@ -1676,6 +1717,12 @@ export default function MapScraperView({
         </div>
 
         <div className="scraper-sync-bar">
+          <button type="button" className="btn btn-sm btn-primary" disabled={preparing || !queueCandidates.length} onClick={handlePrepareQueue} title="A IA escreve a mensagem de cada lead disponível; nada sai sem sua aprovação">
+            {preparing ? 'Preparando mensagens…' : `Montar fila (${queueCandidates.length})`}
+          </button>
+          <button type="button" className="btn btn-sm" onClick={() => setQueueOpen(true)}>
+            Revisar fila{queueDrafts ? ` (${queueDrafts})` : ''}
+          </button>
           <button type="button" className="btn btn-sm" disabled={syncing} onClick={handleSyncContacts} title="Traz do WhatsApp quem você já chamou, inclusive pelo celular">
             {syncing ? 'Sincronizando…' : '↻ Sincronizar contatados'}
           </button>
@@ -1835,7 +1882,7 @@ export default function MapScraperView({
               const prevLead = pos > 0 ? visibleLeads[pos - 1] : null;
               const prevKey = groupBy && prevLead ? (groupBy === 'bairro' ? (getLeadBairro(prevLead) || 'Sem bairro') : getLeadCat(prevLead)) : null;
               const leadWa = phone ? waCheck[phoneCore(phone)] : null;
-              const bucket = contactBucket(leadContact);
+              const bucket = bucketOf(lead);
               return (
                 <React.Fragment key={leadId}>
                 {groupBy && groupKey !== prevKey && <div className="feed-group-head">{groupKey}</div>}
@@ -1993,6 +2040,7 @@ export default function MapScraperView({
           )}
         </div>
       </aside>
+      {queueOpen && <QueuePanel onClose={() => setQueueOpen(false)} />}
       {intelLead && (
         <LeadIntelPanel
           lead={intelLead}
