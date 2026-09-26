@@ -63,7 +63,10 @@ async function composeMessages(items = [], { runAi = null, commercial = {}, aiBu
   const out = new Map();
   for (const item of items) {
     const lead = item.kind === "primeiro" ? { ...(item.lead || {}), name: shortBusinessName(item.lead?.name) } : item.lead || {};
-    out.set(item.key, { mensagem: cleanMessage(interpolate(templateFor(item), lead)), ai: false });
+    // Abertura sorteada e registrada: o Raio-X mede qual estrutura mais responde.
+    const opener = item.kind === "primeiro" ? Math.floor(Math.random() * OPENERS.length) : undefined;
+    const template = opener !== undefined ? OPENERS[opener] : templateFor(item);
+    out.set(item.key, { mensagem: cleanMessage(interpolate(template, lead)), ai: false, opener });
   }
   if (typeof runAi !== "function") return out;
 

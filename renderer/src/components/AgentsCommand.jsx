@@ -3,6 +3,7 @@ import { Play, Power, Plus, Trash2, Copy, MessageCircle, X, Crosshair, Filter, S
 import { useAutopilot } from '../useAutopilot';
 import { timeAgo } from '../contactStatus.mjs';
 import JarvisCore from './JarvisCore';
+import XrayPanel from './XrayPanel';
 
 // Ordem do fluxo na tela (a ordem de execução é do processo principal).
 export const AGENT_META = {
@@ -302,6 +303,8 @@ export default function AgentsCommand({ onNavigate, aiConfigured }) {
           </ul>
         </section>
       </div>
+
+      <XrayPanel />
 
       <Missions settings={state.settings} onSave={save} plan={state.plan} />
     </div>

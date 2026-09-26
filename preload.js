@@ -158,6 +158,7 @@ contextBridge.exposeInMainWorld("autopilotAPI", {
 
 contextBridge.exposeInMainWorld("jarvisAPI", {
   command: (text) => ipcRenderer.invoke("jarvis-command", { text }),
+  xray: () => ipcRenderer.invoke("whatsapp-xray"),
   onSay: subscribe("jarvis-say"),
 });
 

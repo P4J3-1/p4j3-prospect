@@ -104,6 +104,7 @@ class SendQueue {
         lead: d.lead || {},
         message: String(d.message || "").slice(0, 1000),
         variant: d.variant === "B" ? "B" : d.variant === "A" ? "A" : "",
+        opener: Number.isInteger(d.opener) ? d.opener : null,
         ai: !!d.ai,
         reason: String(d.reason || "").slice(0, 300),
         status: "rascunho",

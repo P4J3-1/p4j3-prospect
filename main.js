@@ -72,6 +72,7 @@ const { AgentStore } = require("./agents/agent-store");
 const { Autopilot } = require("./agents/autopilot");
 const { DEFAULT_OFFERS } = require("./agents/sales-playbook");
 const { understand, SCREENS } = require("./agents/jarvis");
+const { whatsappXray } = require("./utils/whatsapp-xray");
 const { runAnalyst, suggestReplies, writeProposal } = require("./agents/ai-agents");
 const { LeadMemory, temperatureOf } = require("./campaigns/lead-memory");
 const { backupRoot, hasBackupToday, listBackups, runBackup } = require("./utils/backup");
@@ -4003,6 +4004,7 @@ async function prepareQueueDrafts(rawLeads, { limit = 200 } = {}) {
     message: item.variant === "B" ? item.triage.presente.mensagem : composed.get(item.key)?.mensagem || "",
     ai: item.variant === "B" ? !!item.triage.aiApplied : composed.get(item.key)?.ai,
     variant: item.variant,
+    opener: composed.get(item.key)?.opener,
     reason: `${item.variant === "B" ? "[B: diagnóstico grátis] " : item.variant === "A" ? "[A: pergunta] " : ""}${OFFERS[item.offer].label}: ${item.findings.slice(0, 2).join("; ") || "potencial " + (item.triage.score ?? "")}`,
   })));
   return { success: true, added: added.length, skipped };
@@ -4673,6 +4675,11 @@ function setupAutopilot() {
 }
 
 ipcMain.handle("autopilot-state", async () => ({ success: true, ...(autopilot?.snapshot() || {}) }));
+
+ipcMain.handle("whatsapp-xray", async () => ({
+  success: true,
+  ...whatsappXray({ items: sendQueue?.items || [], contacts: contactStatus?.getAll() || {} }),
+}));
 
 // ─── J.A.R.V.I.S.: ordens em português → ações dos agentes ───
 /** Retrato compacto dos dados reais para o Jarvis responder sem inventar. */

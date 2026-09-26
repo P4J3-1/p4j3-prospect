@@ -9146,3 +9146,24 @@ html[data-theme="dark"] .quality-chip.on { background: color-mix(in srgb, var(--
 .jv-console-input button:disabled { opacity: .5; cursor: default; }
 .jv-talk { margin-top: 6px; font-size: 11px; padding: 5px 10px; border-radius: 99px; cursor: pointer; color: #a5f3fc; background: rgba(34, 211, 238, .1); border: 1px solid rgba(103, 232, 249, .35); }
 @media (max-width: 640px) { .jv-console-backdrop { padding: 0; } .jv-console { width: 100%; height: 100%; border-radius: 0; } }
+/* Raio-X do WhatsApp */
+.xr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 1000px) { .xr-grid { grid-template-columns: 1fr; } }
+.xr h3 { margin: 0 0 8px; font-size: 13px; color: #fff; }
+.xr-funnel { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.xr-funnel li { display: grid; grid-template-columns: 120px 1fr 36px 36px; gap: 8px; align-items: center; font-size: 12px; color: #cbd5e1; }
+.xr-funnel div { height: 10px; border-radius: 99px; background: rgba(148,163,184,.14); overflow: hidden; }
+.xr-funnel i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--c), color-mix(in srgb, var(--c) 50%, #fff)); box-shadow: 0 0 10px var(--c); transition: width .6s; }
+.xr-funnel b { color: #fff; text-align: right; font-variant-numeric: tabular-nums; }
+.xr-funnel small { color: #93a3bd; }
+.xr-note { font-size: 12px; color: #93a3bd; margin: 10px 0 0; } .xr-note b { color: #a5f3fc; }
+.xr-openers { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 12px; color: #e2e8f0; }
+.xr-openers li { display: flex; justify-content: space-between; gap: 10px; }
+.xr-openers code { font-size: 11px; color: #c4b5fd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.xr-hours { display: grid; grid-template-columns: repeat(16, 1fr); gap: 4px; height: 90px; align-items: end; }
+.xr-hours div { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 3px; }
+.xr-hours i { width: 100%; border-radius: 4px 4px 0 0; min-height: 3px; }
+.xr-hours small { font-size: 9.5px; color: #93a3bd; }
+/* Telas grandes: o sistema cresce junto (até 1760px) em vez de ficar preso no centro. */
+@media (min-width: 1500px) { .app-screen-container { max-width: min(1760px, 96vw) !important; } }
+@media (min-width: 2200px) { .app-screen-container { max-width: min(2200px, 94vw) !important; } }
