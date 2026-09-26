@@ -993,6 +993,25 @@ export default function KanbanBoard({ onNavigate, addLog }) {
 
   const columns = board?.board?.columns || [];
   const stats = board?.stats || {};
+  // Funil ao vivo (todos os cards): quantos em cada etapa, conversão e valor.
+  const funnel = useMemo(() => {
+    const ordered = [...columns].sort((a, b) => a.position - b.position);
+    const all = board?.cards || [];
+    return ordered.map((column, index) => {
+      const inColumn = all.filter((card) => card.columnId === column.id);
+      const reached = all.filter((card) => {
+        const col = ordered.find((c) => c.id === card.columnId);
+        return col && !col.dealOutcome ? col.position >= column.position : col?.dealOutcome === 'won' && !column.dealOutcome;
+      }).length;
+      return {
+        ...column,
+        count: inColumn.length,
+        value: inColumn.reduce((sum, card) => sum + (Number(card.dealValue) || 0), 0),
+        reached,
+        index,
+      };
+    });
+  }, [columns, board?.cards]);
 
   const cards = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase('pt-BR');
@@ -1204,6 +1223,23 @@ export default function KanbanBoard({ onNavigate, addLog }) {
           <button type="button" className="btn btn-primary" disabled={busy} onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> Configurar Kanban</button>
         </div>
       </header>
+
+      <div className="kb-hud" aria-label="Funil ao vivo">
+        {funnel.map((step, i) => {
+          const prev = funnel[i - 1];
+          const conv = prev && !step.dealOutcome && prev.reached ? Math.round((step.reached / prev.reached) * 100) : null;
+          return (
+            <React.Fragment key={step.id}>
+              {i > 0 && !step.dealOutcome && <span className="kb-hud-arrow">{conv != null ? `${conv}%` : '→'}</span>}
+              <div className={`kb-hud-step ${step.dealOutcome || ''}`} style={{ '--c': step.color || '#64748b' }}>
+                <b>{step.count.toLocaleString('pt-BR')}</b>
+                <span>{step.name}</span>
+                {step.value > 0 && <small>{formatCurrency(step.value)}</small>}
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
 
       <div className="kanban-toolbar">
         <label className="kanban-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar empresa, cidade ou telefone…" aria-label="Buscar no Kanban" /></label>

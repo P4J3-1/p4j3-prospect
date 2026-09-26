@@ -1511,6 +1511,8 @@ app.whenReady().then(() => {
     onChange: (phone, entry) => {
       safeSend("contact-status-changed", { phone, entry });
       if (sendQueue?.historyFor(phone).length) scheduleKanbanQueueSync();
+      // Kanban autônomo: qualquer envio ou resposta (fila, chat, celular) move o card.
+      if (entry) moveLeadInKanban(phone, entry.status === "respondeu" ? "contacted" : "sent");
       if (entry?.status === "respondeu" && entry.lastReplyAt && Date.now() - entry.lastReplyAt < 120000
         && notifiedReplies.get(phone) !== entry.lastReplyAt) {
         notifiedReplies.set(phone, entry.lastReplyAt);
@@ -1530,6 +1532,15 @@ app.whenReady().then(() => {
     refreshWhatsApp({ auto: true }).catch((error) => console.warn("[WA-REFRESH]", error.message));
   }, 15 * 60 * 1000);
   setupAutopilot();
+  // Acerta o Kanban com tudo que já foi enviado/respondido (roda uma vez ao abrir).
+  setTimeout(() => {
+    let moved = 0;
+    for (const [phone, entry] of Object.entries(contactStatus?.getAll() || {})) {
+      if (!entry || entry.status === "nao_contatar") continue;
+      if (moveLeadInKanban(phone, entry.status === "respondeu" ? "contacted" : "sent")) moved += 1;
+    }
+    if (moved) console.log("[KANBAN] alinhado com o WhatsApp:", moved, "card(s)");
+  }, 45000);
   campaignManager = new CampaignManager(app.getPath("userData"));
   campaignManager.setProvidersMap(whatsappProviders);
   campaignManager.setCampaignSettingsProvider(() => {
