@@ -9173,3 +9173,17 @@ html[data-theme="dark"] .quality-chip.on { background: color-mix(in srgb, var(--
 .queue-risk button { justify-self: start; }
 .jv-deck { padding: 14px 16px 16px; margin-bottom: 18px; }
 .jv-deck .jv { margin: 0; }
+/* WhatsApp: HUD do lead (padrão J.A.R.V.I.S.) */
+.clp-hud { display: grid; grid-template-columns: 74px 1fr; gap: 10px 12px; align-items: center; margin: 4px 0 10px; padding: 12px; border-radius: 16px; color: #e2e8f0;
+  background: radial-gradient(260px 120px at 0% 0%, rgba(34, 211, 238, .2), transparent 70%), linear-gradient(160deg, #0c1733, #070b1a); border: 1px solid rgba(103, 232, 249, .25); box-shadow: 0 14px 30px -18px rgba(2, 6, 23, .8); }
+.clp-hud-ring { --v: 0; width: 70px; height: 70px; border-radius: 50%; display: grid; place-items: center; align-content: center; position: relative;
+  background: conic-gradient(#22d3ee calc(var(--v) * 1%), rgba(148, 163, 184, .18) 0); box-shadow: 0 0 18px rgba(34, 211, 238, .35); }
+.clp-hud-ring::before { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: #0b1224; }
+.clp-hud-ring b { position: relative; font-size: 20px; line-height: 1; color: #fff; }
+.clp-hud-ring small { position: relative; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: #93a3bd; }
+.clp-hud-facts { display: flex; flex-wrap: wrap; gap: 5px; }
+.clp-hud-facts span { font-size: 11px; padding: 3px 8px; border-radius: 99px; background: rgba(148, 163, 184, .14); color: #cbd5e1; }
+.clp-hud-facts span b { color: #fff; }
+.clp-hud-facts span.bad { background: rgba(248, 113, 113, .16); color: #fecaca; }
+.clp-hud-facts span.good { background: rgba(74, 222, 128, .16); color: #bbf7d0; }
+.clp-hud-next { grid-column: 1 / -1; font-size: 12px; padding: 8px 10px; border-radius: 10px; color: #042f2e; font-weight: 700; background: linear-gradient(135deg, #67e8f9, #34d399); }

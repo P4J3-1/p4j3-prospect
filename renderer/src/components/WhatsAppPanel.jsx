@@ -43,7 +43,8 @@ import TriggersManagerModal from './TriggersManagerModal';
 import ChatVoicePlayer from './ChatVoicePlayer';
 import { resolveGroupMembers } from '../leadMatch.mjs';
 import { buildNewChatCandidates } from '../newChatCandidates.mjs';
-import { useContactStatus } from '../useContactStatus';
+import { useContactStatus, useMystery } from '../useContactStatus';
+import { intentScore } from '../intel.mjs';
 import { useTriage } from '../useTriage';
 import { CONTACT_STATUS, phoneCore, timeAgo } from '../contactStatus.mjs';
 import { SEGMENTS, triageFor } from '../triage.mjs';
@@ -4258,6 +4259,23 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   }, [leadPanelVisible, activeLeadPhone, activeContact?.status]);
   const conversationStarted = activeContact?.status === 'respondeu';
   const leadMemoryMap = useLeadMemory();
+  const mysteryMap = useMystery();
+  // HUD do lead: intenção, temperatura, cliente oculto e o próximo passo.
+  const leadHud = useMemo(() => {
+    const memory = leadMemoryMap[activeLeadPhone];
+    const intent = intentScore({ contact: activeContact, triage: activeTriage, memory });
+    const m = mysteryMap[activeLeadPhone];
+    const mysteryText = m
+      ? (m.delayMin != null
+        ? `Cliente oculto: respondeu em ${m.delayMin < 60 ? `${m.delayMin} min` : `${Math.round(m.delayMin / 6) / 10} h`}`
+        : m.autoReplies ? 'Cliente oculto: só resposta automática' : 'Cliente oculto: sem resposta')
+      : '';
+    let next = 'Abrir a conversa com 👋 Abrir.';
+    if (activeContact?.status === 'respondeu') next = 'Conduzir a venda: ✨ IA decide a próxima.';
+    else if (activeContact?.status === 'descadastrado' || activeContact?.status === 'nao_contatar') next = 'Não contatar.';
+    else if (activeContact) next = 'Aguardar a resposta; o follow-up sai sozinho pela fila.';
+    return { intent, mysteryText, mysteryBad: m ? m.delayMin == null || m.delayMin > 30 : false, next };
+  }, [activeContact, activeTriage, leadMemoryMap, mysteryMap, activeLeadPhone]);
   const activeTemperature = aiReply?.data?.temperatura || leadMemoryMap[activeLeadPhone]?.temperatura || '';
   const [proposal, setProposal] = useState(null); // { loading, error, titulo, proposta }
   useEffect(() => { setProposal(null); }, [activeChatJid]);
@@ -6246,6 +6264,19 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   {renderAvatar(activeChatJid, activeLead?.name || activeChatName, 52, false)}
                   <strong>{activeLead?.name || activeChatName}</strong>
                   {activeLead?.category && <span className="clp-muted">{activeLead.category}</span>}
+                </div>
+
+                <div className="clp-hud" aria-label="Leitura do lead">
+                  <div className="clp-hud-ring" style={{ '--v': leadHud.intent }} title="Intenção: o que o lead fez, quão recente e a temperatura">
+                    <b>{leadHud.intent}</b><small>intenção</small>
+                  </div>
+                  <div className="clp-hud-facts">
+                    <span>Potencial <b>{activeTriage?.score ?? '—'}</b></span>
+                    <span>Temperatura <b>{TEMPERATURE[activeTemperature]?.label || '—'}</b></span>
+                    {leadHud.mysteryText && <span className={leadHud.mysteryBad ? 'bad' : 'good'}>🕵 {leadHud.mysteryText}</span>}
+                    {(activeTriage?.findings || []).slice(0, 2).map((finding) => <span key={finding} className="bad">⚠ {finding}</span>)}
+                  </div>
+                  <div className="clp-hud-next">{aiReply?.data?.proximoPasso || leadHud.next}</div>
                 </div>
 
                 <div className="clp-section">
