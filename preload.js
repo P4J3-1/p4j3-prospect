@@ -156,6 +156,11 @@ contextBridge.exposeInMainWorld("autopilotAPI", {
   onPatchLeads: subscribe("autopilot-patch-leads"),
 });
 
+contextBridge.exposeInMainWorld("jarvisAPI", {
+  command: (text) => ipcRenderer.invoke("jarvis-command", { text }),
+  onSay: subscribe("jarvis-say"),
+});
+
 contextBridge.exposeInMainWorld("agentsAPI", {
   getState: () => ipcRenderer.invoke("agents-state"),
   update: (id, patch) => ipcRenderer.invoke("agents-update", { id, patch }),

@@ -114,6 +114,12 @@ class Autopilot {
    * pelo Brasil. Cada caçador anda no seu próprio cursor.
    */
   nextMission(kind = "cacador") {
+    // Missão pedida agora (ex.: ordem do Jarvis) passa na frente.
+    if (this.pinned?.[kind]) {
+      const pinned = this.pinned[kind];
+      delete this.pinned[kind];
+      return pinned;
+    }
     const c = this.cursors[kind] || { cursor: 0, autoCursor: 0 };
     const res = planner.nextMission({
       manual: this.settings.missions || [],
@@ -125,6 +131,12 @@ class Autopilot {
     this.cursors[kind] = { cursor: res.cursor, autoCursor: res.autoCursor };
     this.save();
     return res.mission;
+  }
+
+  /** Faz a próxima missão deste caçador ser esta. */
+  pinMission(kind, mission) {
+    this.pinned = this.pinned || {};
+    this.pinned[kind] = { neighborhoods: [], ...mission, pinned: true };
   }
 
   /** Onde o plano automático está (para mostrar na tela). */

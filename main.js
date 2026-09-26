@@ -71,6 +71,7 @@ const { DailyQuota } = require("./campaigns/daily-quota");
 const { AgentStore } = require("./agents/agent-store");
 const { Autopilot } = require("./agents/autopilot");
 const { DEFAULT_OFFERS } = require("./agents/sales-playbook");
+const { understand, SCREENS } = require("./agents/jarvis");
 const { runAnalyst, suggestReplies, writeProposal } = require("./agents/ai-agents");
 const { LeadMemory, temperatureOf } = require("./campaigns/lead-memory");
 const { backupRoot, hasBackupToday, listBackups, runBackup } = require("./utils/backup");
@@ -1517,6 +1518,7 @@ app.whenReady().then(() => {
           body: "Responda rápido: velocidade de resposta é o que mais fecha venda. Use “Sugerir resposta” no WhatsApp.",
         });
         safeSend("lead-replied", { phone, name: entry.name || "" });
+        safeSend("jarvis-say", { text: `Senhor, ${entry.name || "um lead"} respondeu.`, priority: true });
       }
     },
   });
@@ -4325,6 +4327,29 @@ function withIntel(lead) {
 
 const pendingHunts = new Map();
 
+/** Dispara uma caçada no Maps (a janela executa) e registra o resultado. */
+function startHunt(mission, goal = autopilot.settings.huntGoal || 40) {
+  const MIN = 60 * 1000;
+  const id = `hunt_${Date.now()}`;
+  const done = new Promise((resolve) => {
+    const timer = setTimeout(() => { pendingHunts.delete(id); resolve({ error: "Tempo esgotado" }); }, 45 * MIN);
+    pendingHunts.set(id, (result) => { clearTimeout(timer); pendingHunts.delete(id); resolve(result || {}); });
+  });
+  safeSend("autopilot-hunt", { id, niche: mission.niche, city: mission.city, neighborhoods: mission.neighborhoods || [], goal });
+  autopilot.setLive("cacador", { status: "working", task: `Caçando ${mission.niche} em ${mission.city} (meta ${goal} novos)` });
+  done.then((result) => {
+    const text = result.error
+      ? `Caçada de ${mission.niche} em ${mission.city} falhou: ${result.error}`
+      : `Caçada de ${mission.niche} em ${mission.city}: ${result.added || 0} lead(s) novos na base.`;
+    if (!result.error) autopilot.countStage("cacador", result.added || 0);
+    autopilot.log("cacador", text, result.error ? "error" : "ok");
+    autopilot.setLive("cacador", { status: result.error ? "error" : "done", task: text, finishedAt: Date.now() });
+    autopilot.emit();
+    safeSend("jarvis-say", { text: result.error ? `A caçada de ${mission.niche} falhou.` : `Caçada concluída, senhor: ${result.added || 0} leads novos de ${mission.niche}.` });
+  });
+  return goal;
+}
+
 /** Nichos que mais respondem de verdade (mín. 8 contatos), para o Caçador priorizar. */
 function bestNiches() {
   const groups = {};
@@ -4586,23 +4611,7 @@ function setupAutopilot() {
         const mission = autopilot.nextMission("cacador");
         if (!mission) return { idle: true, status: "Cadastre uma missão (nicho + cidade) para o Caçador." };
         if (!mainWindow || mainWindow.isDestroyed()) return { idle: true, status: "Janela do app fechada." };
-        const id = `hunt_${Date.now()}`;
-        const goal = autopilot.settings.huntGoal || 40;
-        const done = new Promise((resolve) => {
-          const timer = setTimeout(() => { pendingHunts.delete(id); resolve({ error: "Tempo esgotado" }); }, 45 * MIN);
-          pendingHunts.set(id, (result) => { clearTimeout(timer); pendingHunts.delete(id); resolve(result || {}); });
-        });
-        safeSend("autopilot-hunt", { id, niche: mission.niche, city: mission.city, neighborhoods: mission.neighborhoods, goal });
-        autopilot.setLive("cacador", { status: "working", task: `Caçando ${mission.niche} em ${mission.city} (meta ${goal} novos)` });
-        done.then((result) => {
-          const text = result.error
-            ? `Caçada de ${mission.niche} em ${mission.city} falhou: ${result.error}`
-            : `Caçada de ${mission.niche} em ${mission.city}: ${result.added || 0} lead(s) novos na base.`;
-          if (!result.error) autopilot.countStage("cacador", result.added || 0);
-          autopilot.log("cacador", text, result.error ? "error" : "ok");
-          autopilot.setLive("cacador", { status: result.error ? "error" : "done", task: text, finishedAt: Date.now() });
-          autopilot.emit();
-        });
+        const goal = startHunt(mission);
         return { working: true, status: `Caçando ${mission.niche} em ${mission.city} (meta ${goal} novos)…`, text: `Estoque baixo (${available}). Saiu para caçar ${mission.niche} em ${mission.city}.` };
       },
     },
@@ -4664,6 +4673,98 @@ function setupAutopilot() {
 }
 
 ipcMain.handle("autopilot-state", async () => ({ success: true, ...(autopilot?.snapshot() || {}) }));
+
+// ─── J.A.R.V.I.S.: ordens em português → ações dos agentes ───
+/** Retrato compacto dos dados reais para o Jarvis responder sem inventar. */
+function jarvisData() {
+  const contacts = Object.values(contactStatus?.getAll() || {});
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const t0 = start.getTime();
+  const count = (fn) => contacts.filter(fn).length;
+  const queueCounts = {};
+  for (const i of sendQueue?.items || []) queueCounts[i.status] = (queueCounts[i.status] || 0) + 1;
+  const waCheck = contactStatus?.getWaCheck() || {};
+  const leads = allLeads();
+  return {
+    agora: new Date().toLocaleString("pt-BR"),
+    base: { leads: leads.length, disponiveis: leads.filter((l) => isAvailableLead(l, waCheck)).length },
+    hoje: {
+      enviados: count((c) => (c.sentAt || 0) >= t0),
+      responderam: count((c) => c.status === "respondeu" && (c.lastReplyAt || 0) >= t0),
+    },
+    total: { contatados: contacts.length, responderam: count((c) => c.status === "respondeu"), sairam: count((c) => c.status === "descadastrado") },
+    esperando_voce: contacts.filter((c) => c.status === "respondeu" && (c.lastReplyAt || 0) > (c.sentAt || 0)).map((c) => c.name).filter(Boolean).slice(0, 8),
+    fila: queueCounts,
+    numeros: senderNumbers().map((n) => ({ numero: n.phone, online: n.connected, enviados_hoje: n.sentToday, teto: n.cap })),
+    piloto_ligado: !!autopilot?.settings?.enabled,
+    nichos_que_respondem: bestNiches(),
+    ultimas_atividades: (autopilot?.feed || []).slice(-8).map((f) => `${f.agent}: ${f.text}`),
+  };
+}
+
+/** Aprova os N rascunhos de maior potencial, sem link. */
+function approveBest(quantity = 20) {
+  const triage = triageStore?.getAll() || {};
+  const ids = (sendQueue?.items || [])
+    .filter((i) => i.status === "rascunho" && !/https?:\/\/|www\./i.test(i.message || ""))
+    .map((i) => ({ id: i.id, score: triage[triageKey(cleanLeadInput(i.lead || {}))]?.score ?? 0 }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, Math.min(200, Number(quantity) || 20)))
+    .map((x) => x.id);
+  const approved = ids.length ? sendQueue.approveAll(ids) : 0;
+  setImmediate(() => queueTick().catch(() => {}));
+  return approved;
+}
+
+ipcMain.handle("jarvis-command", async (_, { text } = {}) => {
+  const order = limitString(text, 500, "").trim();
+  if (!order) return { success: false, error: "Diga o que fazer." };
+  try {
+    const dados = jarvisData();
+    const plan = await understand(order, { runAi: agentAi("jarvis"), dados });
+    const p = plan.parametros || {};
+    let reply = plan.resposta;
+    let navigate = "";
+    if (plan.acao === "cacar" || plan.acao === "radar") {
+      const niche = limitString(p.nicho, 80, "").trim();
+      const city = limitString(p.cidade, 80, "").trim();
+      if (!niche || !city) return { success: true, reply: "Preciso do nicho e da cidade, senhor. Ex.: caçar barbearia em Taguatinga, DF." };
+      if (plan.acao === "cacar") {
+        if (pendingHunts.size) {
+          autopilot.pinMission("cacador", { niche, city });
+          return { success: true, reply: "Já há uma caçada no Maps em andamento. Coloquei esta como a próxima, senhor." };
+        }
+        startHunt({ niche, city });
+        reply ||= `Caçando ${niche} em ${city}. Aviso quando terminar.`;
+      } else {
+        autopilot.pinMission("radar", { niche, city });
+        autopilot.runNow("radar").catch(() => {});
+        reply ||= `Radar ligado: auditando sites de ${niche} em ${city}.`;
+      }
+      autopilot.log("jarvis", `Ordem: ${order}`, "info");
+    } else if (plan.acao === "aprovar") {
+      const approved = approveBest(p.quantidade);
+      reply = `${approved} mensagem(ns) de maior potencial aprovada(s). Saindo no ritmo seguro, senhor.`;
+      autopilot.log("jarvis", reply, "ok");
+    } else if (plan.acao === "responder") {
+      autopilot.runNow("respostas").catch(() => {});
+      reply ||= "Lendo as conversas e preparando as respostas.";
+    } else if (plan.acao === "piloto") {
+      autopilot.updateSettings({ enabled: p.ligar !== false });
+      reply ||= p.ligar !== false ? "Piloto automático ligado. Os agentes estão em campo." : "Piloto automático pausado.";
+    } else if (plan.acao === "abrir") {
+      navigate = SCREENS[p.tela] ? p.tela : "";
+      reply ||= navigate ? `Abrindo ${SCREENS[navigate]}.` : "Não achei essa tela.";
+    } else {
+      // Pergunta: sem IA, responde com o essencial dos dados.
+      reply ||= `Hoje: ${dados.hoje.enviados} envio(s) e ${dados.hoje.responderam} resposta(s). ${dados.esperando_voce.length} esperando você. Fila: ${dados.fila.rascunho || 0} para aprovar, ${dados.fila.aprovado || 0} aprovadas. ${dados.base.disponiveis} leads disponíveis.`;
+    }
+    return { success: true, acao: plan.acao, reply, navigate, ai: plan.ai };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
 
 ipcMain.handle("autopilot-settings", async (_, { patch } = {}) => {
   try {

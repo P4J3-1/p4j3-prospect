@@ -53,6 +53,7 @@ export default function JarvisCore({ autopilot, onNavigate }) {
         </div>
         <b className="jv-name">J.A.R.V.I.S.</b>
         <small>{working ? `${working} agente(s) em ação` : autopilot?.settings?.enabled ? 'monitorando' : 'em espera'}</small>
+        <button type="button" className="jv-talk" onClick={() => window.dispatchEvent(new CustomEvent('sigma:jarvis-open'))}>Dar uma ordem · Ctrl+J</button>
       </div>
 
       <div className="jv-brief">

@@ -49,6 +49,13 @@ const AGENTS = {
     unit: "análises/dia",
     defaults: { enabled: true, auto: true, dailyLimit: 3 },
   },
+  jarvis: {
+    name: "J.A.R.V.I.S.",
+    role: "Entende suas ordens em português (caçar, aprovar, responder, perguntar) e aciona os agentes certos.",
+    trigger: "Console do Jarvis (Ctrl+J) na Central de Agentes.",
+    unit: "comandos/dia",
+    defaults: { enabled: true, auto: false, dailyLimit: 300 },
+  },
 };
 
 function todayKey(now = Date.now()) {

@@ -32,3 +32,23 @@ describe('J.A.R.V.I.S.', () => {
     assert.ok(b.linhas.some((l) => /esperando você/.test(l)));
   });
 });
+
+describe('ordens do J.A.R.V.I.S.', () => {
+  const { parseByRules, understand } = require('../agents/jarvis');
+  it('entende as ordens principais sem IA', () => {
+    assert.deepEqual(parseByRules('caçar dentistas em Taguatinga, DF'), { acao: 'cacar', parametros: { nicho: 'dentistas', cidade: 'Taguatinga, DF' } });
+    assert.equal(parseByRules('radar de pet shop em Goiânia, GO').acao, 'radar');
+    assert.deepEqual(parseByRules('aprovar os 30 melhores').parametros, { quantidade: 30 });
+    assert.equal(parseByRules('liga o piloto').parametros.ligar, true);
+    assert.equal(parseByRules('desligar piloto automático').parametros.ligar, false);
+    assert.equal(parseByRules('abrir o kanban').parametros.tela, 'kanban');
+    assert.equal(parseByRules('quantos responderam hoje?').acao, 'pergunta');
+  });
+  it('com IA usa a interpretação dela; se a IA falhar, cai nas regras', async () => {
+    const ok = await understand('traz umas clínicas de estética do Guará', { runAi: async () => ({ result: { acao: 'cacar', parametros: { nicho: 'clínica de estética', cidade: 'Guará, DF' }, resposta: 'Caçando, senhor.' } }) });
+    assert.equal(ok.acao, 'cacar');
+    assert.equal(ok.ai, true);
+    const fallback = await understand('aprovar os 10 melhores', { runAi: async () => { throw new Error('sem rede'); } });
+    assert.deepEqual(fallback.parametros, { quantidade: 10 });
+  });
+});

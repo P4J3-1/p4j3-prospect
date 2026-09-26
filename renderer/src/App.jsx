@@ -30,6 +30,7 @@ import UpdateSettingsCard from './components/UpdateSettingsCard';
 import BackupCard from './components/BackupCard';
 import AiSettingsPage from './components/AiSettingsPage';
 import AgentsPage from './components/AgentsPage';
+import JarvisConsole from './components/JarvisConsole';
 import { dedupeLeads, normalizeLeadCollection, readLocalArray } from './leadData';
 import { splitBatchInput, buildExtractionTargets, MAX_MATRIX_TARGETS } from './batchSplit.mjs';
 
@@ -958,6 +959,7 @@ function AppInner() {
 
   return (
     <div className="app-layout-root">
+      <JarvisConsole onNavigate={navigate} />
       {/* Left Sidebar */}
       <aside className="app-sidebar">
         {/* Brand Header */}
