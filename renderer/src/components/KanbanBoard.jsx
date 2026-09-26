@@ -451,7 +451,7 @@ function RuleEditor({ rule, columns, disabled, onChange, onRemove }) {
 function KanbanSettingsModal({ board, thresholds, onClose, onSave, saving }) {
   const [draft, setDraft] = useState(() => clone(board));
   const [formError, setFormError] = useState('');
-  const [tab, setTab] = useState('rules');
+  const [tab, setTab] = useState('flow');
   const [expandedRule, setExpandedRule] = useState('');
   const [confirmForce, setConfirmForce] = useState(false);
 
@@ -597,9 +597,6 @@ function KanbanSettingsModal({ board, thresholds, onClose, onSave, saving }) {
         </header>
 
         <div className="kanban-tabs" role="tablist" aria-label="Seções da configuração">
-          <button type="button" role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'on' : ''} onClick={() => setTab('rules')}>
-            <Zap size={14} /> Automações <b>{activeRules.length}</b>
-          </button>
           <button type="button" role="tab" aria-selected={tab === 'flow'} className={tab === 'flow' ? 'on' : ''} onClick={() => setTab('flow')}>
             <BriefcaseBusiness size={14} /> Etapas <b>{draft.columns.length}</b>
           </button>
@@ -1212,18 +1209,17 @@ export default function KanbanBoard({ onNavigate, addLog }) {
     <section className="kanban-view" data-od-id="global-kanban">
       <header className="kanban-topbar">
         <div>
-          <span className="eyebrow">Pipeline comercial</span>
-          <h1>Kanban</h1>
-          <p>Todos os leads conectados às suas fontes, em um único funil.</p>
+          <span className="eyebrow">Conversas · Funil</span>
+          <h1>Funil de vendas</h1>
+          <p>Os agentes movem os cards sozinhos pelo WhatsApp. Arraste quando quiser ajustar.</p>
         </div>
         <div className="kanban-actions">
           <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => loadBoard()}><RefreshCw size={14} /> Atualizar</button>
           <button type="button" className="btn btn-secondary" disabled={busy} title="Movimentos, sincronizações, vendas e alterações do quadro" onClick={() => setShowActivity((value) => !value)}>
             <Activity size={14} /> Histórico{board?.events?.length ? ` (${board.events.length})` : ''}
           </button>
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => applyRules({})}><RotateCcw size={14} /> Reaplicar regras</button>
           <button type="button" className="btn btn-secondary" disabled={busy} onClick={openManualLead}><Plus size={15} /> Adicionar lead manualmente</button>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> Configurar Kanban</button>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> Etapas do funil</button>
         </div>
       </header>
 
@@ -1260,7 +1256,6 @@ export default function KanbanBoard({ onNavigate, addLog }) {
         </label>
         <span className="kanban-total">
           {cards.length} lead{cards.length === 1 ? '' : 's'} visível{cards.length === 1 ? '' : 'eis'}
-          {stats.enabledRules ? ` · ${stats.enabledRules} regra(s) ativa(s)` : ' · sem automação'}
           {stats.wonValue > 0 ? ` · ${formatCurrency(stats.wonValue)} vendidos` : ''}
         </span>
       </div>

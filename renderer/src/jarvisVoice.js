@@ -57,7 +57,8 @@ function ptVoice() {
 export function speak(text, { priority = false, auto = false } = {}) {
   const synth = window.speechSynthesis;
   const mode = voiceMode();
-  if (!synth || !text || mode === 'nunca' || (auto && mode !== 'sempre')) return;
+  // Sozinha ela só fala o urgente (priority: lead respondeu, caçada concluída); o resto vira balão.
+  if (!synth || !text || mode === 'nunca' || (auto && !priority && mode !== 'sempre')) return;
   if (priority) synth.cancel();
   const u = new SpeechSynthesisUtterance(String(text).slice(0, 400));
   const voice = ptVoice();

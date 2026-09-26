@@ -5,18 +5,8 @@ import App from './App';
 import '../styles.css';
 import './openDesign/od.css';
 
-// Sigma Clarity — light-first. Sem tema salvo = light (não dark).
-try {
-  const saved = localStorage.getItem('sigma-theme');
-  if (saved === 'light' || saved === 'dark') {
-    document.documentElement.setAttribute('data-theme', saved);
-  } else if (saved === 'auto') {
-    const prefersDark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
-  } else {
-    document.documentElement.setAttribute('data-theme', 'light');
-  }
-} catch { try { document.documentElement.setAttribute('data-theme','light'); } catch{} }
+// v2.0: tema escuro único, estilo J.A.R.V.I.S.
+document.documentElement.setAttribute('data-theme', 'dark');
 
 try {
   document.documentElement.setAttribute('data-streaming-mode', localStorage.getItem('sigma_streaming_mode') === 'true' ? 'true' : 'false');

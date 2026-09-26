@@ -4814,26 +4814,6 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
               </div>
             )}
           </div>
-          <span className="wa-sigma-sep wa-sigma-separator" aria-hidden="true" />
-          <span className="wa-sigma-tag wa-sigma-label" aria-hidden="true">P4J3</span>
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            id="waSigmaCamps"
-            data-od-id="wa-sigma-campaigns"
-            onClick={() => setWaTab('campaigns')}
-          >
-            Campanhas {campaigns.length > 0 && <b id="waCampCount" style={{ marginLeft: 4 }}>{campaigns.length}</b>}
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            id="waNewCamp"
-            data-od-id="wa-new-campaign"
-            onClick={openCreateCampaign}
-          >
-            + Nova campanha
-          </button>
         </div>
       </header>
 

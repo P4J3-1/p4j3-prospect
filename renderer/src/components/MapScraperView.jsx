@@ -861,6 +861,7 @@ export default function MapScraperView({
         maxZoom: cfg.maxZoom,
         attribution: cfg.attribution,
         subdomains: cfg.subdomains || 'abc',
+        className: cfg.key === 'padrao' ? 'tiles-dark' : '',
       }).addTo(map);
 
       attachTileDiagnostics(tile);
@@ -957,6 +958,7 @@ export default function MapScraperView({
       maxZoom: cfg.maxZoom,
       attribution: cfg.attribution,
       subdomains: cfg.subdomains || 'abc',
+      className: cfg.key === 'padrao' ? 'tiles-dark' : '',
     }).addTo(map);
 
     attachTileDiagnostics(nextTile);

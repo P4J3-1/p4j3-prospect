@@ -4421,7 +4421,7 @@ function startHunt(mission, goal = autopilot.settings.huntGoal || 40) {
     autopilot.log("cacador", text, result.error ? "error" : "ok");
     autopilot.setLive("cacador", { status: result.error ? "error" : "done", task: text, finishedAt: Date.now() });
     autopilot.emit();
-    safeSend("jarvis-say", { text: result.error ? `A caçada de ${mission.niche} falhou.` : `Caçada concluída, senhor: ${result.added || 0} leads novos de ${mission.niche}.` });
+    safeSend("jarvis-say", { text: result.error ? `A caçada de ${mission.niche} falhou.` : `Caçada concluída, senhor: ${result.added || 0} leads novos de ${mission.niche}.`, priority: !result.error });
   });
   return goal;
 }

@@ -8,9 +8,6 @@ import {
   X,
   LayoutDashboard,
   Map,
-  Database,
-  Sparkles,
-  Kanban,
   MessageCircle,
   Settings2,
   Workflow,
@@ -18,7 +15,6 @@ import {
 import Overview from './components/Overview';
 const MapScraperView = lazy(() => import('./components/MapScraperView'));
 const LeadsManager = lazy(() => import('./components/LeadsManager'));
-const LeadScoring = lazy(() => import('./components/LeadScoring'));
 const KanbanBoard = lazy(() => import('./components/KanbanBoard'));
 const WhatsAppPanel = lazy(() => import('./components/WhatsAppPanel'));
 import NewExtractionModal from './components/NewExtractionModal';
@@ -35,6 +31,15 @@ import { dedupeLeads, normalizeLeadCollection, readLocalArray } from './leadData
 import { splitBatchInput, buildExtractionTargets, MAX_MATRIX_TARGETS } from './batchSplit.mjs';
 
 const EXTRACTION_JOBS_KEY = 'sigma_extraction_jobs';
+
+// v2.0: 4 telas. Cada uma tem suas visões (sub-abas no topo); a rota interna segue a mesma.
+const SECTIONS = [
+  { id: 'comando', label: 'Comando', Icon: LayoutDashboard, tabs: [['overview', 'Comando']] },
+  { id: 'leads', label: 'Leads', Icon: Map, tabs: [['scraper', 'Mapa'], ['base', 'Base']] },
+  { id: 'conversas', label: 'Conversas', Icon: MessageCircle, tabs: [['whatsapp', 'Chats'], ['kanban', 'Funil']] },
+  { id: 'agentes', label: 'Agentes', Icon: Workflow, tabs: [['agents', 'Equipe'], ['ai', 'Inteligência']] },
+];
+const sectionOf = (tab) => SECTIONS.find((sec) => sec.tabs.some(([id]) => id === tab)) || null;
 
 function readExtractionJobs() {
   try {
@@ -155,12 +160,12 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
   }, [open, onClose]);
   if (!open) return null;
   const items = [
-    { id: 'scraper', label: 'Ir para Hunter Maps', desc: 'Mapa + feed de leads', icon: '◎', action: () => { onNavigate('scraper'); onClose(false); } },
-    { id: 'overview', label: 'Ir para Visão Geral', desc: 'Centro de comando', icon: '▦', action: () => { onNavigate('overview'); onClose(false); } },
-    { id: 'base', label: 'Ir para Base de Leads', desc: 'Filtrar, organizar e exportar', icon: '▤', action: () => { onNavigate('base'); onClose(false); } },
-    { id: 'kanban', label: 'Ir para Kanban', desc: 'Funil comercial de todos os leads', icon: '▤', action: () => { onNavigate('kanban'); onClose(false); } },
-    { id: 'whatsapp', label: 'Ir para WhatsApp', desc: 'Chats e campanhas', icon: '◐', action: () => { onNavigate('whatsapp'); onClose(false); } },
-    { id: 'ai', label: 'Ir para Inteligência', desc: 'Feedback, oportunidades e ações do Crítico', icon: '✦', action: () => { onNavigate('ai'); onClose(false); } },
+    { id: 'scraper', label: 'Ir para Leads → Mapa', desc: 'Mapa + feed de leads', icon: '◎', action: () => { onNavigate('scraper'); onClose(false); } },
+    { id: 'overview', label: 'Ir para Comando', desc: 'J.A.R.V.I.S.: o que fazer agora', icon: '▦', action: () => { onNavigate('overview'); onClose(false); } },
+    { id: 'base', label: 'Ir para Leads → Base', desc: 'Filtrar, organizar e exportar', icon: '▤', action: () => { onNavigate('base'); onClose(false); } },
+    { id: 'kanban', label: 'Ir para Conversas → Funil', desc: 'Funil comercial de todos os leads', icon: '▤', action: () => { onNavigate('kanban'); onClose(false); } },
+    { id: 'whatsapp', label: 'Ir para Conversas', desc: 'Chats do WhatsApp', icon: '◐', action: () => { onNavigate('whatsapp'); onClose(false); } },
+    { id: 'ai', label: 'Ir para Agentes → Inteligência', desc: 'Feedback, oportunidades e ações do Crítico', icon: '✦', action: () => { onNavigate('ai'); onClose(false); } },
     { id: 'new', label: 'Nova Extração…', desc: 'Criar busca no Google Maps', icon: '＋', action: () => { onClose(false); onNewExtraction(); } },
   ];
   const filtered = q.trim() ? items.filter(i => (`${i.label} ${i.desc}`.toLowerCase().includes(q.toLowerCase()))) : items;
@@ -190,9 +195,17 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
 
 function AppInner() {
   const [activeTab, setActiveTab] = useState(() => {
-    try { const h = location.hash.slice(1); if(['overview','scraper','base','scoring','kanban','whatsapp','ai','agents','settings'].includes(h)) return h; } catch{}
+    try { const h = location.hash.slice(1); if(['overview','scraper','base','kanban','whatsapp','ai','agents','settings'].includes(h)) return h; } catch{}
     return 'overview';
   });
+  // Última visão aberta em cada seção (Leads → Mapa/Base, Conversas → Chats/Funil…).
+  const lastTabRef = useRef((() => { try { return JSON.parse(localStorage.getItem('sigma_v2_last_tabs') || '{}'); } catch { return {}; } })());
+  useEffect(() => {
+    const sec = sectionOf(activeTab);
+    if (!sec) return;
+    lastTabRef.current = { ...lastTabRef.current, [sec.id]: activeTab };
+    try { localStorage.setItem('sigma_v2_last_tabs', JSON.stringify(lastTabRef.current)); } catch { /* sem storage */ }
+  }, [activeTab]);
   const [isNewExtractionOpen, setIsNewExtractionOpen] = useState(false);
   const [isCmdOpen, setIsCmdOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
@@ -276,17 +289,16 @@ function AppInner() {
   useEffect(() => {
     const onHashChange = () => {
       const next = String(location.hash || '').slice(1);
-      if (['overview', 'scraper', 'base', 'scoring', 'kanban', 'whatsapp', 'ai', 'agents', 'settings'].includes(next)) setActiveTab(next);
+      if (['overview', 'scraper', 'base', 'kanban', 'whatsapp', 'ai', 'agents', 'settings'].includes(next)) setActiveTab(next);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
   useEffect(()=>{
     const onKey=(e)=>{
-      if((e.metaKey||e.ctrlKey) && /^[1-7]$/.test(e.key)){
+      if((e.metaKey||e.ctrlKey) && /^[1-4]$/.test(e.key)){
         e.preventDefault();
-        const map=['overview','scraper','base','kanban','whatsapp','ai','agents'];
-        const i=Number(e.key)-1; if(map[i]) setActiveTab(map[i]);
+        const sec=SECTIONS[Number(e.key)-1]; if(sec) setActiveTab(lastTabRef.current[sec.id] || sec.tabs[0][0]);
       }
       if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k' && activeTab === 'overview'){
         e.preventDefault();
@@ -355,6 +367,8 @@ function AppInner() {
     setActiveTab(tab);
     setIsMobileNavOpen(false);
   };
+  const openSection = (sec) => navigate(lastTabRef.current[sec.id] || sec.tabs[0][0]);
+  const currentSection = sectionOf(activeTab);
 
   const handleMinimize = () => window.electronAPI?.winMinimize();
   const handleMaximize = () => window.electronAPI?.winMaximize();
@@ -810,12 +824,6 @@ function AppInner() {
             />
           </ErrorBoundaryLite>
         );
-      case 'scoring':
-        return (
-          <ErrorBoundaryLite label="Lead Scoring">
-            <LeadScoring onUpdateScoringCount={setScoringCount} addLog={(msg) => console.log(msg)} />
-          </ErrorBoundaryLite>
-        );
       case 'kanban':
         return (
           <ErrorBoundaryLite label="Kanban">
@@ -832,12 +840,6 @@ function AppInner() {
         return (
           <ErrorBoundaryLite label="WhatsApp">
             <WhatsAppPanel waStatus={waStatus} setWaStatus={setWaStatus} addLog={(msg) => console.log(msg)} />
-          </ErrorBoundaryLite>
-        );
-      case 'campaigns': // compat: alias → whatsapp/campanhas tab
-        return (
-          <ErrorBoundaryLite label="Campanhas">
-            <WhatsAppPanel waStatus={waStatus} setWaStatus={setWaStatus} addLog={(msg) => console.log(msg)} initialTab="campaigns" />
           </ErrorBoundaryLite>
         );
       case 'agents':
@@ -859,13 +861,6 @@ function AppInner() {
               <div><h1 style={{ fontSize: 20 }}>Configurações</h1></div>
             </div>
             <div className="table-wrap settings-open-design-card">
-              <div className="field">
-                <label htmlFor="themeSel">Modo de interface</label>
-                <select id="themeSel" defaultValue="light">
-                  <option value="light">Claro (padrão travado)</option>
-                  <option value="dark">Escuro (override futuro)</option>
-                </select>
-              </div>
               <div className="field">
                 <label htmlFor="uiZoom">Zoom de acessibilidade</label>
                 <div className="settings-zoom-controls" id="uiZoom">
@@ -892,12 +887,7 @@ function AppInner() {
                   <b>{streamingMode ? 'Ativado' : 'Desativado'}</b>
                 </button>
               </section>
-              <div>
-                <button className="btn btn-primary" onClick={() => addNotification({ type: 'info', title: 'Preferências salvas', message: 'Modo de interface atualizado.' })}>
-                  Salvar preferências
-                </button>
-              </div>
-              <p>Use Ctrl/Cmd +, − ou 0 para ajustar o zoom. A preferência é restaurada nesta instalação.</p>
+              <p>Use Ctrl/Cmd +, − ou 0 para ajustar o zoom. Zoom e modo streaming ficam salvos na hora.</p>
               <UpdateSettingsCard />
               <BackupCard />
               <section className="settings-danger-zone" aria-labelledby="clearLeadBaseTitle">
@@ -995,63 +985,17 @@ function AppInner() {
 
         {/* Navigation Menu */}
         <nav className="sidebar-nav">
-          <div className="sidebar-nav-label">Painel administrativo</div>
-          <button
-            className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
-            onClick={() => navigate('overview')}
-          >
-            <span className="ico" aria-hidden="true"><LayoutDashboard size={17} /></span>
-            <span className="nav-label-text">Visão Geral</span><span className="nav-kbd">1</span>
-          </button>
-
-          <button
-            className={`nav-item ${activeTab === 'scraper' ? 'active' : ''}`}
-            onClick={() => navigate('scraper')}
-          >
-            <span className="ico" aria-hidden="true"><Map size={17} /></span>
-            <span className="nav-label-text">Hunter Maps</span><span className="nav-kbd">2</span>
-          </button>
-
-          <button
-            className={`nav-item ${activeTab === 'base' ? 'active' : ''}`}
-            onClick={() => navigate('base')}
-          >
-            <span className="ico" aria-hidden="true"><Database size={17} /></span>
-            <span className="nav-label-text">Base de Leads</span><span className="nav-kbd">3</span>
-          </button>
-
-          <button
-            className={`nav-item ${activeTab === 'kanban' ? 'active' : ''}`}
-            onClick={() => navigate('kanban')}
-          >
-            <span className="ico" aria-hidden="true"><Kanban size={17} /></span>
-            <span className="nav-label-text">Kanban</span><span className="nav-kbd">4</span>
-          </button>
-
-          <button
-            className={`nav-item ${activeTab === 'whatsapp' ? 'active' : ''}`}
-            onClick={() => navigate('whatsapp')}
-          >
-            <span className="ico" aria-hidden="true"><MessageCircle size={17} /></span>
-            <span className="nav-label-text">WhatsApp</span><span className="nav-kbd">5</span>
-          </button>
-
-          <button
-            className={`nav-item ${activeTab === 'ai' ? 'active' : ''}`}
-            onClick={() => navigate('ai')}
-          >
-            <span className="ico" aria-hidden="true"><Sparkles size={17} /></span>
-            <span className="nav-label-text">Inteligência</span><span className="nav-kbd">6</span>
-          </button>
-
-          <button
-            className={`nav-item ${activeTab === 'agents' ? 'active' : ''}`}
-            onClick={() => navigate('agents')}
-          >
-            <span className="ico" aria-hidden="true"><Workflow size={17} /></span>
-            <span className="nav-label-text">Agentes</span><span className="nav-kbd">7</span>
-          </button>
-
+          <div className="sidebar-nav-label">P4J3 · J.A.R.V.I.S.</div>
+          {SECTIONS.map((sec, i) => (
+            <button
+              key={sec.id}
+              className={`nav-item ${currentSection?.id === sec.id ? 'active' : ''}`}
+              onClick={() => openSection(sec)}
+            >
+              <span className="ico" aria-hidden="true"><sec.Icon size={17} /></span>
+              <span className="nav-label-text">{sec.label}</span><span className="nav-kbd">{i + 1}</span>
+            </button>
+          ))}
         </nav>
 
         {/* Sidebar Footer */}
@@ -1071,10 +1015,17 @@ function AppInner() {
           if (event.target === event.currentTarget || event.target.closest('.header-drag-spacer')) handleMaximize();
         }}>
           <button type="button" className="mobile-menu-btn" onClick={() => setIsMobileNavOpen(true)} aria-label="Abrir navegação"><Menu size={18} /></button>
+          {currentSection && currentSection.tabs.length > 1 ? (
+            <nav className="v2-subnav" aria-label={currentSection.label}>
+              {currentSection.tabs.map(([id, label]) => (
+                <button key={id} type="button" className={activeTab === id ? 'on' : ''} onClick={() => navigate(id)}>{label}</button>
+              ))}
+            </nav>
+          ) : null}
           {activeTab === 'overview' ? (
             <button type="button" className="header-search-wrap" onClick={() => setIsCmdOpen(true)} title="Abrir busca global (Ctrl/Cmd+K)">
               <Search size={14} className="header-search-icon" />
-              <span>Buscar leads, campanhas, ações…</span>
+              <span>Buscar leads e ações…</span>
             </button>
           ) : <div className="header-drag-spacer" aria-hidden="true" />}
 

@@ -11,7 +11,17 @@ const ACTIONS = [
   "cacar", "radar", "aprovar", "responder", "piloto", "abrir", "pergunta",
   "abrir_conversa", "proposta", "nao_contatar", "filtrar", "ajustar", "agente", "diagnostico",
 ];
-const SCREENS = { overview: "visão geral", scraper: "hunter maps", base: "base de leads", kanban: "kanban", whatsapp: "whatsapp", ai: "inteligência artificial", agents: "agentes" };
+const SCREENS = { overview: "Comando", scraper: "Leads (mapa)", base: "Leads (base)", kanban: "Funil", whatsapp: "Conversas", ai: "Inteligência", agents: "Agentes" };
+// Nomes que o dono pode falar para cada tela (v2.0 e os antigos).
+const SCREEN_WORDS = {
+  overview: ["comando", "visao geral", "inicio"],
+  scraper: ["mapa", "hunter maps", "hunter", "leads"],
+  base: ["base de leads", "base"],
+  kanban: ["funil", "kanban"],
+  whatsapp: ["conversas", "whatsapp", "chats"],
+  ai: ["inteligencia", "critico"],
+  agents: ["agentes", "equipe", "motor de ia"],
+};
 const AGENT_IDS = ["cacador", "radar", "verificador", "enriquecedor", "triagem", "pesquisador", "copywriter", "respostas", "analista"];
 const ADJUST_TARGETS = ["meta_diaria", "teto_por_numero", "intervalo", "rascunhos", "reserva", "caçada"];
 
@@ -73,8 +83,10 @@ function parseByRules(text) {
   if (m) return { acao: "filtrar", parametros: { excluir: [m[1].trim()] } };
   m = raw.match(/\b(?:s[oó]|somente|apenas)\s+(?:(?:os|as|leads?|da|de|do|dos|das|regi[aã]o|bairro|cidade|em|no|na)\s+)*([\wÀ-ú][\wÀ-ú' -]{2,40})$/i);
   if (m) return { acao: "filtrar", parametros: { incluir: [m[1].trim()] } };
-  for (const [id, label] of Object.entries(SCREENS)) {
-    if (new RegExp(`\\b(abr\\w*|mostr\\w*|vai para|ir para)\\b.*${norm(label)}`).test(t)) return { acao: "abrir", parametros: { tela: id } };
+  // Mais específico primeiro ("base de leads" antes de "leads").
+  const words = Object.entries(SCREEN_WORDS).flatMap(([id, list]) => list.map((w) => [id, w])).sort((a, b) => b[1].length - a[1].length);
+  for (const [id, word] of words) {
+    if (new RegExp(`\\b(abr\\w*|mostr\\w*|vai para|ir para)\\b.*\\b${word}\\b`).test(t)) return { acao: "abrir", parametros: { tela: id } };
   }
   return { acao: "pergunta", parametros: {} };
 }
