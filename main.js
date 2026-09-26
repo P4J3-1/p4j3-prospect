@@ -4446,6 +4446,8 @@ function setupAutopilot() {
         const waiting = Object.entries(contactStatus?.getAll() || {})
           .filter(([, c]) => c?.status === "respondeu" && (c.lastReplyAt || 0) > (c.sentAt || 0))
           .filter(([key, c]) => (drafts[key]?.lastReplyAt || 0) < c.lastReplyAt)
+          // Já tratada por você (usou ou dispensou): só volta se o lead mandar algo novo.
+          .filter(([key, c]) => (autopilot.handledReplies[key] || 0) < c.lastReplyAt)
           .slice(0, 5);
         if (!waiting.length) return { idle: true, status: "Nenhuma conversa esperando você." };
         if (!agentAi("respostas")) return { idle: true, status: "IA indisponível ou limite do dia do Agente de Respostas." };
@@ -4459,9 +4461,11 @@ function setupAutopilot() {
           // Interessado: proposta pronta ao lado das respostas e card avança no Kanban.
           const hot = r.momento === "interessado" || ["oferta", "contraproposta", "fechamento"].includes(r.etapa);
           let proposta = null;
-          if (hot) {
+          // Proposta: no máximo uma a cada 24h por lead (economia de IA).
+          if (hot && Date.now() - (autopilot.proposedAt[key] || 0) > 24 * 60 * 60 * 1000) {
             try {
               proposta = await proposalFor(key, messages);
+              autopilot.proposedAt[key] = Date.now();
             } catch (error) {
               ctx.log(`Proposta para ${c.name || key} não saiu: ${error.message}`, "error");
             }
@@ -4570,11 +4574,13 @@ function setupAutopilot() {
       label: "Triando leads novos",
       everyMs: 5 * MIN,
       run: async (ctx) => {
+        // Economia: IA só para quem ainda dá para abordar (sem contato e com WhatsApp possível).
+        const waCheck = contactStatus?.getWaCheck() || {};
         const pending = allLeads()
-          .filter((lead) => lead?.phone || lead?.tel)
+          .filter((lead) => isAvailableLead(lead, waCheck))
           .filter((lead) => !triageStore.has(triageKey(cleanLeadInput(lead))))
           .slice(0, 60);
-        if (!pending.length) return { idle: true, status: "Todos os leads com telefone já estão triados." };
+        if (!pending.length) return { idle: true, status: "Todos os leads abordáveis já estão triados." };
         ctx.progress(0, pending.length, `Triando ${pending.length} lead(s)`);
         const res = await runTriageAgent(pending, { auto: true });
         if (!res.success) throw new Error(res.error || "Triagem falhou");

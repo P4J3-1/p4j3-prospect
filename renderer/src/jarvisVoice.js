@@ -17,16 +17,27 @@ export function setJarvisPref(key, on) {
 export function jarvisSay(text, opts) {
   if (!text) return;
   window.dispatchEvent(new CustomEvent('sigma:jarvis-say', { detail: { text } }));
-  speak(text, opts);
+  speak(text, { ...opts, auto: true });
+}
+
+/**
+ * Modo da voz: 'ordens' (padrão: fala só quando o senhor fala com ela),
+ * 'sempre' (fala também os avisos) ou 'nunca' (só texto).
+ */
+export function voiceMode() {
+  try {
+    const v = localStorage.getItem(KEY);
+    return ['ordens', 'sempre', 'nunca'].includes(v) ? v : 'ordens';
+  } catch { return 'ordens'; }
+}
+
+export function setVoiceMode(mode) {
+  try { localStorage.setItem(KEY, mode); } catch { /* sem armazenamento */ }
+  if (mode === 'nunca') window.speechSynthesis?.cancel();
 }
 
 export function voiceEnabled() {
-  try { return localStorage.getItem(KEY) !== 'off'; } catch { return true; }
-}
-
-export function setVoiceEnabled(on) {
-  try { localStorage.setItem(KEY, on ? 'on' : 'off'); } catch { /* sem armazenamento */ }
-  if (!on) window.speechSynthesis?.cancel();
+  return voiceMode() !== 'nunca';
 }
 
 function ptVoice() {
@@ -39,10 +50,14 @@ function ptVoice() {
     || null;
 }
 
-/** Fala o texto (se a voz estiver ligada). `priority` interrompe o que estiver falando. */
-export function speak(text, { priority = false } = {}) {
+/**
+ * Fala o texto conforme o modo. `auto` = aviso que ela deu sozinha (só fala
+ * no modo 'sempre'); resposta a uma ordem fala em 'ordens' e 'sempre'.
+ */
+export function speak(text, { priority = false, auto = false } = {}) {
   const synth = window.speechSynthesis;
-  if (!synth || !voiceEnabled() || !text) return;
+  const mode = voiceMode();
+  if (!synth || !text || mode === 'nunca' || (auto && mode !== 'sempre')) return;
   if (priority) synth.cancel();
   const u = new SpeechSynthesisUtterance(String(text).slice(0, 400));
   const voice = ptVoice();

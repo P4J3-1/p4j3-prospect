@@ -49,6 +49,9 @@ class Autopilot {
     this.feed = Array.isArray(raw.feed) ? raw.feed.slice(-MAX_FEED) : [];
     this.replyDrafts = raw.replyDrafts && typeof raw.replyDrafts === "object" ? raw.replyDrafts : {};
     this.intel = raw.intel && typeof raw.intel === "object" ? raw.intel : {};
+    // Resposta já tratada (usada ou dispensada) e proposta já feita: não gasta IA de novo.
+    this.handledReplies = raw.handledReplies && typeof raw.handledReplies === "object" ? raw.handledReplies : {};
+    this.proposedAt = raw.proposedAt && typeof raw.proposedAt === "object" ? raw.proposedAt : {};
     this.missionCursor = Number(raw.missionCursor) || 0;
     this.lastRun = raw.lastRun && typeof raw.lastRun === "object" ? raw.lastRun : {};
     this.stats = raw.stats && raw.stats.day === dayKey(this.now()) ? raw.stats : { day: dayKey(this.now()), byStage: {} };
@@ -68,6 +71,8 @@ class Autopilot {
         intel: this.intel,
         missionCursor: this.missionCursor,
         cursors: this.cursors,
+        handledReplies: this.handledReplies,
+        proposedAt: this.proposedAt,
         settingsVersion: this.settingsVersion,
         lastRun: this.lastRun,
         stats: this.stats,
@@ -252,6 +257,8 @@ class Autopilot {
   }
 
   dismissReplyDraft(phone) {
+    const draft = this.replyDrafts[phone];
+    if (draft?.lastReplyAt) this.handledReplies[phone] = draft.lastReplyAt;
     delete this.replyDrafts[phone];
     this.save();
     this.onEvent({ type: "reply-draft", phone, draft: null });

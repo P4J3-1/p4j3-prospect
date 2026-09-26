@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Send, Volume2, VolumeX, X, Eye, Sunrise } from 'lucide-react';
-import { speak, voiceEnabled, setVoiceEnabled, jarvisPref, setJarvisPref } from '../jarvisVoice';
+import { speak, voiceMode, setVoiceMode, jarvisPref, setJarvisPref } from '../jarvisVoice';
 import { getJarvisContext } from '../jarvisContext';
 
 const SUGGESTIONS = [
@@ -23,7 +23,15 @@ export default function JarvisConsole({ onNavigate }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState([{ from: 'jarvis', text: 'Às suas ordens, senhor. O que vamos prospectar?' }]);
-  const [voice, setVoice] = useState(voiceEnabled());
+  const [voice, setVoice] = useState(voiceMode());
+  const [bubble, setBubble] = useState('');
+  const bubbleTimer = useRef(null);
+  // Aviso dela com o console fechado: balão discreto por alguns segundos.
+  const notify = (text) => {
+    setBubble(text);
+    clearTimeout(bubbleTimer.current);
+    bubbleTimer.current = setTimeout(() => setBubble(''), 9000);
+  };
   const [comments, setComments] = useState(jarvisPref('comentarios'));
   const [briefingOn, setBriefingOn] = useState(jarvisPref('briefing'));
   const logRef = useRef(log);
@@ -42,7 +50,9 @@ export default function JarvisConsole({ onNavigate }) {
     const onOpen = () => setOpen(true);
     const onLocalSay = (e) => {
       const said = e.detail?.text;
-      if (said) setLog((l) => [...l, { from: 'jarvis', text: said }].slice(-40));
+      if (!said) return;
+      setLog((l) => [...l, { from: 'jarvis', text: said }].slice(-40));
+      notify(said);
     };
     window.addEventListener('sigma:jarvis-say', onLocalSay);
     // Briefing falado ao abrir o app (uma vez).
@@ -51,7 +61,8 @@ export default function JarvisConsole({ onNavigate }) {
       const res = await window.jarvisAPI?.briefing?.().catch(() => null);
       if (res?.text) {
         setLog((l) => [...l, { from: 'jarvis', text: res.text }].slice(-40));
-        speak(res.text);
+        notify(res.text);
+        speak(res.text, { auto: true });
       }
     }, 7000);
     window.addEventListener('keydown', onKey);
@@ -60,7 +71,8 @@ export default function JarvisConsole({ onNavigate }) {
     const off = window.jarvisAPI?.onSay?.(({ text: said, priority } = {}) => {
       if (!said) return;
       setLog((l) => [...l, { from: 'jarvis', text: said }].slice(-40));
-      speak(said, { priority });
+      notify(said);
+      speak(said, { priority, auto: true });
     });
     return () => {
       window.removeEventListener('keydown', onKey);
@@ -105,9 +117,17 @@ export default function JarvisConsole({ onNavigate }) {
 
   if (!open) {
     return (
-      <button type="button" className="jv-fab" onClick={() => setOpen(true)} title="J.A.R.V.I.S. (Ctrl+J)" aria-label="Abrir o J.A.R.V.I.S.">
-        <span className="jv-fab-core" />
-      </button>
+      <>
+        {bubble && (
+          <button type="button" className="jv-bubble" onClick={() => { setBubble(''); setOpen(true); }} title="Abrir o J.A.R.V.I.S.">
+            {bubble}
+          </button>
+        )}
+        <button type="button" className="jv-fab" onClick={() => setOpen(true)} title="J.A.R.V.I.S. (Ctrl+J)" aria-label="Abrir o J.A.R.V.I.S.">
+          <span className="jv-fab-core" />
+          {bubble && <i className="jv-fab-ping" aria-hidden="true" />}
+        </button>
+      </>
     );
   }
 
@@ -126,8 +146,14 @@ export default function JarvisConsole({ onNavigate }) {
           <button type="button" className={`ap-icon ${briefingOn ? 'on' : ''}`} title={briefingOn ? 'Briefing ao abrir: ligado' : 'Briefing ao abrir: desligado'} onClick={() => { setJarvisPref('briefing', !briefingOn); setBriefingOn(!briefingOn); }}>
             <Sunrise size={16} />
           </button>
-          <button type="button" className="ap-icon" title={voice ? 'Desligar voz' : 'Ligar voz'} onClick={() => { setVoiceEnabled(!voice); setVoice(!voice); }}>
-            {voice ? <Volume2 size={16} /> : <VolumeX size={16} />}
+          <button
+            type="button"
+            className={`ap-icon ${voice !== 'nunca' ? 'on' : ''}`}
+            title={{ ordens: 'Voz: só quando o senhor fala com ela (clique para: sempre)', sempre: 'Voz: sempre, inclusive avisos (clique para: muda)', nunca: 'Voz: muda, só texto (clique para: só nas ordens)' }[voice]}
+            onClick={() => { const next = { ordens: 'sempre', sempre: 'nunca', nunca: 'ordens' }[voice]; setVoiceMode(next); setVoice(next); }}
+          >
+            {voice === 'nunca' ? <VolumeX size={16} /> : <Volume2 size={16} />}
+            {voice === 'sempre' && <i className="jv-voice-dot" aria-hidden="true" />}
           </button>
           <button type="button" className="ap-icon" title="Fechar (Esc)" onClick={() => setOpen(false)}><X size={16} /></button>
         </header>
