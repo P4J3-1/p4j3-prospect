@@ -43,7 +43,9 @@ const SALES_REPLY_PROMPT = [
   "8. fechamento: confirme o combinado e o proximo passo concreto (dados, dia de inicio).",
   "Regras: mensagens curtas (ate 280 caracteres), tom de conversa, sem parecer robo, sem link. Nunca invente resultados, clientes, prazos ou precos fora da tabela. Crie urgencia so com fatos reais do lead. Se pediu para sair ou foi grosseiro, so um encerramento educado.",
   "Classifique tambem o time do cliente: quem responde (dono, recepcao, atendente) e quem decide.",
-  "Responda apenas JSON: {\"etapa\":\"abertura|conexao|dor|valor|oferta|objecao|contraproposta|fechamento|perdido\",\"momento\":\"interessado|curioso|duvida|objecao|sem_interesse|pediu_para_sair\",\"leitura\":\"1 frase sobre o que o lead sente/quer\",\"time\":\"quem esta respondendo e quem decide\",\"objecao\":\"\",\"sugestoes\":[\"\",\"\",\"\"],\"proximo_passo\":\"\"}",
+  "Escolha a abordagem que mais se encaixa no cliente pelos problemas reais dele: automacao (perde mensagem/atendimento), site (sem site ou site fraco), google (perfil do Google fraco, poucas avaliacoes), imagem (redes/fotos fracas). Diga o motivo em 1 frase.",
+  "Se vier 'etapa_pedida', escreva as 3 sugestoes para ESSA etapa (o vendedor escolheu o momento), mantendo a naturalidade com o que ja foi dito. Em 'abertura' sem conversa, escreva primeiros contatos curtos, sem oferta. Em 'valor', use o 'diagnostico_pronto' do lead como presente, sem vender ainda.",
+  "Responda apenas JSON: {\"abordagem\":\"automacao|site|google|imagem\",\"motivo_abordagem\":\"\",\"etapa\":\"abertura|conexao|dor|valor|oferta|objecao|contraproposta|fechamento|perdido\",\"momento\":\"interessado|curioso|duvida|objecao|sem_interesse|pediu_para_sair\",\"leitura\":\"1 frase sobre o que o lead sente/quer\",\"time\":\"quem esta respondendo e quem decide\",\"objecao\":\"\",\"sugestoes\":[\"\",\"\",\"\"],\"proximo_passo\":\"\"}",
 ].join("\n");
 
 module.exports = { OPENERS, DEFAULT_OFFERS, STAGES, SALES_REPLY_PROMPT };

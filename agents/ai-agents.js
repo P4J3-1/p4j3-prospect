@@ -40,21 +40,24 @@ async function runAnalyst({ insights, commercial, previous }, runAi) {
   };
 }
 
-async function suggestReplies({ messages, lead, commercial }, runAi) {
+async function suggestReplies({ messages, lead, commercial, etapa = "" }, runAi) {
   const conversation = (Array.isArray(messages) ? messages : [])
     .slice(-16)
     .map((m) => ({ de: m.fromMe ? "vendedor" : "lead", texto: String(m.text || "").slice(0, 600) }))
     .filter((m) => m.texto);
-  if (!conversation.length) throw new Error("A conversa ainda não tem mensagens de texto para analisar.");
+  const wanted = STAGES.includes(etapa) ? etapa : "";
+  if (!conversation.length && wanted !== "abertura") throw new Error("A conversa ainda não tem mensagens: use a etapa Abrir.");
   const { result } = await runAi({
     system: SALES_REPLY_PROMPT,
-    payload: { conversa: conversation, lead: lead || {}, vendedor: commercial || {} },
+    payload: { conversa: conversation, lead: lead || {}, vendedor: commercial || {}, ...(wanted ? { etapa_pedida: wanted } : {}) },
   });
   const sugestoes = list(result?.sugestoes, 3, 400);
   if (!sugestoes.length) throw new Error("A IA não sugeriu respostas. Tente novamente.");
   return {
     momento: MOMENTS.includes(result?.momento) ? result.momento : "curioso",
-    etapa: STAGES.includes(result?.etapa) ? result.etapa : "",
+    etapa: wanted || (STAGES.includes(result?.etapa) ? result.etapa : ""),
+    abordagem: ["automacao", "site", "google", "imagem"].includes(result?.abordagem) ? result.abordagem : "",
+    motivoAbordagem: String(result?.motivo_abordagem || "").slice(0, 200),
     time: String(result?.time || "").slice(0, 160),
     leitura: String(result?.leitura || "").slice(0, 240),
     objecao: String(result?.objecao || "").slice(0, 120),

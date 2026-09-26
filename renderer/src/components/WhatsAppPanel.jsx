@@ -71,6 +71,19 @@ function readShowLeadPanel() {
   try { return localStorage.getItem('sigma_wa_lead_panel') !== 'false'; } catch { return true; }
 }
 
+// Etapas da venda (botões "Conduzir a venda"): o agente escreve para a etapa escolhida.
+const SALES_STAGES = [
+  ['abertura', '👋 Abrir', 'Primeiro contato curto, sem oferta'],
+  ['conexao', '🤝 Conexão', 'Perguntas sobre o negócio e a rotina'],
+  ['dor', '❓ Criar necessidade', 'Perguntas que fazem o lead enxergar o prejuízo'],
+  ['valor', '🎁 Diagnóstico', 'Entrega o diagnóstico gratuito como presente'],
+  ['oferta', '💰 Oferta', 'Oferta da sua tabela, com pergunta de escolha'],
+  ['objecao', '🛡️ Objeção', 'Responde a objeção com uma pergunta'],
+  ['contraproposta', '🔄 Contraproposta', 'Um primeiro passo menor para ele dizer sim'],
+  ['fechamento', '✅ Fechar', 'Confirma o combinado e o próximo passo'],
+];
+const APPROACH_LABELS = { automacao: 'Automação', site: 'Site', google: 'Google', imagem: 'Imagem' };
+
 // Abordagem padrão: curta, sem link e terminando em pergunta. Pedir permissão
 // gera mais respostas e menos denúncias do que despejar a oferta no 1º toque.
 // {a|b} sorteia uma variação por lead (spintax) para as mensagens não saírem iguais.
@@ -4276,9 +4289,9 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     return () => { alive = false; };
   }, [activeChatJid, activeLeadPhone]);
 
-  const requestAiReply = async () => {
+  const requestAiReply = async (etapa = '') => {
     if (!window.aiAPI?.suggestReply) return;
-    setAiReply({ loading: true });
+    setAiReply({ loading: true, etapa });
     const history = messages
       .slice(-16)
       .map((m) => ({ fromMe: !!m?.key?.fromMe, text: extractText(unwrapMessage(m?.message || {})) || '' }))
@@ -4291,7 +4304,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
         website: activeLead?.website,
         saudacao: activeLead?.saudacao,
         decisor: activeLead?.decisor,
-      });
+      }, etapa);
       if (!res?.success) throw new Error(res?.error || 'Sem sugestões agora.');
       setAiReply({ loading: false, data: res });
     } catch (error) {
@@ -5896,7 +5909,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                           className="btn btn-sm wa-ai-reply-btn"
                           disabled={aiReply?.loading || messages.length === 0}
                           title="O Agente de Respostas lê a conversa e sugere 3 respostas"
-                          onClick={requestAiReply}
+                          onClick={() => requestAiReply('')}
                         >
                           <Sparkles size={13} /> {aiReply?.loading ? 'Pensando…' : 'Sugerir resposta'}
                         </button>
@@ -6095,6 +6108,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         ) : (
                           <span>
                             <b>{MOMENT_LABELS[aiReply.data.momento] || 'Lead'}</b>
+                            {aiReply.data.abordagem ? ` · Abordagem: ${APPROACH_LABELS[aiReply.data.abordagem] || aiReply.data.abordagem}${aiReply.data.motivoAbordagem ? ` (${aiReply.data.motivoAbordagem})` : ''}` : ''}
                             {aiReply.fromAgent ? ' · preparada pelo Agente de Respostas' : ''}
                             {aiReply.data.leitura ? ` · ${aiReply.data.leitura}` : ''}
                           </span>
@@ -6346,15 +6360,25 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   </div>
                 )}
 
-                <div className="clp-actions">
-                  <button type="button" className="btn btn-sm btn-primary" disabled={aiReply?.loading || messages.length === 0} onClick={requestAiReply}>
-                    <Sparkles size={13} /> {aiReply?.loading ? 'Pensando…' : 'Sugerir resposta'}
+                <div className="clp-stages" role="group" aria-label="Conduzir a venda">
+                  <span className="clp-label">Conduzir a venda — o agente escreve para a etapa</span>
+                  <button type="button" className="clp-stage ai" disabled={aiReply?.loading || messages.length === 0} onClick={() => requestAiReply('')}>
+                    <Sparkles size={13} /> {aiReply?.loading && !aiReply.etapa ? 'Analisando…' : 'IA decide a próxima'}
                   </button>
-                  {activeTriage?.presente?.mensagem && (
-                    <button type="button" className="btn btn-sm" onClick={() => setInputText(activeTriage.presente.mensagem)}>
-                      Usar diagnóstico gratuito
-                    </button>
-                  )}
+                  <div className="clp-stage-grid">
+                    {SALES_STAGES.map(([id, label, hint]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        className={`clp-stage s-${id}`}
+                        title={hint}
+                        disabled={aiReply?.loading || (id !== 'abertura' && messages.length === 0)}
+                        onClick={() => requestAiReply(id)}
+                      >
+                        {aiReply?.loading && aiReply.etapa === id ? '…' : label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </aside>
             )}

@@ -194,7 +194,7 @@ contextBridge.exposeInMainWorld("aiAPI", {
     ipcRenderer.on("lead-replied", listener);
     return () => ipcRenderer.removeListener("lead-replied", listener);
   },
-  suggestReply: (messages, lead) => ipcRenderer.invoke("ai-suggest-reply", { messages, lead }),
+  suggestReply: (messages, lead, etapa) => ipcRenderer.invoke("ai-suggest-reply", { messages, lead, etapa }),
   researchLead: (lead) => ipcRenderer.invoke("ai-research-lead", { lead }),
   getInsights: () => ipcRenderer.invoke("ai-insights"),
   optimizeMessage: (template, followUp) => ipcRenderer.invoke("ai-optimize-message", { template, followUp }),

@@ -4664,16 +4664,16 @@ ipcMain.handle("ai-optimize-message", async (_, { template, followUp } = {}) => 
   }
 });
 
-ipcMain.handle("ai-suggest-reply", async (_, { messages, lead } = {}) => {
+ipcMain.handle("ai-suggest-reply", async (_, { messages, lead, etapa } = {}) => {
   try {
-    return { success: true, ...(await suggestReplyFor(messages, lead)) };
+    return { success: true, ...(await suggestReplyFor(messages, lead, limitString(etapa, 30, ""))) };
   } catch (error) {
     return { success: false, error: error.message };
   }
 });
 
 /** Agente de Respostas: lê a conversa e devolve 3 respostas + o momento do lead. */
-async function suggestReplyFor(messages, lead) {
+async function suggestReplyFor(messages, lead, etapa = "") {
   {
     const runAi = agentAi("respostas");
     if (!runAi) throw new Error("Configure a IA e confira o limite do Agente de Respostas.");
@@ -4690,6 +4690,7 @@ async function suggestReplyFor(messages, lead) {
         return {
           ...clean,
           triagem: triage ? { segmentos: triage.segmentLabels, problemas: triage.findings } : null,
+          diagnostico_pronto: triage?.presente?.mensagem || "",
           oferta_atual: kit?.offerLabel,
           roteiro_objecoes: kit?.objections?.slice(0, 6),
           memoria: (() => {
@@ -4705,6 +4706,7 @@ async function suggestReplyFor(messages, lead) {
         };
       })(),
       commercial: commercialForAgents(),
+      etapa,
     }, runAi);
     agentStore.log("respostas", `Sugestões para ${clean.name || "conversa"} (lead ${result.momento.replace(/_/g, " ")}).`);
     const memory = leadMemory?.recordReading(clean.phone, { momento: result.momento, leitura: result.leitura, objecao: result.objecao });
