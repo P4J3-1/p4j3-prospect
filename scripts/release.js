@@ -39,6 +39,10 @@ function bump(version, type) {
   return `${major}.${minor}.${patch + 1}`;
 }
 
+/**
+ * Espera a release aparecer no repositório público de releases com o
+ * latest.yml (é o que o atualizador lê). Funciona com o código privado.
+ */
 async function waitForRelease(owner, repo, tag) {
   const api = `https://api.github.com/repos/${owner}/${repo}`;
   const headers = { accept: "application/vnd.github+json", "user-agent": "p4j3-release" };
@@ -47,21 +51,20 @@ async function waitForRelease(owner, repo, tag) {
   while (Date.now() - started < 40 * 60 * 1000) {
     await new Promise((r) => setTimeout(r, 30000));
     try {
-      const res = await fetch(`${api}/actions/runs?event=push&per_page=10`, { headers });
-      const run = (await res.json()).workflow_runs?.find((r) => r.name === "Release" && r.head_branch === tag);
-      const status = run ? `${run.status}${run.conclusion ? `/${run.conclusion}` : ""}` : "aguardando início";
+      const res = await fetch(`${api}/releases/tags/${tag}`, { headers });
+      const release = res.ok ? await res.json() : null;
+      const assets = (release?.assets || []).map((a) => a.name);
+      const ready = assets.includes("latest.yml");
+      const status = ready ? "publicada" : release ? `enviando arquivos (${assets.length})` : "gerando instalador";
       const minutes = Math.round((Date.now() - started) / 60000);
-      if (status !== lastStatus || minutes % 3 === 0) console.log(`  … build ${status} (${minutes} min)`);
+      if (status !== lastStatus || minutes % 3 === 0) console.log(`  … ${status} (${minutes} min)`);
       lastStatus = status;
-      if (run?.status === "completed") {
-        if (run.conclusion !== "success") fail(`O build falhou. Veja o log: ${run.html_url}`);
-        return true;
-      }
+      if (ready) return true;
     } catch {
       // Sem internet por um instante: tenta de novo no próximo ciclo.
     }
   }
-  console.log("  Ainda gerando após 40 min; acompanhe pelo link do Actions.");
+  console.log("  Ainda gerando após 40 min; confira o Actions no GitHub.");
   return false;
 }
 
@@ -106,7 +109,9 @@ async function main() {
   step("Enviando para o GitHub (dispara o build do instalador)");
   gitLoud("push", "origin", "main", tag);
 
-  const actions = `https://github.com/${publish.owner}/${publish.repo}/actions`;
+  // O build roda no repositório do código (origin); o download fica no de releases.
+  const codeRepo = git("remote", "get-url", "origin").replace(/\.git$/, "").replace(/^git@github\.com:/, "https://github.com/");
+  const actions = `${codeRepo}/actions`;
   const download = `https://github.com/${publish.owner}/${publish.repo}/releases/latest`;
   console.log(`\n✔ ${tag} enviada. Build: ${actions}`);
   if (noWait) {

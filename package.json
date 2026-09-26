@@ -93,6 +93,12 @@
       {
         "provider": "github",
         "owner": "P4J3-1",
+        "repo": "p4j3-prospect-releases",
+        "releaseType": "release"
+      },
+      {
+        "provider": "github",
+        "owner": "P4J3-1",
         "repo": "p4j3-prospect",
         "releaseType": "release"
       }

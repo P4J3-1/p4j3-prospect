@@ -82,7 +82,7 @@ Sugestões para o Kanban com IA: [docs/sugestoes-kanban-ia.md](docs/sugestoes-ka
 
 ## Download para Windows
 
-**[Baixar a versão mais recente](https://github.com/P4J3-1/p4j3-prospect/releases/latest)**. Cada versão traz:
+**[Baixar a versão mais recente](https://github.com/P4J3-1/p4j3-prospect-releases/releases/latest)**. Cada versão traz:
 
 - `P4J3-Prospect-<versão>-x64.exe` — instalador NSIS recomendado.
 - `P4J3-Prospect-<versão>-x64.zip` — pacote portátil.

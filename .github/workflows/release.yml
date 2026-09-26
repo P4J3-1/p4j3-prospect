@@ -20,6 +20,9 @@ jobs:
       - run: npm test
       # Gera o instalador NSIS + ZIP e publica a release com latest.yml,
       # que é o que o atualizador automático dos apps instalados consulta.
+      # O instalador vai para o repositório público de releases (o código fica
+      # privado). O token padrão não escreve em outro repositório: usa o
+      # RELEASES_TOKEN (fine-grained, Contents: read/write nos dois repositórios).
       - run: npm run build:win -- --publish always
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
