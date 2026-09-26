@@ -50,14 +50,34 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
 
 // Filtros de qualidade: segmentos da triagem (qualquer um marcado) + requisitos.
 const QUALITY_CHIPS = [
-  { id: 'alto_potencial', label: 'Alto potencial', kind: 'segment' },
-  { id: 'sem_site', label: 'Sem site / fora do ar', kind: 'segment', also: ['so_rede_social', 'site_fora_do_ar'] },
-  { id: 'site_fraco', label: 'Site fraco', kind: 'segment' },
-  { id: 'atendimento_manual', label: 'WhatsApp sem automação', kind: 'segment' },
-  { id: 'tel', label: 'Com telefone', kind: 'require' },
-  { id: 'whatsapp', label: 'Tem WhatsApp', kind: 'require' },
-  { id: 'decisor', label: 'Dono identificado', kind: 'require' },
+  { id: 'pronto', label: 'Prontos para abordar', kind: 'require', color: '#16a34a' },
+  { id: 'alto_potencial', label: 'Alto potencial', kind: 'segment', color: '#f59e0b' },
+  { id: 'sem_site', label: 'Sem site / fora do ar', kind: 'segment', also: ['so_rede_social', 'site_fora_do_ar'], color: '#dc2626' },
+  { id: 'site_fraco', label: 'Site fraco', kind: 'segment', color: '#ea580c' },
+  { id: 'atendimento_manual', label: 'WhatsApp sem automação', kind: 'segment', color: '#7c3aed' },
+  { id: 'whatsapp', label: 'WhatsApp confirmado', kind: 'require', color: '#22c55e' },
+  { id: 'tel', label: 'Com telefone', kind: 'require', color: '#0ea5e9' },
+  { id: 'web', label: 'Achados na web', kind: 'require', color: '#38bdf8' },
+  { id: 'decisor', label: 'Dono identificado', kind: 'require', color: '#a855f7' },
 ];
+
+/** O lead passa no filtro de qualidade id? (contagem e filtro usam a mesma regra) */
+function passesChip(id, lead, { triage, waCheck, decisores = {} }) {
+  const phone = getLeadPhone(lead);
+  const wa = phone ? waCheck[phoneCore(phone)] : null;
+  const chip = QUALITY_CHIPS.find((c) => c.id === id);
+  if (chip?.kind === 'segment') {
+    const t = triageFor(triage, lead);
+    return !!t && t.segments.some((seg) => seg === id || (chip.also || []).includes(seg));
+  }
+  if (id === 'tel') return !!phone;
+  if (id === 'whatsapp') return wa?.exists === true;
+  if (id === 'decisor') return !!lead.decisor || !!(phone && decisores[phoneCore(phone)]);
+  if (id === 'web') return lead.source === 'radar-web';
+  // Pronto: tem telefone, WhatsApp não descartado e potencial de médio para cima.
+  if (id === 'pronto') return !!phone && wa?.exists !== false && (triageFor(triage, lead)?.score ?? 0) >= 45;
+  return true;
+}
 
 // Abas por situação do contato; o lead muda de aba sozinho quando o WhatsApp confirma.
 const SCRAPER_TABS = [
@@ -508,6 +528,8 @@ export default function MapScraperView({
   );
 
   // Lista de leads visíveis filtrada
+  const [autopilotState] = useAutopilot();
+  const decisores = useMemo(() => autopilotState?.decisores || {}, [autopilotState?.decisores]);
   const visibleLeads = useMemo(() => {
     const nq = norm(feedSearch.trim());
 
@@ -516,9 +538,10 @@ export default function MapScraperView({
     return displayLeads.filter((lead) => {
       const contact = contactFor(contacts, lead);
       if (scraperTab !== 'todos' && bucketOf(lead) !== scraperTab) return false;
-      if (qualityChips.includes('tel') && !getLeadPhone(lead)) return false;
-      if (qualityChips.includes('whatsapp') && waCheck[phoneCore(getLeadPhone(lead))]?.exists !== true) return false;
-      if (qualityChips.includes('decisor') && !lead.decisor) return false;
+      for (const id of qualityChips) {
+        const chip = QUALITY_CHIPS.find((c) => c.id === id);
+        if (chip?.kind === 'require' && !passesChip(id, lead, { triage, waCheck, decisores })) return false;
+      }
       if (wantedSegments.size) {
         const t = triageFor(triage, lead);
         if (!t || !t.segments.some((seg) => wantedSegments.has(seg))) return false;
@@ -589,10 +612,17 @@ export default function MapScraperView({
     contacts,
     triage,
     waCheck,
+    decisores,
     groupBy,
     queueByPhone,
     leadMemoryMap,
   ]);
+
+  const chipCounts = useMemo(() => {
+    const inTab = displayLeads.filter((lead) => scraperTab === 'todos' || bucketOf(lead) === scraperTab);
+    return Object.fromEntries(QUALITY_CHIPS.map((chip) => [chip.id, inTab.filter((lead) => passesChip(chip.id, lead, { triage, waCheck, decisores })).length]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayLeads, scraperTab, contacts, queueByPhone, triage, waCheck, decisores]);
 
   const tabCounts = useMemo(() => {
     const counts = { todos: displayLeads.length, disponiveis: 0, fila: 0, contatados: 0, responderam: 0, nao_contatar: 0 };
@@ -613,7 +643,6 @@ export default function MapScraperView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [displayLeads, contacts, queueByPhone, triage],
   );
-  const [autopilotState] = useAutopilot();
   const hunter = autopilotState?.stages?.find((st) => st.id === 'cacador');
   const hunting = hunter?.live?.status === 'working' || !!activeExtraction;
   const hudTiles = [
@@ -1749,9 +1778,12 @@ export default function MapScraperView({
               type="button"
               aria-pressed={qualityChips.includes(chip.id)}
               className={`quality-chip ${qualityChips.includes(chip.id) ? 'on' : ''}`}
+              style={{ '--chip': chip.color }}
               onClick={() => toggleQualityChip(chip.id)}
             >
+              <i aria-hidden="true" />
               {chip.label}
+              <span className="quality-chip-count">{chipCounts[chip.id] ?? 0}</span>
             </button>
           ))}
         </div>

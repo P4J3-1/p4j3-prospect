@@ -9038,3 +9038,10 @@ html[data-theme="dark"] .clp-stage:not(.ai) { background: color-mix(in srgb, var
 .ap-pod { flex: 1 1 112px; min-width: 108px; }
 .ap-pod h3 { font-size: 13px; }
 .ap-orb { width: 56px; height: 56px; }
+/* Hunter Maps: filtros com cor e contagem ao vivo */
+.quality-chip { --chip: #64748b; display: inline-flex; align-items: center; gap: 6px; transition: transform .15s, box-shadow .15s, background .15s; }
+.quality-chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--chip); box-shadow: 0 0 0 3px color-mix(in srgb, var(--chip) 18%, transparent); }
+.quality-chip:hover { transform: translateY(-1px); box-shadow: 0 6px 14px -8px var(--chip); }
+.quality-chip.on { background: color-mix(in srgb, var(--chip) 16%, #fff) !important; border-color: var(--chip) !important; color: color-mix(in srgb, var(--chip) 75%, #0f172a) !important; }
+.quality-chip-count { font-size: 10.5px; font-weight: 800; min-width: 18px; padding: 0 5px; border-radius: 99px; text-align: center; color: #fff; background: var(--chip); font-variant-numeric: tabular-nums; }
+html[data-theme="dark"] .quality-chip.on { background: color-mix(in srgb, var(--chip) 22%, #0f172a) !important; color: #fff !important; }

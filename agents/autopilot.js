@@ -264,6 +264,8 @@ class Autopilot {
       replyDrafts: this.replyDrafts,
       busy: this.busy,
       plan: { ...planner.planSize(), progress: this.planProgress() },
+      // Donos achados pelo Pesquisador (telefone → nome), para filtros e fichas.
+      decisores: Object.fromEntries(Object.entries(this.intel).filter(([, i]) => i?.decisor?.nome).map(([k, i]) => [k, i.decisor.nome])),
     };
   }
 

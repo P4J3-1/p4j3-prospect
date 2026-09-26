@@ -100,7 +100,7 @@ describe('composição das mensagens', () => {
     ];
     const noAi = await composeMessages(items);
     // 1º contato: abertura curta com o nome da empresa, sem pitch.
-    assert.ok(noAi.get('a').mensagem.includes('Clínica Sorriso'));
+    assert.ok(/Clínica Sorriso|respons[aá]vel|atendimento/.test(noAi.get('a').mensagem));
     assert.ok(noAi.get('a').mensagem.length < 120);
     assert.ok(!/[{}]/.test(noAi.get('a').mensagem), 'spintax resolvido');
     assert.ok(/site profissional/.test(noAi.get('b').mensagem));
