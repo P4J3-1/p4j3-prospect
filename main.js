@@ -4325,6 +4325,23 @@ function withIntel(lead) {
 
 const pendingHunts = new Map();
 
+/** Nichos que mais respondem de verdade (mín. 8 contatos), para o Caçador priorizar. */
+function bestNiches() {
+  const groups = {};
+  for (const lead of allLeads()) {
+    const contact = contactStatus?.get(lead?.phone || lead?.tel || "");
+    if (!contact || contact.status === "nao_contatar" || !lead.category) continue;
+    const g = (groups[lead.category] ||= { sent: 0, replied: 0 });
+    g.sent += 1;
+    if (contact.status === "respondeu") g.replied += 1;
+  }
+  return Object.entries(groups)
+    .filter(([, g]) => g.sent >= 8 && g.replied > 0)
+    .sort((a, b) => b[1].replied / b[1].sent - a[1].replied / a[1].sent)
+    .slice(0, 4)
+    .map(([category]) => category.toLowerCase());
+}
+
 /** Avança o card do lead no Kanban (nunca volta, nunca mexe em vendido/recusado). */
 function moveLeadInKanban(phone, toColumnId) {
   try {
@@ -4642,7 +4659,7 @@ function setupAutopilot() {
     onEvent: (event) => safeSend("autopilot-event", event),
   });
   // Nichos que o Analista viu responder mais entram no plano com prioridade.
-  autopilot.favoriteNiches = () => agentStore?.getPlaybook()?.nichos || [];
+  autopilot.favoriteNiches = () => [...new Set([...bestNiches(), ...(agentStore?.getPlaybook()?.nichos || [])])].slice(0, 6);
   autopilot.start();
 }
 

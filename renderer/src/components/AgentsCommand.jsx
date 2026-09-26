@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Play, Power, Plus, Trash2, Copy, MessageCircle, X, Crosshair, Filter, Search, PenLine, MessagesSquare, LineChart, Globe, PhoneCall, Sparkle } from 'lucide-react';
 import { useAutopilot } from '../useAutopilot';
 import { timeAgo } from '../contactStatus.mjs';
+import JarvisCore from './JarvisCore';
 
 // Ordem do fluxo na tela (a ordem de execução é do processo principal).
 export const AGENT_META = {
@@ -223,6 +224,8 @@ export default function AgentsCommand({ onNavigate, aiConfigured }) {
           </span>
         </button>
       </header>
+
+      <JarvisCore autopilot={state} onNavigate={onNavigate} />
 
       <div className="ap-today" aria-label="Hoje">
         {[
