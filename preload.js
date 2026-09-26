@@ -156,6 +156,13 @@ contextBridge.exposeInMainWorld("autopilotAPI", {
   onPatchLeads: subscribe("autopilot-patch-leads"),
 });
 
+contextBridge.exposeInMainWorld("dealsAPI", {
+  getAll: () => ipcRenderer.invoke("deals-get"),
+  card: (phone) => ipcRenderer.invoke("deals-card", { phone }),
+  update: (phone, patch) => ipcRenderer.invoke("deals-update", { phone, patch }),
+  onChanged: subscribe("deals-changed"),
+});
+
 contextBridge.exposeInMainWorld("diagnosisAPI", {
   create: (phone, name) => ipcRenderer.invoke("diagnosis-create", { phone, name }),
   open: (filePath) => ipcRenderer.invoke("diagnosis-open", { filePath }),

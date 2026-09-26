@@ -90,3 +90,36 @@ describe('sincronizar contatados', () => {
     store.flush();
   });
 });
+
+describe('mesma pessoa em 3 conversas (com 9, sem 9 e LID)', () => {
+  it('junta tudo e conta as respostas dela, inclusive áudio', async () => {
+    const provider = new BaileysProvider({}, () => {}, () => {}, tmp('p4j3-bp-'));
+    const sec = (ms) => Math.floor(ms / 1000);
+    const t0 = Date.UTC(2026, 8, 26, 13);
+    provider._chats = {
+      '5561984096319@s.whatsapp.net': { jid: '5561984096319@s.whatsapp.net', name: 'EDM Saúde', timestamp: sec(t0) },
+      '556184096319@s.whatsapp.net': { jid: '556184096319@s.whatsapp.net', timestamp: sec(t0) },
+      '243717936038030@lid': { jid: '243717936038030@lid', timestamp: sec(t0) },
+    };
+    provider._messages = {
+      '5561984096319@s.whatsapp.net': [
+        { key: { fromMe: true, id: 'm1' }, message: { conversation: 'Opa, tudo bem? É EDM Saúde?' }, messageTimestamp: sec(t0) },
+        { key: { fromMe: true, id: 'm4' }, message: { conversation: 'Prefere segunda às 11h ou quarta às 13h?' }, messageTimestamp: sec(t0 + 3 * 3600e3) },
+      ],
+      '243717936038030@lid': [
+        { key: { fromMe: true, id: 'm1' }, message: { conversation: 'Opa, tudo bem? É EDM Saúde?' }, messageTimestamp: sec(t0) },
+        { key: { fromMe: false, id: 'r1' }, message: { conversation: 'Olá, aqui é o Elim, já te respondo. Estou em atendimento' }, messageTimestamp: sec(t0 + 3000) },
+        { key: { fromMe: false, id: 'r2' }, message: { audioMessage: { seconds: 20 } }, messageTimestamp: sec(t0 + 3600e3) },
+        { key: { fromMe: false, id: 'r3' }, message: { conversation: '13h' }, messageTimestamp: sec(t0 + 4 * 3600e3) },
+      ],
+    };
+    provider._jidAliases = { '243717936038030@lid': '556184096319@s.whatsapp.net', '556184096319@s.whatsapp.net': '243717936038030@lid' };
+    provider.sock = { signalRepository: { lidMapping: { getPNForLID: async () => '556184096319@s.whatsapp.net' } } };
+    const history = await provider.getOutreachHistory();
+    assert.equal(history.length, 1, 'uma pessoa, um registro');
+    assert.equal(history[0].phone, '5561984096319');
+    assert.equal(history[0].replies, 2, 'áudio + "13h" (a saudação automática não conta)');
+    assert.equal(history[0].autoReplies, 1);
+    assert.equal(history[0].lastReplyAt, t0 + 4 * 3600e3);
+  });
+});

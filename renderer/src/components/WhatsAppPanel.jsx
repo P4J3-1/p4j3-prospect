@@ -40,6 +40,7 @@ import {
   Play as PlayIcon,
 } from 'lucide-react';
 import TriggersManagerModal from './TriggersManagerModal';
+import DealPanel from './DealPanel';
 import ChatVoicePlayer from './ChatVoicePlayer';
 import { resolveGroupMembers } from '../leadMatch.mjs';
 import { buildNewChatCandidates } from '../newChatCandidates.mjs';
@@ -6320,6 +6321,8 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                   </div>
                   <div className="clp-hud-next">{aiReply?.data?.proximoPasso || leadHud.next}</div>
                 </div>
+
+                <DealPanel phone={activeLeadPhone} />
 
                 <div className="clp-section">
                   <span className="clp-label">Situação no WhatsApp</span>

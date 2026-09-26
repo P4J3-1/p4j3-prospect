@@ -8,6 +8,42 @@ import { intentScore, resultsBy } from './intel.mjs';
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
 
+/**
+ * Reuniões combinadas (Agente de Negócios): confirmar na véspera e no dia,
+ * preparar a proposta antes e registrar o resultado depois.
+ */
+export function meetingTasks({ deals = {}, nameOf = () => '', now = Date.now() } = {}) {
+  const out = [];
+  const today = new Date(now); today.setHours(0, 0, 0, 0);
+  const dayOf = (ts) => { const d = new Date(ts); d.setHours(0, 0, 0, 0); return Math.round((d - today) / DAY); };
+  for (const [phone, deal] of Object.entries(deals || {})) {
+    if (!deal?.meetingAt) continue;
+    const name = shortName(nameOf(phone) || 'lead');
+    const first = name.split(/\s+/)[0];
+    const hm = new Date(deal.meetingAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }).replace(':00', 'h').replace(':', 'h');
+    const days = dayOf(deal.meetingAt);
+    const base = { phone, name: nameOf(phone) || '' };
+    if (deal.meetingAt > now && days === 0) {
+      out.push({ id: `reuniao-hoje:${phone}`, kind: 'agir', prioridade: 99, titulo: `Reunião hoje às ${hm} com ${name}`,
+        detalhe: 'Confirme agora; a mensagem já está escrita.',
+        acao: { tipo: 'responder', texto: 'Confirmar', ...base, text: `Oi, ${first}! Confirmando nossa conversa hoje às ${hm}. Tudo certo por aí?` } });
+    } else if (days === 1) {
+      out.push({ id: `reuniao-amanha:${phone}`, kind: 'agir', prioridade: 96, titulo: `Confirmar a reunião de amanhã com ${name}`,
+        detalhe: `Amanhã às ${hm}. Lembrete de véspera pronto para enviar.`,
+        acao: { tipo: 'responder', texto: 'Abrir pronta', ...base, text: `Oi, ${first}! Passando pra lembrar da nossa conversa amanhã às ${hm}. Continua de pé?` } });
+    } else if (days >= 2 && days <= 14) {
+      out.push({ id: `reuniao-preparar:${phone}`, kind: 'oportunidade', prioridade: 74, titulo: `Preparar a reunião com ${name}`,
+        detalhe: `${deal.meetingLabel}. Leve a proposta e o diagnóstico prontos.`,
+        acao: { tipo: 'jarvis', acao: 'proposta', parametros: { lead: nameOf(phone) || '' }, texto: 'Preparar proposta' } });
+    } else if (deal.meetingAt < now && now - deal.meetingAt < 3 * DAY && !(deal.updatedAt > deal.meetingAt + 3600000)) {
+      out.push({ id: `reuniao-resultado:${phone}`, kind: 'feedback', prioridade: 80, titulo: `Como foi a reunião com ${name}?`,
+        detalhe: 'Registre o resultado: proposta, valor e próximo passo (no painel da conversa).',
+        acao: { tipo: 'responder', texto: 'Abrir conversa', ...base } });
+    }
+  }
+  return out;
+}
+
 export const KINDS = {
   agir: { label: 'Agir agora', color: '#f472b6' },
   oportunidade: { label: 'Oportunidade', color: '#34d399' },
@@ -49,7 +85,7 @@ function topPlaceFor(leads, contacts, niche) {
  * @returns {Array<{ id: string, kind: 'agir'|'oportunidade'|'feedback', prioridade: number,
  *   titulo: string, detalhe: string, acao: { tipo: string, texto: string, [k: string]: any } | null }>}
  */
-export function critique({ leads = [], contacts = {}, queue = {}, autopilot = null, triage = {}, waCheck = {}, memory = {}, now = Date.now() } = {}) {
+export function critique({ leads = [], contacts = {}, queue = {}, autopilot = null, triage = {}, waCheck = {}, memory = {}, deals = {}, now = Date.now() } = {}) {
   const out = [];
   const add = (item) => out.push(item);
   const entries = Object.entries(contacts || {}).filter(([, c]) => c && typeof c === 'object');
@@ -189,6 +225,9 @@ export function critique({ leads = [], contacts = {}, queue = {}, autopilot = nu
     if (place) add({ id: 'estoque', kind: 'feedback', prioridade: 62, titulo: `Só ${ready} leads prontos na base`, detalhe: `A fila vai secar. Caçar ${winners[0].key}, o nicho que mais responde.`, acao: { tipo: 'jarvis', acao: 'cacar', parametros: { nicho: winners[0].key, cidade: place }, texto: 'Repor agora' } });
   }
 
+  // Reuniões combinadas (Agente de Negócios).
+  for (const item of meetingTasks({ deals, nameOf: (phone) => contacts[phone]?.name || byKey[phone]?.name || '', now })) add(item);
+
   const seen = new Set();
   return out
     .filter((x) => (seen.has(x.id) ? false : seen.add(x.id)))
@@ -203,8 +242,17 @@ const PROPOSAL_FOLLOW_UP = (name) => `Oi${name ? `, ${name}` : ''}! Conseguiu da
  * confirmar (conversa aberta com o texto escrito, proposta, lembrete).
  * @returns {Array<{ id: string, tipo: string, prioridade: number, titulo: string, detalhe: string, cardKey: string, acao: object }>}
  */
-export function kanbanTasks({ cards = [], contacts = {}, replyDrafts = {}, memory = {}, now = Date.now() } = {}) {
+export function kanbanTasks({ cards = [], contacts = {}, replyDrafts = {}, memory = {}, deals = {}, now = Date.now() } = {}) {
   const out = [];
+  const nameByPhone = {};
+  for (const card of cards) {
+    const p = phoneCore(card.entity?.profile?.phone || '');
+    if (p) nameByPhone[p] = { name: card.entity.profile.name || '', key: card.entityKey };
+  }
+  for (const t of meetingTasks({ deals, nameOf: (phone) => nameByPhone[phone]?.name || contacts[phone]?.name || '', now })) {
+    out.push({ ...t, tipo: t.kind === 'feedback' ? 'card' : t.acao.tipo === 'jarvis' ? 'proposta' : 'lembrete', cardKey: nameByPhone[t.phone]?.key || '',
+      acao: t.kind === 'feedback' ? { tipo: 'card', texto: 'Registrar resultado' } : t.acao });
+  }
   const live = liveReplyDrafts(replyDrafts, contacts);
   for (const card of cards) {
     const profile = card.entity?.profile || {};

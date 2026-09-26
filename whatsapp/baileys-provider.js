@@ -1580,19 +1580,22 @@ class BaileysProvider extends WhatsAppProvider {
   conversationFor(phone, limit = 20) {
     const key = phoneCore(phone);
     if (!key) return [];
+    // A mesma pessoa pode estar em até 3 conversas (com 9, sem 9 e LID): junta todas.
     const jids = new Set([...Object.keys(this._chats || {}), ...Object.keys(this._messages || {})]);
-    let jid = null;
+    const byId = new Map();
     for (const candidate of jids) {
       if (candidate.endsWith("@g.us")) continue;
-      if (phoneCore(this._getPhoneJid(candidate) || candidate) === key) {
-        jid = candidate;
-        break;
-      }
+      if (phoneCore(this._getPhoneJid(candidate) || candidate) !== key) continue;
+      for (const m of this.getMessages(candidate)) byId.set(m?.key?.id || `${candidate}:${m?.messageTimestamp}`, m);
     }
-    if (!jid) return [];
-    return this.getMessages(jid)
-      .map((m) => ({ fromMe: !!m?.key?.fromMe, text: this._getMessageText(m), at: this._timestampToNumber(m?.messageTimestamp) * 1000 }))
+    return [...byId.values()]
+      .map((m) => {
+        const type = Object.keys(m?.message || {})[0] || "";
+        const media = /audio|ptt/i.test(type) ? "[áudio]" : /image/i.test(type) ? "[imagem]" : /document/i.test(type) ? "[documento]" : "";
+        return { fromMe: !!m?.key?.fromMe, text: this._getMessageText(m) || media, at: this._timestampToNumber(m?.messageTimestamp) * 1000 };
+      })
       .filter((m) => m.text)
+      .sort((a, b) => a.at - b.at)
       .slice(-limit);
   }
 
@@ -1602,11 +1605,25 @@ class BaileysProvider extends WhatsAppProvider {
    * telefone resolvido e se houve resposta depois do primeiro envio.
    */
   async getOutreachHistory() {
-    const out = [];
+    // A mesma pessoa pode ter até 3 conversas (número com 9, sem 9 e LID).
+    // Junta todas antes de contar: senão a que só tem as SUAS mensagens
+    // sobrescreve a que tem as respostas dela.
+    const groups = new Map();
     const jids = new Set([...Object.keys(this._chats || {}), ...Object.keys(this._messages || {})]);
     for (const jid of jids) {
       if (!jid || jid.endsWith("@g.us") || jid.includes("@broadcast") || jid.includes("@newsletter")) continue;
-      const msgs = this._messages[jid] || [];
+      const phoneJid = await this.resolvePhoneJid(jid);
+      if (!phoneJid) continue;
+      const digits = phoneJid.replace(/@.*$/, "").replace(/\D/g, "");
+      const key = digits.startsWith("55") && digits.length === 12 && /[6-9]/.test(digits[4]) ? `${digits.slice(0, 4)}9${digits.slice(4)}` : digits;
+      const g = groups.get(key) || { phone: key, msgs: new Map(), chats: [] };
+      for (const m of this._messages[jid] || []) g.msgs.set(m?.key?.id || `${jid}:${m?.messageTimestamp}`, m);
+      if (this._chats?.[jid]) g.chats.push(this._chats[jid]);
+      groups.set(key, g);
+    }
+    const out = [];
+    for (const g of groups.values()) {
+      const msgs = [...g.msgs.values()];
       let firstSent = 0;
       let lastSent = 0;
       let sent = 0;
@@ -1617,13 +1634,14 @@ class BaileysProvider extends WhatsAppProvider {
         if (ts && (!firstSent || ts < firstSent)) firstSent = ts;
         if (ts > lastSent) lastSent = ts;
       }
-      const chat = this._chats?.[jid];
-      if (!sent && String(chat?.lastMessage || "").startsWith("Você: ")) {
+      const chat = g.chats.find((c) => c?.name) || g.chats[0];
+      if (!sent && g.chats.some((c) => String(c?.lastMessage || "").startsWith("Você: "))) {
         sent = 1;
-        firstSent = lastSent = this._timestampToNumber(chat.timestamp) * 1000;
+        firstSent = lastSent = Math.max(...g.chats.map((c) => this._timestampToNumber(c?.timestamp) * 1000));
       }
       if (!sent) continue;
       // Só resposta humana conta: saudação automática do WhatsApp Business não.
+      // Áudio, foto, vídeo e documento do lead são sempre humanos.
       let repliedAt = 0;
       let lastReplyAt = 0;
       let replies = 0;
@@ -1643,10 +1661,11 @@ class BaileysProvider extends WhatsAppProvider {
           if (!firstText && text) firstText = text;
           continue;
         }
-        if (!text) continue;
+        const media = /^(audioMessage|pttMessage|imageMessage|videoMessage|documentMessage|documentWithCaptionMessage)$/.test(Object.keys(m?.message || {})[0] || "");
+        if (!text && !media) continue;
         if (!firstText) receivedBefore = true;
         if (!firstSent || ts <= firstSent) continue;
-        if (isAutoReply(text, lastMine ? ts - lastMine : Infinity)) {
+        if (!media && isAutoReply(text, lastMine ? ts - lastMine : Infinity)) {
           autoReplies += 1;
           if (ts > lastAutoReplyAt) lastAutoReplyAt = ts;
           continue;
@@ -1655,10 +1674,8 @@ class BaileysProvider extends WhatsAppProvider {
         if (!repliedAt || ts < repliedAt) repliedAt = ts;
         if (ts > lastReplyAt) lastReplyAt = ts;
       }
-      const phoneJid = await this.resolvePhoneJid(jid);
-      if (!phoneJid) continue;
       out.push({
-        phone: phoneJid.replace(/@.*$/, ""),
+        phone: g.phone,
         firstSentAt: firstSent || null,
         sentAt: lastSent || firstSent || null,
         messages: sent,

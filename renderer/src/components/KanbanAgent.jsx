@@ -5,6 +5,7 @@ import { useLeadMemory } from '../useLeadMemory';
 import { useAutopilot } from '../useAutopilot';
 import { kanbanTasks } from '../critic.mjs';
 import { runSuggestion } from '../runSuggestion';
+import { useDeals } from '../useDeals';
 
 const TIPO = {
   responder: { label: 'Responder', color: '#f472b6' },
@@ -22,6 +23,7 @@ export default function KanbanAgent({ cards, onNavigate, onOpenCard }) {
   const contacts = useContactStatus();
   const memory = useLeadMemory();
   const [autopilot] = useAutopilot();
+  const deals = useDeals();
   const [now, setNow] = useState(Date.now());
   const [showAll, setShowAll] = useState(false);
   const [busyId, setBusyId] = useState('');
@@ -32,8 +34,8 @@ export default function KanbanAgent({ cards, onNavigate, onOpenCard }) {
   }, []);
 
   const tasks = useMemo(
-    () => kanbanTasks({ cards, contacts, replyDrafts: autopilot?.replyDrafts || {}, memory, now }),
-    [cards, contacts, autopilot?.replyDrafts, memory, now],
+    () => kanbanTasks({ cards, contacts, replyDrafts: autopilot?.replyDrafts || {}, memory, deals, now }),
+    [cards, contacts, autopilot?.replyDrafts, memory, deals, now],
   );
   const visible = showAll ? tasks : tasks.slice(0, 6);
 

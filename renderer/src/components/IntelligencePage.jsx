@@ -9,6 +9,7 @@ import { useAutopilot } from '../useAutopilot';
 import { resultsBy } from '../intel.mjs';
 import { critique, KINDS } from '../critic.mjs';
 import { runSuggestion } from '../runSuggestion';
+import { useDeals } from '../useDeals';
 
 const COLUMNS = ['agir', 'oportunidade', 'feedback'];
 
@@ -37,6 +38,7 @@ export default function IntelligencePage({ onNavigate }) {
   const queue = useQueue();
   const memory = useLeadMemory();
   const [autopilot] = useAutopilot();
+  const deals = useDeals();
   const [leadsVersion, setLeadsVersion] = useState(0);
   const [now, setNow] = useState(Date.now());
   const [busyId, setBusyId] = useState('');
@@ -51,8 +53,8 @@ export default function IntelligencePage({ onNavigate }) {
 
   const leads = useMemo(() => readLocalArray('sigma_leads'), [leadsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
   const items = useMemo(
-    () => critique({ leads, contacts, queue, autopilot, triage, waCheck, memory, now }),
-    [leads, contacts, queue, autopilot, triage, waCheck, memory, now],
+    () => critique({ leads, contacts, queue, autopilot, triage, waCheck, memory, deals, now }),
+    [leads, contacts, queue, autopilot, triage, waCheck, memory, deals, now],
   );
   const funnel = useMemo(() => funnelOf(contacts), [contacts]);
   const niches = useMemo(() => resultsBy(leads, contacts, 'nicho').filter((g) => g.sent >= 3).slice(0, 8), [leads, contacts]);

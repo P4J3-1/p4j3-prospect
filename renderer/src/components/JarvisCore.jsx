@@ -9,6 +9,7 @@ import { CONTACT_STATUS } from '../contactStatus.mjs';
 import { dailyBriefing, resultsBy, topIntent } from '../intel.mjs';
 import { critique, KINDS } from '../critic.mjs';
 import { runSuggestion } from '../runSuggestion';
+import { useDeals } from '../useDeals';
 
 /**
  * Núcleo J.A.R.V.I.S.: briefing do dia, quem agir agora (intenção) e o que
@@ -20,6 +21,7 @@ export default function JarvisCore({ autopilot, onNavigate }) {
   const triage = useTriage();
   const queue = useQueue();
   const memory = useLeadMemory();
+  const deals = useDeals();
   const [name, setName] = useState('');
   const [by, setBy] = useState('nicho');
   const [leadsVersion, setLeadsVersion] = useState(0);
@@ -45,8 +47,8 @@ export default function JarvisCore({ autopilot, onNavigate }) {
     [name, leads, contacts, queue, autopilot, triage, waCheck, now],
   );
   const suggestions = useMemo(
-    () => critique({ leads, contacts, queue, autopilot, triage, waCheck, memory, now }),
-    [leads, contacts, queue, autopilot, triage, waCheck, memory, now],
+    () => critique({ leads, contacts, queue, autopilot, triage, waCheck, memory, deals, now }),
+    [leads, contacts, queue, autopilot, triage, waCheck, memory, deals, now],
   );
   const hot = useMemo(() => topIntent(leads, { contacts, triage, memory }), [leads, contacts, triage, memory]);
   const results = useMemo(() => resultsBy(leads, contacts, by).slice(0, 6), [leads, contacts, by]);

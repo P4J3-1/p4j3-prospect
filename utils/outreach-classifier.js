@@ -25,6 +25,8 @@ const AUTO_PATTERNS = [
   /(retornaremos|responderemos) (em breve|o mais breve|assim que)/i,
   /hor[aá]rio de (atendimento|funcionamento)/i,
   /(no momento )?(n[aã]o )?(estamos|estou) (dispon[ií]ve(l|is)|ausente|fora do hor[aá]rio)/i,
+  // "Já te respondo, estou em atendimento" que chega segundos depois: mensagem de ausência.
+  /j[aá] (te |lhe )?(respondo|retorno|falo)|(estou|estamos) em atendimento/i,
   /(digite|escolha|selecione) (o n[uú]mero|uma das op[cç][oõ]es|a op[cç][aã]o)/i,
   /\b1\s*[-–).]\s*\S+[\s\S]{0,80}\b2\s*[-–).]\s*\S+/,
   /(avalie|avalia[cç][aã]o d[eo]|nos ajude a (aprimorar|melhorar))/i,

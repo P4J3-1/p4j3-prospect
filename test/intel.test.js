@@ -162,3 +162,23 @@ describe('agente do Kanban: resposta já escrita', () => {
     assert.equal(stale.length, 0);
   });
 });
+
+describe('reuniões (Agente de Negócios)', () => {
+  it('véspera: confirmação pronta; no dia: confirmar; depois: registrar resultado', async () => {
+    const { meetingTasks, critique, kanbanTasks } = await import('../renderer/src/critic.mjs');
+    const meetingAt = new Date(2026, 8, 30, 13, 0).getTime(); // quarta 13h
+    const deals = { 61984096319: { meetingAt, meetingLabel: 'quarta, 30/09 às 13h', updatedAt: 0 } };
+    const nameOf = () => 'EDM Saúde';
+    const eve = meetingTasks({ deals, nameOf, now: new Date(2026, 8, 29, 9).getTime() });
+    assert.equal(eve[0].id, 'reuniao-amanha:61984096319');
+    assert.equal(eve[0].acao.text, 'Oi, EDM! Passando pra lembrar da nossa conversa amanhã às 13h. Continua de pé?');
+    const day = meetingTasks({ deals, nameOf, now: new Date(2026, 8, 30, 8).getTime() });
+    assert.equal(day[0].prioridade, 99);
+    const after = meetingTasks({ deals, nameOf, now: new Date(2026, 8, 30, 18).getTime() });
+    assert.equal(after[0].id, 'reuniao-resultado:61984096319');
+    const saturday = new Date(2026, 8, 26, 16).getTime();
+    assert.ok(critique({ deals, contacts: { 61984096319: { name: 'EDM Saúde' } }, now: saturday }).some((x) => x.id === 'reuniao-preparar:61984096319'));
+    const cards = [{ entityKey: 'e', columnId: 'proposal', entity: { profile: { name: 'EDM Saúde', phone: '5561984096319' } } }];
+    assert.ok(kanbanTasks({ cards, deals, now: new Date(2026, 8, 29, 9).getTime() }).some((t) => t.id === 'reuniao-amanha:61984096319'));
+  });
+});

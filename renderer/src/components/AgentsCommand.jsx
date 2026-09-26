@@ -15,6 +15,7 @@ export const AGENT_META = {
   analista: { name: 'Analista', role: 'Estuda os resultados e ajusta o playbook de todos', color: '#60a5fa', Icon: LineChart },
   sistema: { name: 'Sistema', color: '#94a3b8' },
   jarvis: { name: 'J.A.R.V.I.S.', color: '#67e8f9' },
+  negocios: { name: 'Negócios', color: '#fbbf24' },
 };
 export const FLOW = ['cacador', 'radar', 'verificador', 'enriquecedor', 'triagem', 'pesquisador', 'copywriter', 'respostas', 'analista'];
 const STATUS_TEXT = { working: 'Trabalhando', idle: 'De olho', done: 'Concluiu', error: 'Com erro', off: 'Pausado' };

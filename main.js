@@ -64,6 +64,8 @@ const { computeInsights } = require("./campaigns/learning");
 const { TriageStore, computeTriage, triageKey, triageLeads } = require("./lead-scoring/lead-triage");
 const { SendQueue } = require("./campaigns/send-queue");
 const { phoneCore: phoneKey } = require("./utils/phone-key");
+const { DealStore } = require("./utils/deal-store");
+const { detectMeeting, label: meetingLabel } = require("./utils/meeting-detector");
 const { isAutoReply, isProspectingConversation, isMysteryShopper } = require("./utils/outreach-classifier");
 const { composeMessages } = require("./campaigns/outreach-composer");
 const { entryOffer, imageDiagnosis, nextOffer, objectionsFor, OFFERS } = require("./campaigns/offer-ladder");
@@ -106,6 +108,7 @@ let campaignManager = null;
 let leadScoringService = null;
 let kanbanStore = null;
 let contactStatus = null;
+let dealStore = null;
 let agentStore = null;
 let autopilot = null;
 let triageStore = null;
@@ -1530,6 +1533,10 @@ app.whenReady().then(() => {
   // Contatados sempre atualizados: logo após abrir e a cada 15 min (pega o que foi enviado pelo celular).
   // A rodada de 15 min também confere a conexão e reconecta se tiver caído.
   scheduleContactHistorySync(20000);
+  dealStore = new DealStore(app.getPath("userData"));
+  // Agente de Negócios: logo após a sincronização e a cada 10 min.
+  setTimeout(() => watchDeals().catch((error) => console.warn("[NEGOCIOS]", error.message)), 60000);
+  setInterval(() => watchDeals().catch((error) => console.warn("[NEGOCIOS]", error.message)), 10 * 60 * 1000);
   setInterval(() => {
     refreshWhatsApp({ auto: true }).catch((error) => console.warn("[WA-REFRESH]", error.message));
   }, 15 * 60 * 1000);
@@ -2987,6 +2994,7 @@ async function recordIncomingReply(event) {
     }
     const auto = isAutoReply(text, prev?.sentAt ? at - prev.sentAt : Infinity);
     contactStatus?.recordReply(phone, { optOut: isOptOutMessage(text), auto, at });
+    if (!auto) scheduleDealWatch();
   } catch (error) {
     console.warn("[CONTACT-STATUS] resposta:", error.message);
   }
@@ -4463,6 +4471,144 @@ function moveLeadInKanban(phone, toColumnId) {
     return false;
   }
 }
+
+// ─── AGENTE DE NEGÓCIOS ───────────────────────────
+// Acompanha quem respondeu e os cards em Responderam/Qualificados/Proposta:
+// acha agendamento combinado na conversa, põe lembrete na véspera no Kanban,
+// avança o card e avisa. Só regras (sem IA). Nada é enviado sozinho.
+const DEAL_COLUMNS = new Set(["contacted", "qualified", "proposal"]);
+
+function kanbanCardByPhone(phone) {
+  const store = requireKanbanStore();
+  const key = phoneKey(phone);
+  const entity = Object.values(store.state?.entities || {}).find((e) => phoneKey(e?.profile?.phone) === key);
+  const card = entity ? store.state.cards?.[entity.entityKey] : null;
+  return card ? { store, entity, card } : null;
+}
+
+/** Lembrete no card: véspera às 9h (ou 1h antes, se a véspera já passou). */
+function setMeetingReminder(phone, at, text) {
+  const found = kanbanCardByPhone(phone);
+  if (!found) return false;
+  const eve = new Date(at - 86400000);
+  eve.setHours(9, 0, 0, 0);
+  const reminderAt = eve.getTime() > Date.now() ? eve.getTime() : Math.max(Date.now() + 60000, at - 3600000);
+  found.store.recordDeal({
+    entityKey: found.entity.entityKey,
+    outcome: ["won", "lost"].includes(found.card.dealStatus) ? found.card.dealStatus : "open",
+    value: found.card.dealValue || 0,
+    note: found.card.dealNote || "",
+    reminderAt,
+    reminderNote: `Reunião ${text}: confirmar com o lead.`,
+  });
+  return true;
+}
+
+function dealPhones() {
+  const phones = new Set();
+  for (const [phone, entry] of Object.entries(contactStatus?.getAll() || {})) {
+    if (entry?.status === "respondeu") phones.add(phoneKey(phone));
+  }
+  try {
+    const store = requireKanbanStore();
+    for (const card of Object.values(store.state?.cards || {})) {
+      if (!DEAL_COLUMNS.has(card.columnId)) continue;
+      const phone = phoneKey(store.state.entities?.[card.entityKey]?.profile?.phone);
+      if (phone.length >= 10) phones.add(phone);
+    }
+  } catch { /* Kanban indisponível: segue só com os contatos */ }
+  return phones;
+}
+
+let dealWatchRunning = null;
+async function watchDeals() {
+  if (!dealStore || dealWatchRunning) return dealWatchRunning;
+  dealWatchRunning = (async () => {
+    const providers = [...whatsappProviders.values()].filter((p) => typeof p?.conversationFor === "function");
+    let found = 0;
+    for (const phone of dealPhones()) {
+      let conversation = [];
+      for (const p of providers) {
+        conversation = p.conversationFor(phone, 30);
+        if (conversation.length) break;
+      }
+      if (!conversation.length) continue;
+      const meeting = detectMeeting(conversation);
+      const deal = dealStore.get(phone) || {};
+      const lastLead = [...conversation].reverse().find((m) => !m.fromMe);
+      const lastMine = [...conversation].reverse().find((m) => m.fromMe);
+      const patch = { lastLeadAt: lastLead?.at || null, lastMineAt: lastMine?.at || null };
+      // Agendamento novo (ou mudou) e ainda não passou; o que você editou à mão manda.
+      if (meeting && meeting.at > Date.now() - 2 * 3600000 && deal.meetingSource !== "manual" && deal.meetingAt !== meeting.at) {
+        Object.assign(patch, { meetingAt: meeting.at, meetingLabel: meeting.label, meetingQuote: meeting.quote, meetingConfirmed: meeting.confirmed, meetingSource: "detectado" });
+        const name = contactStatus?.get(phone)?.name || kanbanCardByPhone(phone)?.entity?.profile?.name || "lead";
+        let reminder = false;
+        try { reminder = setMeetingReminder(phone, meeting.at, meeting.label); } catch (error) { console.warn("[NEGOCIOS] lembrete:", error.message); }
+        moveLeadInKanban(phone, "qualified");
+        found += 1;
+        const text = `Agendamento com ${name}: ${meeting.label}.${reminder ? " Coloquei lembrete na véspera." : ""}`;
+        autopilot?.log("negocios", text, "ok");
+        safeSend("jarvis-say", { text: `Senhor, ${text}`, priority: true });
+      }
+      dealStore.update(phone, patch);
+    }
+    safeSend("deals-changed", dealStore.all());
+    return { found };
+  })().finally(() => { dealWatchRunning = null; });
+  return dealWatchRunning;
+}
+
+let dealWatchTimer = null;
+function scheduleDealWatch(delay = 30000) {
+  clearTimeout(dealWatchTimer);
+  dealWatchTimer = setTimeout(() => watchDeals().catch((error) => console.warn("[NEGOCIOS]", error.message)), delay);
+}
+
+ipcMain.handle("deals-get", async () => ({ success: true, deals: dealStore?.all() || {} }));
+
+function cardInfo(phone) {
+  const found = kanbanCardByPhone(phone);
+  return found ? { columnId: found.card.columnId, reminderAt: found.card.reminderAt, reminderNote: found.card.reminderNote, dealValue: found.card.dealValue } : null;
+}
+
+ipcMain.handle("deals-card", async (_, { phone } = {}) => {
+  try {
+    const columns = requireKanbanStore().state?.board?.columns || [];
+    return { success: true, card: cardInfo(phone), columns: columns.map((c) => ({ id: c.id, name: c.name })) };
+  } catch (error) {
+    return { success: false, error: error.message, card: null, columns: [] };
+  }
+});
+
+/** Você edita o negócio na conversa: agendamento, valor, próximo passo, etapa. */
+ipcMain.handle("deals-update", async (_, { phone, patch } = {}) => {
+  try {
+    if (!dealStore) throw new Error("Ainda carregando.");
+    const p = patch && typeof patch === "object" ? patch : {};
+    const clean = {};
+    if ("meetingAt" in p) {
+      const at = Number(p.meetingAt) || null;
+      Object.assign(clean, at
+        ? { meetingAt: at, meetingLabel: meetingLabel(at), meetingSource: "manual", meetingConfirmed: true }
+        : { meetingAt: null, meetingLabel: null, meetingQuote: null, meetingSource: "manual", meetingConfirmed: null });
+      if (at) setMeetingReminder(phone, at, meetingLabel(at));
+    }
+    if ("value" in p) clean.value = Math.max(0, Math.round(Number(p.value) * 100) / 100) || null;
+    if ("nextStep" in p) clean.nextStep = limitString(String(p.nextStep || ""), 200, "") || null;
+    const deal = dealStore.update(phone, clean);
+    const found = kanbanCardByPhone(phone);
+    if (found && "value" in p) {
+      found.store.recordDeal({ entityKey: found.entity.entityKey, outcome: found.card.dealStatus || "open", value: clean.value || 0, note: found.card.dealNote || "", reminderAt: found.card.reminderAt || "", reminderNote: found.card.reminderNote || "" });
+    }
+    if (found && p.columnId && p.columnId !== found.card.columnId) {
+      found.store.moveCard({ entityKey: found.entity.entityKey, toColumnId: limitString(String(p.columnId), 40, ""), manual: true });
+    }
+    safeSend("deals-changed", dealStore.all());
+    return { success: true, deal, card: cardInfo(phone) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
 
 function setupAutopilot() {
   const MIN = 60 * 1000;
