@@ -30,7 +30,7 @@ O app combina scraping, tratamento de dados, análise comercial e execução de 
 - **Inteligência Artificial** (menu 7): provedor (DeepSeek, OpenRouter, NVIDIA, OpenCode ou API própria), chave cifrada pelo Windows, perfil do seu negócio e aprendizado das campanhas.
 - **Agentes** (menu 8): Triagem (inclui o presente de valor), Pesquisador, Copywriter, Respostas e Analista, cada um com liga/desliga, modo automático e limite diário de uso da API.
 - **Triagem**: classifica cada lead em sem site, site fraco/fora do ar, WhatsApp sem automação, já automatizado e alto potencial; monta a entrevista de qualificação e um diagnóstico gratuito para abrir a conversa entregando valor.
-- **Localizador** (pino no Scraper Maps): busca na web, CNPJ, quadro de sócios (dono), abordagem e chance de fechar.
+- **Localizador** (pino no Hunter Maps): busca na web, CNPJ, quadro de sócios (dono), abordagem e chance de fechar.
 - **Auto-aperfeiçoamento**: o Analista estuda os resultados e escreve um playbook que os outros agentes seguem.
 - **Status em tempo real**: enviado, entregue, lido, respondeu ou pediu para sair aparecem na hora no Scraper (aba Contatados), na Base de Leads e no WhatsApp.
 
@@ -75,7 +75,7 @@ Sugestões para o Kanban com IA: [docs/sugestoes-kanban-ia.md](docs/sugestoes-ka
 
 ### Interface e operação
 
-- Shell visual baseado no Open Design do produto, com Visão Geral, Scraper Maps, Base de Leads, Lead Scoring, Kanban, WhatsApp e Configurações.
+- Shell visual baseado no Open Design do produto, com Visão Geral, Hunter Maps, Base de Leads, Lead Scoring, Kanban, WhatsApp e Configurações.
 - Painel administrativo com navegação por ícones, análise da base iniciando minimizada e visão geral minimalista com métricas e sino de pendências.
 - Atualizações automáticas na versão instalada via GitHub Releases.
 - Dados da aplicação e sessões do WhatsApp ficam no perfil local do Electron; chamadas externas acontecem apenas para Maps, sites analisados, WhatsApp e provedores de IA configurados.

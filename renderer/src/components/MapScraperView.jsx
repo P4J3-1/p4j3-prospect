@@ -37,12 +37,16 @@ import { useNotifications } from './NotificationCenter';
 import LeadIntelPanel from './LeadIntelPanel';
 import QueuePanel from './QueuePanel';
 import WhatsAppRefresh from './WhatsAppRefresh';
+import { useAutopilot } from '../useAutopilot';
 import { useQueue, activeQueueByPhone } from '../useQueue';
 import { useLeadMemory, TEMPERATURE } from '../useLeadMemory';
 import { useContactStatus, useWaCheck } from '../useContactStatus';
 import { useTriage } from '../useTriage';
 import { CONTACT_STATUS, contactBucket, contactFor, phoneCore, timeAgo } from '../contactStatus.mjs';
 import { SEGMENTS, triageFor } from '../triage.mjs';
+
+// Nome/endereço vêm do Google Maps: nunca montar HTML com eles sem escapar.
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 
 // Filtros de qualidade: segmentos da triagem (qualquer um marcado) + requisitos.
 const QUALITY_CHIPS = [
@@ -603,6 +607,22 @@ export default function MapScraperView({
     [visibleLeads, queueByPhone, contacts],
   );
   const queueDrafts = useMemo(() => queue.items.filter((i) => i.status === 'rascunho').length, [queue.items]);
+  // Quentes = disponíveis com alto potencial na triagem (pinos dourados).
+  const hotCount = useMemo(
+    () => displayLeads.filter((lead) => bucketOf(lead) === 'disponiveis' && triageFor(triage, lead)?.level === 'alto').length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [displayLeads, contacts, queueByPhone, triage],
+  );
+  const [autopilotState] = useAutopilot();
+  const hunter = autopilotState?.stages?.find((st) => st.id === 'cacador');
+  const hunting = hunter?.live?.status === 'working' || !!activeExtraction;
+  const hudTiles = [
+    ['disponiveis', 'Disponíveis', tabCounts.disponiveis, '#0ea5a4'],
+    ['disponiveis', 'Quentes', hotCount, '#f59e0b', 'hot'],
+    ['fila', 'Na fila', tabCounts.fila, '#6366f1'],
+    ['contatados', 'Contatados', tabCounts.contatados, '#64748b'],
+    ['responderam', 'Responderam', tabCounts.responderam, '#ec4899'],
+  ];
 
   const handlePrepareQueue = async () => {
     if (!window.queueAPI?.prepare || !queueCandidates.length) return;
@@ -892,7 +912,7 @@ export default function MapScraperView({
 
       marker.bindPopup(`
         <div style="font-family: var(--font-body); font-size: 12px; padding: 4px;">
-          <b>${userLocation.label || 'Sua referência'}</b>
+          <b>${escapeHtml(userLocation.label || 'Sua referência')}</b>
           <div style="color: var(--muted); font-size: 11px; margin-top: 2px;">Ponto de referência ativo</div>
         </div>
       `);
@@ -926,10 +946,13 @@ export default function MapScraperView({
       const reviews = getLeadReviews(lead);
       const hood = getLeadBairro(lead) || getLeadCity(lead);
 
+      // Cor do pino = situação do lead: quente, disponível, contatado, respondeu.
+      const bucket = contactBucket(contactFor(contacts, lead));
+      const hot = bucket === 'disponiveis' && triageFor(triage, lead)?.level === 'alto';
       const marker = L.marker([loc.lat, loc.lng], {
         icon: L.divIcon({
           className: '',
-          html: `<div class="lp${isSel ? ' sel' : ''}"></div>`,
+          html: `<div class="lp s-${bucket}${hot ? ' hot' : ''}${isSel ? ' sel' : ''}"></div>`,
           iconSize: [30, 30],
           iconAnchor: [15, 15],
           popupAnchor: [0, -15],
@@ -939,10 +962,10 @@ export default function MapScraperView({
 
       marker.bindPopup(`
         <div class="lp-pop">
-          <b>${name}</b>
-          <div class="m">${hood ? `${hood} · ` : ''}★ ${rating} (${reviews})</div>
-          <div class="m" ${phone ? 'data-sensitive-phone="true"' : ''}>${phone || cat}</div>
-          <button type="button" data-lead-key="${leadId}">Ver no feed</button>
+          <b>${escapeHtml(name)}</b>
+          <div class="m">${hood ? `${escapeHtml(hood)} · ` : ''}★ ${escapeHtml(rating)} (${escapeHtml(reviews)})</div>
+          <div class="m" ${phone ? 'data-sensitive-phone="true"' : ''}>${escapeHtml(phone || cat)}</div>
+          <button type="button" data-lead-key="${escapeHtml(leadId)}">Ver no feed</button>
         </div>
       `);
 
@@ -960,7 +983,7 @@ export default function MapScraperView({
         map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
       } catch {}
     }
-  }, [visibleLeads, selectedLeadId]);
+  }, [visibleLeads, selectedLeadId, contacts, triage]);
 
   // Efeito para delegar clique do botão "Ver no feed" dentro do popup Leaflet
   useEffect(() => {
@@ -1292,6 +1315,35 @@ export default function MapScraperView({
     <div className="map-full" data-od-id="scraper-map-full">
       {/* Map Wrap (Protagonista) */}
       <div className="map-wrap">
+        <div className="hunt-hud" aria-label="Resumo ao vivo">
+          {hudTiles.map(([tab, label, value, color, key]) => (
+            <button
+              key={key || tab}
+              type="button"
+              className={`hunt-tile ${scraperTab === tab && !key ? 'active' : ''}`}
+              style={{ '--pin': color }}
+              onClick={() => {
+                setScraperTab(tab);
+                if (key === 'hot') setFilterOrd('potencial');
+              }}
+              title={key === 'hot' ? 'Disponíveis com alto potencial (ordena por potencial)' : `Ver ${label.toLowerCase()}`}
+            >
+              <i />
+              <div><b>{Number(value || 0).toLocaleString('pt-BR')}</b><span>{label}</span></div>
+            </button>
+          ))}
+          <button
+            type="button"
+            className={`hunt-live ${hunting ? '' : 'idle'}`}
+            onClick={() => onNavigate?.('agents')}
+            title="Abrir a Central de Agentes"
+          >
+            <span className="dot" />
+            {hunting
+              ? <span><b>Caçando</b> · {activeExtraction?.currentNeighborhood || hunter?.live?.task || 'buscando leads novos'}</span>
+              : <span>{autopilotState?.settings?.enabled ? <><b>Piloto automático</b> ligado</> : 'Piloto automático desligado'}</span>}
+          </button>
+        </div>
         <div
           id="realMap"
           ref={mapContainerRef}
@@ -1726,7 +1778,7 @@ export default function MapScraperView({
             <option value="nicho">Agrupar por nicho</option>
           </select>
         </div>
-        <WhatsAppRefresh className="scraper-wa-refresh" />
+        <div className="scraper-sync-bar"><WhatsAppRefresh compact className="scraper-wa-refresh" /></div>
 
         {(untriagedVisible > 0 || triageProgress) && (
           <div className="triage-bar" role="status">
@@ -1882,6 +1934,15 @@ export default function MapScraperView({
                   onClick={() => handleSpotlightLead(lead, leadId, loc?.lat, loc?.lng, true)}
                 >
                   <div className="lead-top">
+                    {leadTriage && (
+                      <span
+                        className={`score-ring ${leadTriage.score >= 70 ? 'hi' : leadTriage.score >= 45 ? 'mid' : 'lo'}`}
+                        style={{ '--v': Math.max(0, Math.min(100, Number(leadTriage.score) || 0)) }}
+                        title={`Potencial ${leadTriage.score}: ${leadTriage.findings.join(' · ')}`}
+                      >
+                        <b>{leadTriage.score}</b>
+                      </span>
+                    )}
                     <b>{name}</b>
                     {isLiveLead && <span className="lead-live">Ao vivo</span>}
                     <span className="rate">
@@ -1902,11 +1963,6 @@ export default function MapScraperView({
                       {leadContact && (
                         <span className="lead-badge" style={{ '--badge': CONTACT_STATUS[leadContact.status]?.color }} title={`${CONTACT_STATUS[leadContact.status]?.label} ${timeAgo(leadContact.lastEventAt)}`}>
                           {CONTACT_STATUS[leadContact.status]?.short} · {timeAgo(leadContact.lastEventAt)}
-                        </span>
-                      )}
-                      {leadTriage && (
-                        <span className="lead-badge potential" title={leadTriage.findings.join(' · ')}>
-                          Potencial {leadTriage.score}
                         </span>
                       )}
                       {leadWa && !leadWa.exists && <span className="lead-badge" style={{ '--badge': '#94a3b8' }}>Sem WhatsApp</span>}

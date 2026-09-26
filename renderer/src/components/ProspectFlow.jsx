@@ -65,7 +65,7 @@ export default function ProspectFlow({ onNavigate, won = 0 }) {
 
   // Próximo passo: o primeiro gargalo do funil.
   let next = null;
-  if (!counts.total) next = { text: 'Faça sua primeira extração no Scraper Maps.', go: 'scraper' };
+  if (!counts.total) next = { text: 'Faça sua primeira extração no Hunter Maps.', go: 'scraper' };
   else if (counts.triaged < counts.total) next = { text: `${counts.total - counts.triaged} lead(s) sem triagem: rode o Agente de Triagem para achar os de maior potencial.`, go: 'agents' };
   else if (counts.hot > 0 && counts.contacted < counts.hot) next = { text: 'Você tem leads de alto potencial ainda não contatados: crie uma campanha com eles.', go: 'whatsapp' };
   else if (counts.contacted && !counts.replied) next = { text: 'Ninguém respondeu ainda: use “Melhorar com IA” na próxima campanha.', go: 'whatsapp' };

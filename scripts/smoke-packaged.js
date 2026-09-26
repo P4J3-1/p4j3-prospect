@@ -67,7 +67,7 @@ const errors = [];
     const activeRoute = await page.locator('.app-sidebar .nav-item.active').innerText();
     if (!/Base de Leads/i.test(activeRoute)) errors.push(`Navegação não ativou Base de Leads: ${activeRoute}`);
 
-    const mapNav = page.locator('.app-sidebar .nav-item').filter({ hasText: 'Scraper Maps' });
+    const mapNav = page.locator('.app-sidebar .nav-item').filter({ hasText: 'Hunter Maps' });
     await mapNav.click();
     await page.waitForSelector('#realMap', { timeout: 15000 });
     await page.waitForFunction(() => document.querySelectorAll('#realMap .lp').length >= 1, null, { timeout: 15000 });

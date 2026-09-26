@@ -1,5 +1,5 @@
 /**
- * Status de contato por telefone, compartilhado por todo o app: Scraper Maps,
+ * Status de contato por telefone, compartilhado por todo o app: Hunter Maps,
  * Base de Leads e Kanban leem daqui e são avisados na hora em que o WhatsApp
  * confirma envio, entrega, leitura, resposta ou descadastro.
  */

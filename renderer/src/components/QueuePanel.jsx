@@ -151,7 +151,7 @@ export default function QueuePanel({ onClose }) {
         <div className="queue-list">
           {!list.length ? (
             <p className="camp-hint" style={{ padding: 20 }}>
-              {tab === 'rascunho' ? 'Nada para aprovar. No Scraper, use "Montar fila" nos leads disponíveis.' : 'Nada aqui ainda.'}
+              {tab === 'rascunho' ? 'Nada para aprovar. No Hunter Maps, use "Montar fila" nos leads disponíveis.' : 'Nada aqui ainda.'}
             </p>
           ) : list.map((item) => <QueueItem key={`${item.id}-${item.status}`} item={item} />)}
         </div>

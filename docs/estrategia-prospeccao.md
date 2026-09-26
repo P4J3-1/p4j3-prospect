@@ -10,7 +10,7 @@ Objetivo: gerar **conversas** com empresas locais pelo WhatsApp sem queimar núm
 
 ## 1b. Pesquise o lead antes de abordar
 
-No Scraper Maps, o botão **Localizar** (pino) abre a ficha do lead:
+No Hunter Maps, o botão **Localizar** (pino) abre a ficha do lead:
 
 - **Busca na web** da empresa e **CNPJ** conferido por nome, cidade e telefone.
 - **Quadro de sócios** (Receita Federal): nome do dono/decisor.

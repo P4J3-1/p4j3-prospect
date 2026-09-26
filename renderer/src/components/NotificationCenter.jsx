@@ -283,7 +283,7 @@ export function NotificationProvider({ children }) {
                 className={`drawer-tab ${activeFilter === 'scraper' ? 'active' : ''}`}
                 onClick={() => setActiveFilter('scraper')}
               >
-                Scraper
+                Hunter Maps
               </button>
               <button
                 className={`drawer-tab ${activeFilter === 'whatsapp' ? 'active' : ''}`}

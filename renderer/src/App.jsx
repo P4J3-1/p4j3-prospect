@@ -154,7 +154,7 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
   }, [open, onClose]);
   if (!open) return null;
   const items = [
-    { id: 'scraper', label: 'Ir para Scraper Maps', desc: 'Mapa + feed de leads', icon: '◎', action: () => { onNavigate('scraper'); onClose(false); } },
+    { id: 'scraper', label: 'Ir para Hunter Maps', desc: 'Mapa + feed de leads', icon: '◎', action: () => { onNavigate('scraper'); onClose(false); } },
     { id: 'overview', label: 'Ir para Visão Geral', desc: 'Centro de comando', icon: '▦', action: () => { onNavigate('overview'); onClose(false); } },
     { id: 'base', label: 'Ir para Base de Leads', desc: 'Filtrar, organizar e exportar', icon: '▤', action: () => { onNavigate('base'); onClose(false); } },
     { id: 'scoring', label: 'Ir para Lead Scoring', desc: 'Quem ligar primeiro', icon: '✦', action: () => { onNavigate('scoring'); onClose(false); } },
@@ -961,7 +961,7 @@ function AppInner() {
             onClick={() => navigate('scraper')}
           >
             <span className="ico" aria-hidden="true"><Map size={17} /></span>
-            <span className="nav-label-text">Scraper Maps</span><span className="nav-kbd">2</span>
+            <span className="nav-label-text">Hunter Maps</span><span className="nav-kbd">2</span>
           </button>
 
           <button

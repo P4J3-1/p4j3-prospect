@@ -8856,3 +8856,49 @@ body.route-whatsapp .wa-open-design .chat-list .chat-filter-tab { flex-shrink: 0
 @media (prefers-reduced-motion: reduce) {
   .ap-shell *, .ap-floor { animation: none !important; transition: none !important; }
 }
+
+/* ═════ Hunter Maps: pinos 3D por situação + HUD ao vivo ═════ */
+.leaflet-container .lp { --pin: #10a37f; width: 22px; height: 22px; border-width: 2px;
+  background: radial-gradient(circle at 34% 30%, color-mix(in srgb, var(--pin) 35%, #fff), var(--pin) 52%, color-mix(in srgb, var(--pin) 55%, #000));
+  box-shadow: 0 6px 10px -3px rgba(2, 6, 23, .45), inset 0 -3px 5px rgba(0, 0, 0, .25); }
+.leaflet-container .lp::before { content: ""; position: absolute; left: 50%; bottom: -9px; width: 12px; height: 4px; transform: translateX(-50%);
+  border-radius: 50%; background: rgba(2, 6, 23, .28); filter: blur(1.5px); }
+.leaflet-container .lp.s-disponiveis { --pin: #0ea5a4; }
+.leaflet-container .lp.hot { --pin: #f59e0b; width: 26px; height: 26px; box-shadow: 0 0 0 4px rgba(245, 158, 11, .25), 0 8px 14px -4px rgba(245, 158, 11, .7); animation: lp-hot 2.4s ease-in-out infinite; }
+.leaflet-container .lp.s-contatados { --pin: #64748b; opacity: .85; }
+.leaflet-container .lp.s-responderam { --pin: #ec4899; width: 26px; height: 26px; box-shadow: 0 0 0 4px rgba(236, 72, 153, .25), 0 8px 14px -4px rgba(236, 72, 153, .7); }
+.leaflet-container .lp.s-nao_contatar { --pin: #94a3b8; opacity: .45; }
+.leaflet-container .lp:hover { transform: translateY(-3px) scale(1.12); }
+@keyframes lp-hot { 50% { box-shadow: 0 0 0 7px rgba(245, 158, 11, .12), 0 8px 14px -4px rgba(245, 158, 11, .8); } }
+
+.hunt-hud { position: absolute; left: 12px; right: 64px; bottom: 14px; z-index: 900; display: flex; gap: 8px; flex-wrap: wrap; pointer-events: none; }
+.hunt-hud > * { pointer-events: auto; }
+.hunt-tile { display: flex; align-items: center; gap: 9px; padding: 8px 12px 8px 9px; border-radius: 14px; cursor: pointer; border: 1px solid rgba(255,255,255,.55);
+  background: linear-gradient(180deg, rgba(255,255,255,.88), rgba(255,255,255,.72)); backdrop-filter: blur(10px) saturate(1.3);
+  box-shadow: 0 12px 26px -14px rgba(2, 6, 23, .55), inset 0 1px 0 #fff; color: #0f172a; font: inherit; text-align: left;
+  transform: perspective(600px) rotateX(0); transition: transform .2s, box-shadow .2s; }
+.hunt-tile:hover { transform: perspective(600px) rotateX(8deg) translateY(-2px); box-shadow: 0 18px 30px -14px rgba(2, 6, 23, .6), inset 0 1px 0 #fff; }
+.hunt-tile.active { outline: 2px solid var(--pin, #0ea5a4); outline-offset: 1px; }
+.hunt-tile i { width: 12px; height: 12px; border-radius: 50%; flex: 0 0 12px;
+  background: radial-gradient(circle at 34% 30%, color-mix(in srgb, var(--pin) 35%, #fff), var(--pin) 55%, color-mix(in srgb, var(--pin) 55%, #000)); }
+.hunt-tile b { display: block; font-size: 17px; line-height: 1; font-variant-numeric: tabular-nums; }
+.hunt-tile span { display: block; font-size: 10.5px; color: #475569; letter-spacing: .02em; margin-top: 2px; }
+.hunt-live { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 14px; margin-left: auto;
+  background: linear-gradient(135deg, #0b1330, #1e1b4b); color: #e0e7ff; font-size: 12px; box-shadow: 0 12px 26px -12px rgba(30, 27, 75, .8); }
+.hunt-live .dot { width: 9px; height: 9px; border-radius: 50%; background: #34d399; box-shadow: 0 0 0 0 rgba(52,211,153,.7); animation: ap-pulse 1.6s infinite; }
+.hunt-live.idle .dot { background: #64748b; animation: none; }
+.hunt-live b { color: #fff; }
+html[data-theme="dark"] .hunt-tile { background: linear-gradient(180deg, rgba(15,23,42,.9), rgba(15,23,42,.75)); color: #e2e8f0; border-color: rgba(148,163,184,.25); box-shadow: 0 12px 26px -14px rgba(0,0,0,.8); }
+html[data-theme="dark"] .hunt-tile span { color: #94a3b8; }
+
+/* Score em anel no card do lead */
+.score-ring { --v: 0; --ring: #0ea5a4; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 38px;
+  background: conic-gradient(var(--ring) calc(var(--v) * 1%), rgba(148,163,184,.22) 0); position: relative; }
+.score-ring::before { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--surface, #fff); }
+.score-ring b { position: relative; font-size: 12px; font-weight: 800; color: var(--ring); }
+.score-ring.hi { --ring: #f59e0b; }
+.score-ring.mid { --ring: #0ea5a4; }
+.score-ring.lo { --ring: #94a3b8; }
+@media (prefers-reduced-motion: reduce) { .lp.hot { animation: none; } }
+.lead-card .lead-top { align-items: center; }
+.lead-card .lead-top .score-ring b { font-size: 12px; font-weight: 800; overflow: visible; }

@@ -17,7 +17,7 @@ const AGENTS = {
   pesquisador: {
     name: "Agente Pesquisador",
     role: "Busca a empresa na web, confere o CNPJ, acha o dono no quadro de sócios e estima a chance de fechar.",
-    trigger: "Botão Localizar (pino) no Scraper Maps.",
+    trigger: "Botão Localizar (pino) no Hunter Maps.",
     unit: "pesquisas/dia com IA",
     defaults: { enabled: true, auto: false, dailyLimit: 60 },
   },
