@@ -99,14 +99,16 @@ describe('composição das mensagens', () => {
       { key: 'b', kind: 'nova_oferta', offer: 'automacao', previousOffer: 'site', lead },
     ];
     const noAi = await composeMessages(items);
-    assert.ok(noAi.get('a').mensagem.includes('pessoal da Clínica Sorriso'));
+    // 1º contato: abertura curta com o nome da empresa, sem pitch.
+    assert.ok(noAi.get('a').mensagem.includes('Clínica Sorriso'));
+    assert.ok(noAi.get('a').mensagem.length < 120);
     assert.ok(!/[{}]/.test(noAi.get('a').mensagem), 'spintax resolvido');
     assert.ok(/site profissional/.test(noAi.get('b').mensagem));
     const withAi = await composeMessages(items, {
-      runAi: async () => ({ result: { mensagens: [{ key: 'a', mensagem: 'Oi {{saudacao}}, veja www.spam.com e https://x.io agora? Posso te mostrar?' }] } }),
+      runAi: async () => ({ result: { mensagens: [{ key: 'b', mensagem: 'Oi {{saudacao}}, veja www.spam.com e https://x.io agora? Posso te mostrar?' }] } }),
     });
-    assert.equal(withAi.get('a').ai, true);
-    assert.ok(!/www\.|https?:/.test(withAi.get('a').mensagem));
-    assert.equal(withAi.get('b').ai, false, 'item sem resposta da IA fica no modelo');
+    assert.equal(withAi.get('a').ai, false, 'abertura não passa pela IA');
+    assert.equal(withAi.get('b').ai, true);
+    assert.ok(!/www\.|https?:/.test(withAi.get('b').mensagem));
   });
 });

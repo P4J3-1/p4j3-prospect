@@ -8,6 +8,7 @@
  */
 const fs = require("fs");
 const path = require("path");
+const planner = require("./mission-planner");
 
 const DEFAULT_SETTINGS = {
   enabled: false,
@@ -15,7 +16,8 @@ const DEFAULT_SETTINGS = {
   missions: [],
   reserveLeads: 40, // abaixo disso o Caçador sai para caçar
   huntGoal: 40, // leads novos por caçada
-  draftTarget: 20, // rascunhos esperando aprovação
+  draftTarget: 100, // rascunhos esperando aprovação
+  autoMissions: true, // plano Brasil: todas as regiões do DF, depois capitais
   researchPerRun: 3,
 };
 
@@ -36,6 +38,14 @@ class Autopilot {
       raw = JSON.parse(fs.readFileSync(this.filePath, "utf-8")) || {};
     } catch { /* primeira execução */ }
     this.settings = { ...DEFAULT_SETTINGS, ...(raw.settings || {}) };
+    // v2 (alinhado com o dono): fila de 100 e missões automáticas pelo Brasil.
+    if ((Number(raw.settingsVersion) || 1) < 2) {
+      this.settings.draftTarget = Math.max(this.settings.draftTarget || 0, 100);
+      this.settings.autoMissions = true;
+    }
+    this.settingsVersion = 2;
+    this.cursors = raw.cursors && typeof raw.cursors === "object" ? raw.cursors : {};
+    this.favoriteNiches = () => [];
     this.feed = Array.isArray(raw.feed) ? raw.feed.slice(-MAX_FEED) : [];
     this.replyDrafts = raw.replyDrafts && typeof raw.replyDrafts === "object" ? raw.replyDrafts : {};
     this.intel = raw.intel && typeof raw.intel === "object" ? raw.intel : {};
@@ -57,6 +67,8 @@ class Autopilot {
         replyDrafts: this.replyDrafts,
         intel: this.intel,
         missionCursor: this.missionCursor,
+        cursors: this.cursors,
+        settingsVersion: this.settingsVersion,
         lastRun: this.lastRun,
         stats: this.stats,
       }), { mode: 0o600 });
@@ -69,6 +81,7 @@ class Autopilot {
   updateSettings(patch = {}) {
     const next = { ...this.settings };
     if (typeof patch.enabled === "boolean") next.enabled = patch.enabled;
+    if (typeof patch.autoMissions === "boolean") next.autoMissions = patch.autoMissions;
     for (const key of ["reserveLeads", "huntGoal", "draftTarget", "researchPerRun"]) {
       if (patch[key] !== undefined) next[key] = Math.max(0, Math.min(500, Math.round(Number(patch[key]) || 0)));
     }
@@ -95,14 +108,33 @@ class Autopilot {
     return this.settings;
   }
 
-  /** Próxima missão ativa (rodízio). */
-  nextMission() {
-    const active = this.settings.missions.filter((m) => m.active !== false);
-    if (!active.length) return null;
-    const mission = active[this.missionCursor % active.length];
-    this.missionCursor = (this.missionCursor + 1) % active.length;
+  /**
+   * Próxima missão de um caçador ("cacador" = Maps, "radar" = web): as
+   * manuais em rodízio e, com o plano automático ligado, nicho × região
+   * pelo Brasil. Cada caçador anda no seu próprio cursor.
+   */
+  nextMission(kind = "cacador") {
+    const c = this.cursors[kind] || { cursor: 0, autoCursor: 0 };
+    const res = planner.nextMission({
+      manual: this.settings.missions || [],
+      cursor: c.cursor,
+      autoCursor: c.autoCursor,
+      favoriteNiches: this.favoriteNiches() || [],
+      autoEnabled: this.settings.autoMissions !== false,
+    });
+    this.cursors[kind] = { cursor: res.cursor, autoCursor: res.autoCursor };
     this.save();
-    return mission;
+    return res.mission;
+  }
+
+  /** Onde o plano automático está (para mostrar na tela). */
+  planProgress() {
+    const size = planner.planSize();
+    return Object.fromEntries(["cacador", "radar"].map((kind) => {
+      const auto = this.cursors[kind]?.autoCursor || 0;
+      const current = auto ? planner.plannedMission(auto - 1) : null;
+      return [kind, { done: auto, total: size.total, current }];
+    }));
   }
 
   log(agent, text, kind = "ok") {
@@ -231,6 +263,7 @@ class Autopilot {
       feed: [...this.feed].reverse().slice(0, 80),
       replyDrafts: this.replyDrafts,
       busy: this.busy,
+      plan: { ...planner.planSize(), progress: this.planProgress() },
     };
   }
 

@@ -70,6 +70,7 @@ const { entryOffer, imageDiagnosis, nextOffer, objectionsFor, OFFERS } = require
 const { DailyQuota } = require("./campaigns/daily-quota");
 const { AgentStore } = require("./agents/agent-store");
 const { Autopilot } = require("./agents/autopilot");
+const { DEFAULT_OFFERS } = require("./agents/sales-playbook");
 const { runAnalyst, suggestReplies, writeProposal } = require("./agents/ai-agents");
 const { LeadMemory, temperatureOf } = require("./campaigns/lead-memory");
 const { backupRoot, hasBackupToday, listBackups, runBackup } = require("./utils/backup");
@@ -3986,21 +3987,11 @@ async function prepareQueueDrafts(rawLeads, { limit = 200 } = {}) {
   if (!items.length) return { success: true, added: 0, skipped };
   const composed = await composeMessages(items, {
     runAi: agentAi("copywriter"),
-    commercial: currentAiSettings().commercial || {},
+    commercial: commercialForAgents(),
   });
-  // Teste A/B: A = pergunta de permissão; B = diagnóstico gratuito (quando existe).
-  const contactOf = (phone) => contactStatus?.get(phone);
-  const ab = sendQueue.abStats(contactOf);
-  let alternate = sendQueue.pickVariant(contactOf);
-  for (const item of items) {
-    if (!item.triage?.presente?.mensagem) { item.variant = "A"; continue; }
-    if (ab.winner) {
-      item.variant = Math.random() < 0.8 ? ab.winner : (ab.winner === "A" ? "B" : "A");
-    } else {
-      item.variant = alternate;
-      alternate = alternate === "A" ? "B" : "A";
-    }
-  }
+  // Playbook: todo 1º contato é a abertura curta ("oi, é da X?"); o
+  // diagnóstico vira argumento depois, quando o lead já está conversando.
+  for (const item of items) item.variant = "A";
   const added = sendQueue.add(items.map((item) => ({
     phone: item.lead.phone,
     kind: "primeiro",
@@ -4214,15 +4205,26 @@ ipcMain.handle("lead-memory-all", async () => {
 
 ipcMain.handle("ai-proposal", async (_, { phone, messages } = {}) => {
   try {
+    return { success: true, ...(await proposalFor(limitString(phone, 60, ""), messages)) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/** Dados do vendedor para os agentes, com a tabela de ofertas e preços. */
+function commercialForAgents() {
+  const c = currentAiSettings().commercial || {};
+  return { ...c, ofertas: String(c.offers || "").trim() || DEFAULT_OFFERS };
+}
+
+/** Agente de Proposta: proposta com o problema real do lead e a oferta certa. */
+async function proposalFor(phone, messages) {
+  {
     const runAi = agentAi("proposta");
-    if (!runAi) return { success: false, error: "Configure a IA e confira o limite do Agente de Proposta." };
-    const kit = leadSalesKit(limitString(phone, 60, ""));
-    if (!kit) return { success: false, error: "Lead sem telefone válido." };
-    const raw = getLeadsFileStore().load();
-    const all = raw ? JSON.parse(raw) : [];
-    const core = String(phone || "").replace(/\D/g, "").replace(/^55(?=\d{10,11}$)/, "");
-    const leadRaw = all.find((l) => String(l?.phone || "").replace(/\D/g, "").endsWith(core)) || {};
-    const lead = cleanLeadInput(leadRaw);
+    if (!runAi) throw new Error("Configure a IA e confira o limite do Agente de Proposta.");
+    const kit = leadSalesKit(phone);
+    if (!kit) throw new Error("Lead sem telefone válido.");
+    const lead = cleanLeadInput(leadByPhone(phone) || {});
     const triage = triageStore.getAll()[triageKey(lead)] || computeTriage(lead, null);
     const conversation = (Array.isArray(messages) ? messages : []).slice(-12).map((m) => ({
       de: m?.fromMe ? "vendedor" : "lead",
@@ -4233,14 +4235,12 @@ ipcMain.handle("ai-proposal", async (_, { phone, messages } = {}) => {
       offer: kit.offerLabel,
       findings: [...(triage.findings || []), ...(kit.image?.findings || [])],
       conversation,
-      commercial: currentAiSettings().commercial || {},
+      commercial: commercialForAgents(),
     }, runAi);
     agentStore.log("proposta", `Proposta de ${kit.offerLabel} para ${lead.name || "lead"}.`);
-    return { success: true, ...result };
-  } catch (error) {
-    return { success: false, error: error.message };
+    return result;
   }
-});
+}
 
 ipcMain.handle("queue-prepare", async (_, { leads, limit } = {}) => {
   try {
@@ -4305,6 +4305,27 @@ function withIntel(lead) {
 
 const pendingHunts = new Map();
 
+/** Avança o card do lead no Kanban (nunca volta, nunca mexe em vendido/recusado). */
+function moveLeadInKanban(phone, toColumnId) {
+  try {
+    const store = requireKanbanStore();
+    const key = phoneKey(phone);
+    const entity = Object.values(store.state?.entities || {}).find((e) => phoneKey(e?.profile?.phone) === key);
+    if (!entity) return false;
+    const columns = store.state?.board?.columns || [];
+    const card = store.state.cards?.[entity.entityKey];
+    const from = columns.find((col) => col.id === card?.columnId);
+    const to = columns.find((col) => col.id === toColumnId);
+    if (!card || !to || from?.terminal || (from && from.position >= to.position)) return false;
+    store.moveCard({ entityKey: entity.entityKey, toColumnId, manual: false });
+    scheduleKanbanQueueSync();
+    return true;
+  } catch (error) {
+    console.warn("[KANBAN] mover lead:", error.message);
+    return false;
+  }
+}
+
 function setupAutopilot() {
   const MIN = 60 * 1000;
   const stages = [
@@ -4330,7 +4351,21 @@ function setupAutopilot() {
           if (!messages.length) continue;
           const lead = leadByPhone(key) || { name: c.name || "", phone: key };
           const r = await suggestReplyFor(messages, lead);
+          // Interessado: proposta pronta ao lado das respostas e card avança no Kanban.
+          const hot = r.momento === "interessado" || ["oferta", "contraproposta", "fechamento"].includes(r.etapa);
+          let proposta = null;
+          if (hot) {
+            try {
+              proposta = await proposalFor(key, messages);
+            } catch (error) {
+              ctx.log(`Proposta para ${c.name || key} não saiu: ${error.message}`, "error");
+            }
+            moveLeadInKanban(key, proposta ? "proposal" : "qualified");
+          }
           autopilot.setReplyDraft(key, {
+            etapa: r.etapa,
+            time: r.time,
+            proposta,
             name: c.name || lead.name || "",
             lastReplyAt: c.lastReplyAt,
             ultimaMensagem: String([...messages].reverse().find((m) => !m.fromMe)?.text || "").slice(0, 300),
@@ -4434,7 +4469,7 @@ function setupAutopilot() {
         const available = allLeads().filter((lead) => isAvailableLead(lead, waCheck)).length;
         const reserve = autopilot.settings.reserveLeads || 40;
         if (available >= reserve) return { idle: true, status: `Estoque bom: ${available} leads disponíveis (mínimo ${reserve}).` };
-        const mission = autopilot.nextMission();
+        const mission = autopilot.nextMission("cacador");
         if (!mission) return { idle: true, status: "Cadastre uma missão (nicho + cidade) para o Caçador." };
         if (!mainWindow || mainWindow.isDestroyed()) return { idle: true, status: "Janela do app fechada." };
         const id = `hunt_${Date.now()}`;
@@ -4464,7 +4499,7 @@ function setupAutopilot() {
       everyMs: 30 * MIN,
       run: async (ctx) => {
         if (pendingHunts.size) return { idle: true, status: "Esperando a caçada no Maps terminar." };
-        const mission = autopilot.nextMission();
+        const mission = autopilot.nextMission("radar");
         if (!mission) return { idle: true, status: "Cadastre uma missão (nicho + cidade)." };
         if (!mainWindow || mainWindow.isDestroyed()) return { idle: true, status: "Janela do app fechada." };
         const base = allLeads();
@@ -4509,6 +4544,8 @@ function setupAutopilot() {
     stages,
     onEvent: (event) => safeSend("autopilot-event", event),
   });
+  // Nichos que o Analista viu responder mais entram no plano com prioridade.
+  autopilot.favoriteNiches = () => agentStore?.getPlaybook()?.nichos || [];
   autopilot.start();
 }
 
@@ -4617,7 +4654,7 @@ ipcMain.handle("ai-optimize-message", async (_, { template, followUp } = {}) => 
       template: limitString(template, 2000, ""),
       followUp: limitString(followUp, 1000, ""),
       insights: currentInsights(),
-      commercial: currentAiSettings().commercial || {},
+      commercial: commercialForAgents(),
     }, runAi);
     agentStore.log("copywriter", "Mensagem de campanha reescrita com base nos resultados.");
     return { success: true, ...result };
@@ -4667,7 +4704,7 @@ async function suggestReplyFor(messages, lead) {
           })(),
         };
       })(),
-      commercial: currentAiSettings().commercial || {},
+      commercial: commercialForAgents(),
     }, runAi);
     agentStore.log("respostas", `Sugestões para ${clean.name || "conversa"} (lead ${result.momento.replace(/_/g, " ")}).`);
     const memory = leadMemory?.recordReading(clean.phone, { momento: result.momento, leitura: result.leitura, objecao: result.objecao });

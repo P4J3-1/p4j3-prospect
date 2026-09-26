@@ -9,15 +9,8 @@ const ANALYST_SYSTEM_PROMPT = [
   "Responda apenas JSON: {\"resumo\":\"\",\"regras\":[\"ate 6 regras objetivas\"],\"nichos\":[\"ate 4\"],\"horarios\":[\"ex.: 9h-11h\"],\"mensagem_recomendada\":\"primeiro contato com {{saudacao}} e spintax {a|b}, sem link, terminando em pergunta\",\"alertas\":[\"riscos, ex.: descadastro alto\"],\"proximo_experimento\":\"\"}",
 ].join("\n");
 
-const REPLY_SYSTEM_PROMPT = [
-  "Voce e um SDR brasileiro experiente conversando pelo WhatsApp com um lead de prospeccao.",
-  "Recebe a conversa (mais recente por ultimo), dados do lead, o perfil de quem vende e, quando existir, o playbook do analista.",
-  "Classifique o momento do lead e sugira 3 respostas curtas (ate 280 caracteres cada), naturais, sem parecer robo, cada uma levando a um proximo passo (entender a dor, marcar conversa, mandar proposta).",
-  "Se o lead pediu para sair ou demonstrou irritacao, sugira apenas um encerramento educado.",
-  "Nunca invente precos, prazos ou resultados que o vendedor nao informou.",
-  "Use a memoria do lead (ofertas ja feitas, objecoes anteriores, mensagens enviadas) para nao repetir abordagem. Havendo objecao, parta do roteiro_objecoes e adapte ao que o lead disse.",
-  "Responda apenas JSON: {\"momento\":\"interessado|curioso|duvida|objecao|sem_interesse|pediu_para_sair\",\"leitura\":\"1 frase sobre o que o lead quer\",\"objecao\":\"a objecao em poucas palavras, ou vazio\",\"sugestoes\":[\"\",\"\",\"\"],\"proximo_passo\":\"\"}",
-].join("\n");
+
+const { SALES_REPLY_PROMPT, STAGES } = require("./sales-playbook");
 
 const MOMENTS = ["interessado", "curioso", "duvida", "objecao", "sem_interesse", "pediu_para_sair"];
 
@@ -54,13 +47,15 @@ async function suggestReplies({ messages, lead, commercial }, runAi) {
     .filter((m) => m.texto);
   if (!conversation.length) throw new Error("A conversa ainda não tem mensagens de texto para analisar.");
   const { result } = await runAi({
-    system: REPLY_SYSTEM_PROMPT,
+    system: SALES_REPLY_PROMPT,
     payload: { conversa: conversation, lead: lead || {}, vendedor: commercial || {} },
   });
   const sugestoes = list(result?.sugestoes, 3, 400);
   if (!sugestoes.length) throw new Error("A IA não sugeriu respostas. Tente novamente.");
   return {
     momento: MOMENTS.includes(result?.momento) ? result.momento : "curioso",
+    etapa: STAGES.includes(result?.etapa) ? result.etapa : "",
+    time: String(result?.time || "").slice(0, 160),
     leitura: String(result?.leitura || "").slice(0, 240),
     objecao: String(result?.objecao || "").slice(0, 120),
     sugestoes,

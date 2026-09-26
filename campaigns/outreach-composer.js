@@ -5,6 +5,7 @@
  */
 const { interpolate } = require("./template-engine");
 const { OFFERS } = require("./offer-ladder");
+const { OPENERS } = require("../agents/sales-playbook");
 
 const TEMPLATES = {
   primeiro: {
@@ -24,7 +25,9 @@ function templateFor(item) {
     const hook = OFFERS[item.offer]?.gancho || "melhorar a presença digital";
     return TEMPLATES.nova_oferta.replace("[ANTERIOR]", previous).replace("[GANCHO]", hook);
   }
-  return TEMPLATES.primeiro[item.offer] || TEMPLATES.primeiro.imagem;
+  // 1º contato: só a abertura curta ("oi, é da X?"), sorteada entre várias
+  // estruturas. A oferta vem depois, na conversa conduzida por perguntas.
+  return OPENERS[Math.floor(Math.random() * OPENERS.length)];
 }
 
 function cleanMessage(text) {
@@ -57,7 +60,8 @@ async function composeMessages(items = [], { runAi = null, commercial = {}, aiBu
   }
   if (typeof runAi !== "function") return out;
 
-  const eligible = items.slice(0, Math.max(0, aiBudget));
+  // A abertura não passa pela IA: curta e variada já é o melhor que existe.
+  const eligible = items.filter((item) => item.kind !== "primeiro").slice(0, Math.max(0, aiBudget));
   for (let start = 0; start < eligible.length; start += 8) {
     const chunk = eligible.slice(start, start + 8);
     try {

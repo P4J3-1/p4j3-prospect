@@ -16,6 +16,7 @@ export const AGENT_META = {
 };
 const FLOW = ['cacador', 'radar', 'triagem', 'pesquisador', 'copywriter', 'respostas', 'analista'];
 const STATUS_TEXT = { working: 'Trabalhando', idle: 'De olho', done: 'Concluiu', error: 'Com erro', off: 'Pausado' };
+const ETAPA = { abertura: 'Abertura', conexao: 'Conexão', dor: 'Dor', valor: 'Valor', oferta: 'Oferta', objecao: 'Objeção', contraproposta: 'Contraproposta', fechamento: 'Fechamento', perdido: 'Perdido' };
 const MOMENTO = { interessado: 'Interessado', curioso: 'Curioso', duvida: 'Com dúvida', objecao: 'Objeção', sem_interesse: 'Sem interesse', pediu_para_sair: 'Pediu para sair' };
 
 function nextIn(ts, now) {
@@ -69,11 +70,13 @@ function ReplyCard({ phone, draft, onNavigate }) {
         <div>
           <b>{draft.name || `+55 ${phone}`}</b>
           <span className={`ap-chip m-${draft.momento}`}>{MOMENTO[draft.momento] || draft.momento}</span>
+          {draft.etapa && <span className="ap-chip stage">Etapa: {ETAPA[draft.etapa] || draft.etapa}</span>}
         </div>
         <button type="button" className="ap-icon" title="Dispensar" onClick={() => window.autopilotAPI.dismissReply(phone)}><X size={14} /></button>
       </header>
       {draft.ultimaMensagem && <blockquote>“{draft.ultimaMensagem}”</blockquote>}
       {draft.leitura && <p className="ap-reading">{draft.leitura}</p>}
+      {draft.time && <p className="ap-reading"><b>Time do cliente:</b> {draft.time}</p>}
       <ol>
         {(draft.sugestoes || []).map((text, index) => (
           <li key={text}>
@@ -86,12 +89,19 @@ function ReplyCard({ phone, draft, onNavigate }) {
         ))}
       </ol>
       {draft.proximoPasso && <p className="ap-next">Próximo passo: {draft.proximoPasso}</p>}
+      {draft.proposta?.proposta && (
+        <details className="ap-proposal">
+          <summary>📄 Proposta pronta: {draft.proposta.titulo}</summary>
+          <p>{draft.proposta.proposta}</p>
+          <button type="button" className="ap-mini primary" onClick={() => use(draft.proposta.proposta)}><MessageCircle size={12} /> Abrir conversa com a proposta</button>
+        </details>
+      )}
       <span className="ap-when">preparada {timeAgo(draft.at)}</span>
     </article>
   );
 }
 
-function Missions({ settings, onSave }) {
+function Missions({ settings, onSave, plan }) {
   const [rows, setRows] = useState(settings.missions || []);
   const [dirty, setDirty] = useState(false);
   useEffect(() => { if (!dirty) setRows(settings.missions || []); }, [settings.missions, dirty]);
@@ -106,8 +116,28 @@ function Missions({ settings, onSave }) {
     <section className="ap-panel">
       <header className="ap-panel-head">
         <h2>Missões do Caçador</h2>
-        <span>Quando os leads disponíveis ficam abaixo do mínimo, ele caça a próxima missão (em rodízio).</span>
+        <span>Quando os leads disponíveis ficam abaixo do mínimo, o Caçador (Maps) e o Radar (web) caçam a próxima missão.</span>
       </header>
+      <div className="ap-plan">
+        <label className="ap-plan-toggle">
+          <input type="checkbox" checked={settings.autoMissions !== false} onChange={(e) => onSave({ autoMissions: e.target.checked })} />
+          <span><b>Plano Brasil automático</b> — {plan?.niches || 0} nichos (prioridade ticket R$ 300–500) × {plan?.areas || 0} regiões: todo o DF primeiro, depois entorno e capitais. Suas missões abaixo entram intercaladas.</span>
+        </label>
+        {settings.autoMissions !== false && plan?.progress && (
+          <div className="ap-plan-progress">
+            {[['cacador', 'Caçador (Maps)', '#f59e0b'], ['radar', 'Radar (web)', '#38bdf8']].map(([id, label, color]) => {
+              const p = plan.progress[id];
+              return (
+                <div key={id} style={{ '--c': color }}>
+                  <span>{label}</span>
+                  <div className="ai-bar"><i style={{ width: `${Math.max(1, Math.round(((p?.done || 0) / (p?.total || 1)) * 100))}%`, background: color }} /></div>
+                  <small>{p?.done || 0}/{p?.total || 0}{p?.current ? ` · última: ${p.current.niche} em ${p.current.city}` : ' · começa por barbearia em Ceilândia'}</small>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
       <div className="ap-missions">
         {rows.map((row, i) => (
           <div key={i} className={`ap-mission ${row.active === false ? 'off' : ''}`}>
@@ -132,7 +162,7 @@ function Missions({ settings, onSave }) {
       <div className="ap-knobs">
         <label>Mínimo de leads disponíveis <input type="number" min={0} max={500} value={settings.reserveLeads} onChange={(e) => onSave({ reserveLeads: e.target.value })} /></label>
         <label>Leads novos por caçada <input type="number" min={5} max={500} value={settings.huntGoal} onChange={(e) => onSave({ huntGoal: e.target.value })} /></label>
-        <label>Mensagens esperando aprovação <input type="number" min={0} max={200} value={settings.draftTarget} onChange={(e) => onSave({ draftTarget: e.target.value })} /></label>
+        <label>Mensagens esperando aprovação <input type="number" min={0} max={300} value={settings.draftTarget} onChange={(e) => onSave({ draftTarget: e.target.value })} /></label>
         <label>Pesquisas por rodada <input type="number" min={1} max={20} value={settings.researchPerRun} onChange={(e) => onSave({ researchPerRun: e.target.value })} /></label>
       </div>
     </section>
@@ -267,7 +297,7 @@ export default function AgentsCommand({ onNavigate, aiConfigured }) {
         </section>
       </div>
 
-      <Missions settings={state.settings} onSave={save} />
+      <Missions settings={state.settings} onSave={save} plan={state.plan} />
     </div>
   );
 }

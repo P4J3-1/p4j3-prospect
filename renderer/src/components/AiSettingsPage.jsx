@@ -5,6 +5,13 @@ const DEEPSEEK_MODELS = [
   { id: 'deepseek-flash', name: 'Flash', hint: 'Rápido e barato. Ideal para os agentes rodarem o dia todo.' },
   { id: 'deepseek-v4-pro', name: 'Pro', hint: 'Raciocínio mais profundo. Para propostas e análises.' },
 ];
+const OFFERS_PLACEHOLDER = [
+  'Ajuste completo do Google (perfil, fotos, horários e respostas às avaliações) — R$ 300',
+  'Resposta automática no WhatsApp para quem chama fora do horário — R$ 300',
+  'Página de apresentação no celular com botão de WhatsApp — R$ 500',
+  'Site profissional completo — a partir de R$ 1.500',
+  'Automação de atendimento e agenda pelo WhatsApp — a partir de R$ 800',
+].join('\n');
 const AGENT_NAMES = { triagem: 'Triagem', pesquisador: 'Pesquisador', copywriter: 'Copywriter', respostas: 'Respostas', proposta: 'Proposta', analista: 'Analista' };
 
 const TONES = [
@@ -28,6 +35,7 @@ function fromSettings(settings = {}) {
     agencyName: commercial.agencyName || '',
     services: (Array.isArray(commercial.services) ? commercial.services : []).join(', '),
     proof: commercial.proof || '',
+    offers: commercial.offers || '',
     tone: commercial.tone || 'consultivo',
     autoAnalyze: settings.analysis?.autoAnalyzeAfterScrape === true,
   };
@@ -111,6 +119,7 @@ export default function AiSettingsPage() {
           agencyName: draft.agencyName.trim(),
           services: draft.services.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10),
           proof: draft.proof.trim(),
+          offers: draft.offers.trim().slice(0, 2000),
           tone: draft.tone,
         },
         analysis: { autoAnalyzeAfterScrape: draft.autoAnalyze },
@@ -265,6 +274,17 @@ export default function AiSettingsPage() {
         <div className="field">
           <label htmlFor="aiProof">Prova social / resultado que você já entregou</label>
           <textarea id="aiProof" rows={2} value={draft.proof} onChange={(e) => set({ proof: e.target.value })} placeholder="Ex.: Dobramos os agendamentos de 3 clínicas em 60 dias" />
+        </div>
+        <div className="field">
+          <label htmlFor="aiOffers">Ofertas e preços (uma por linha) — o que os agentes oferecem na conversa</label>
+          <textarea
+            id="aiOffers"
+            rows={5}
+            value={draft.offers}
+            onChange={(e) => set({ offers: e.target.value })}
+            placeholder={OFFERS_PLACEHOLDER}
+          />
+          <span className="camp-hint">Vazio = usa a tabela sugerida acima (entradas de R$ 300 e R$ 500). A IA nunca oferece preço fora desta lista.</span>
         </div>
         <div className="field">
           <label htmlFor="aiTone">Tom das mensagens</label>

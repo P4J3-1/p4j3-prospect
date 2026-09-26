@@ -8999,3 +8999,19 @@ html[data-theme="dark"] .hunt-tile span { color: #94a3b8; }
 .ap-link { flex-basis: 14px; }
 .ap-pod-task { font-size: 11.5px; }
 .ap-pod footer { font-size: 10.5px; flex-wrap: wrap; justify-content: center; gap: 2px 8px; }
+
+/* Plano Brasil + proposta pronta */
+.ap-plan { margin: 0 0 14px; padding: 12px 14px; border-radius: 14px; background: linear-gradient(135deg, rgba(245, 158, 11, .12), rgba(56, 189, 248, .10)); border: 1px solid rgba(148, 163, 184, .2); }
+.ap-plan-toggle { display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; color: #cbd5e1; line-height: 1.45; }
+.ap-plan-toggle b { color: #fff; }
+.ap-plan-toggle input { margin-top: 3px; }
+.ap-plan-progress { display: grid; gap: 8px; margin-top: 10px; }
+.ap-plan-progress > div { display: grid; grid-template-columns: 120px 1fr; gap: 4px 10px; align-items: center; font-size: 12px; color: #e2e8f0; }
+.ap-plan-progress small { grid-column: 2; color: var(--ap-muted); font-size: 11.5px; }
+.ap-chip.stage { background: rgba(56, 189, 248, .18); color: #7dd3fc; margin-left: 6px; }
+.ap-reading b { color: #e2e8f0; }
+.ap-proposal { margin-top: 10px; border-radius: 12px; padding: 10px 12px; background: rgba(245, 158, 11, .08); border: 1px solid rgba(245, 158, 11, .35); }
+.ap-proposal summary { cursor: pointer; color: #fcd34d; font-weight: 700; font-size: 13px; }
+.ap-proposal p { white-space: pre-wrap; font-size: 12.5px; color: #f1f5f9; line-height: 1.5; margin: 8px 0; }
+.ap-plan-toggle input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; margin: 2px 0 0; accent-color: #f59e0b; }
+.ap-plan-toggle { align-items: flex-start; }

@@ -48,7 +48,7 @@ describe('piloto automático', () => {
   it('missões em rodízio, só as ativas, e tudo persiste', () => {
     const dir = tmp();
     const ap = new Autopilot(dir, { stages: [] });
-    ap.updateSettings({ missions: [
+    ap.updateSettings({ autoMissions: false, missions: [
       { niche: 'dentista', city: 'Brasília, DF', neighborhoods: 'Asa Sul, Asa Norte' },
       { niche: 'pet shop', city: 'Brasília, DF', active: false },
       { niche: 'academia', city: 'Taguatinga, DF' },
@@ -59,6 +59,13 @@ describe('piloto automático', () => {
     assert.equal(ap.nextMission().niche, 'dentista');
     assert.equal(ap.nextMission().niche, 'academia');
     assert.equal(ap.nextMission().niche, 'dentista');
+    // Radar anda no próprio cursor.
+    assert.equal(ap.nextMission('radar').niche, 'dentista');
+    // Plano automático ligado: alterna manual e Brasil.
+    ap.updateSettings({ autoMissions: true });
+    const auto = [ap.nextMission('novo'), ap.nextMission('novo')];
+    assert.equal(auto[0].niche, 'dentista');
+    assert.equal(auto[1].auto, true);
     ap.setReplyDraft('61999990001', { sugestoes: ['oi'] });
     const again = new Autopilot(dir, { stages: [] });
     assert.equal(again.settings.missions.length, 3);
