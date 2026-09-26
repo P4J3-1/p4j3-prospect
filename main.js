@@ -4383,6 +4383,36 @@ function setupAutopilot() {
       },
     },
     {
+      id: "verificador",
+      agent: "verificador",
+      label: "Conferindo quem tem WhatsApp",
+      everyMs: 10 * MIN,
+      run: async (ctx) => {
+        const provider = getActiveWhatsAppProvider();
+        if (!provider || provider.getStatus?.() !== "connected" || typeof provider.checkWhatsAppNumbers !== "function") {
+          return { idle: true, status: "WhatsApp desconectado." };
+        }
+        if (waCheckRunning) return { idle: true, status: "Checagem manual em andamento." };
+        const waCheck = contactStatus?.getWaCheck() || {};
+        const pending = [...new Set(allLeads()
+          .map((lead) => lead?.phone || lead?.tel)
+          .filter((phone) => phone && phoneKey(phone).length >= 10 && !waCheck[phoneKey(phone)] && !contactStatus?.get(phone)))]
+          .slice(0, 40);
+        if (!pending.length) return { idle: true, status: "Todos os números da base já foram conferidos." };
+        ctx.progress(0, pending.length, `Conferindo ${pending.length} número(s) no WhatsApp`);
+        waCheckRunning = true;
+        try {
+          const result = await provider.checkWhatsAppNumbers(pending);
+          const changed = contactStatus.recordWaCheck(result);
+          safeSend("wa-check-changed", { changed, done: pending.length, total: pending.length });
+          const yes = Object.values(result).filter(Boolean).length;
+          return { count: pending.length, text: `${pending.length} número(s) conferidos: ${yes} com WhatsApp, ${pending.length - yes} sem (ficam fora da fila).` };
+        } finally {
+          waCheckRunning = false;
+        }
+      },
+    },
+    {
       id: "triagem",
       agent: "triagem",
       label: "Triando leads novos",

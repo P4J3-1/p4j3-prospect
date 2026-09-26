@@ -9035,3 +9035,6 @@ html[data-theme="dark"] .hunt-tile span { color: #94a3b8; }
 .clp-stage.s-contraproposta { --c: #ec4899; }
 .clp-stage.s-fechamento { --c: #059669; }
 html[data-theme="dark"] .clp-stage:not(.ai) { background: color-mix(in srgb, var(--c) 16%, #0f172a); color: color-mix(in srgb, var(--c) 70%, #fff); }
+.ap-pod { flex: 1 1 112px; min-width: 108px; }
+.ap-pod h3 { font-size: 13px; }
+.ap-orb { width: 56px; height: 56px; }
