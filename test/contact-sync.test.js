@@ -28,8 +28,8 @@ function makeProvider() {
   };
   provider._messages = {
     '111@lid': [
-      { key: { fromMe: true, id: 'a' }, messageTimestamp: sec(t0) },
-      { key: { fromMe: false, id: 'b' }, messageTimestamp: sec(t0 + 60000) },
+      { key: { fromMe: true, id: 'a' }, message: { conversation: 'Olá, tudo bem?' }, messageTimestamp: sec(t0) },
+      { key: { fromMe: false, id: 'b' }, message: { conversation: 'Quanto custa?' }, messageTimestamp: sec(t0 + 60000) },
     ],
   };
   provider.sock = {

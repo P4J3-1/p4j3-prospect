@@ -59,9 +59,9 @@ describe('atualizar WhatsApp', () => {
     provider._chats = { [jid]: { jid, name: 'Padaria', timestamp: 300 } };
     provider._messages = {
       [jid]: [
-        { key: { fromMe: true, id: 'a' }, messageTimestamp: 100 },
-        { key: { fromMe: false, id: 'b' }, messageTimestamp: 200 },
-        { key: { fromMe: false, id: 'c' }, messageTimestamp: 300 },
+        { key: { fromMe: true, id: 'a' }, message: { conversation: 'Oi' }, messageTimestamp: 100 },
+        { key: { fromMe: false, id: 'b' }, message: { conversation: 'Oi, quem fala?' }, messageTimestamp: 200 },
+        { key: { fromMe: false, id: 'c' }, message: { conversation: 'Tenho interesse' }, messageTimestamp: 300 },
       ],
     };
     const [entry] = await provider.getOutreachHistory();

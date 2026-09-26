@@ -46,10 +46,7 @@ function words(text) {
     .filter(Boolean);
 }
 
-function phoneCore(phone) {
-  const digits = String(phone || "").replace(/\D/g, "");
-  return digits.length >= 12 && digits.startsWith("55") ? digits.slice(2) : digits;
-}
+const { phoneCore } = require("../utils/phone-key");
 
 /** Chave estável do lead (mesma regra no renderer: renderer/src/triage.mjs). */
 function triageKey(lead = {}) {

@@ -69,10 +69,7 @@ function messageText(message) {
 }
 
 /** Dígitos sem DDI 55, para casar "11999990001" com "5511999990001". */
-function phoneCore(phone) {
-  const digits = String(phone || '').replace(/@.*$/, '').replace(/\D/g, '');
-  return digits.length >= 12 && digits.startsWith('55') ? digits.slice(2) : digits;
-}
+const { phoneCore, rekeyPhoneMap } = require('../utils/phone-key');
 
 class DoNotContactStore {
   constructor(userDataPath) {
@@ -83,7 +80,8 @@ class DoNotContactStore {
   _load() {
     try {
       const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
-      if (raw && typeof raw.phones === 'object') return raw;
+      // Números antigos sem o 9 passam para a chave atual.
+      if (raw && typeof raw.phones === 'object') return { ...raw, phones: rekeyPhoneMap(raw.phones).map };
     } catch {}
     return { phones: {} };
   }

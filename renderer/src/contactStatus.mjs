@@ -17,8 +17,11 @@ export function contactBucket(entry) {
 }
 
 export function phoneCore(phone) {
-  const digits = String(phone || '').replace(/@.*$/, '').replace(/\D/g, '');
-  return digits.length >= 12 && digits.startsWith('55') ? digits.slice(2) : digits;
+  let digits = String(phone || '').replace(/@.*$/, '').replace(/:\d+$/, '').replace(/\D/g, '');
+  if (digits.length >= 12 && digits.startsWith('55')) digits = digits.slice(2);
+  // Celular sempre com o 9 (o WhatsApp guarda números antigos sem ele).
+  if (digits.length === 10 && /[6-9]/.test(digits[2])) digits = `${digits.slice(0, 2)}9${digits.slice(2)}`;
+  return digits;
 }
 
 export function leadPhone(lead) {

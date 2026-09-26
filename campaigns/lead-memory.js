@@ -15,10 +15,7 @@ const TEMPERATURE_BY_MOMENT = {
   pediu_para_sair: "frio",
 };
 
-function phoneCore(phone) {
-  const digits = String(phone || "").replace(/@.*$/, "").replace(/\D/g, "");
-  return digits.length >= 12 && digits.startsWith("55") ? digits.slice(2) : digits;
-}
+const { phoneCore, rekeyPhoneMap } = require("../utils/phone-key");
 
 /**
  * Temperatura: o momento lido na conversa manda; sem ele, o status do
@@ -36,7 +33,7 @@ class LeadMemory {
   constructor(userDataPath) {
     this.filePath = path.join(userDataPath, "lead-memory.json");
     try {
-      this.data = JSON.parse(fs.readFileSync(this.filePath, "utf-8")) || {};
+      this.data = rekeyPhoneMap(JSON.parse(fs.readFileSync(this.filePath, "utf-8")) || {}).map;
     } catch {
       this.data = {};
     }

@@ -22,10 +22,7 @@ const AB_MIN_SAMPLE = 20;
 const AB_MIN_LIFT = 3; // pontos percentuais
 const MAX_ITEMS = 5000;
 
-function phoneCore(phone) {
-  const digits = String(phone || "").replace(/@.*$/, "").replace(/\D/g, "");
-  return digits.length >= 12 && digits.startsWith("55") ? digits.slice(2) : digits;
-}
+const { phoneCore } = require("../utils/phone-key");
 
 function minutesOf(hhmm) {
   const [h, m] = String(hhmm || "").split(":").map(Number);
@@ -56,6 +53,7 @@ class SendQueue {
     this.nextGapMs = Number(raw.nextGapMs) || 0;
     // Um envio interrompido (app fechou no meio) volta para aprovado.
     for (const item of this.items) if (item.status === "enviando") item.status = "aprovado";
+    for (const item of this.items) item.phoneCore = phoneCore(item.phone || item.phoneCore);
   }
 
   save() {

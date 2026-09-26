@@ -10,10 +10,7 @@ const RANK = { enviado: 1, entregue: 2, lido: 3, respondeu: 4 };
 const MAX_CONTACTS = 20000;
 const MAX_MESSAGE_IDS = 50000;
 
-function phoneCore(phone) {
-  const digits = String(phone || "").replace(/@.*$/, "").replace(/\D/g, "");
-  return digits.length >= 12 && digits.startsWith("55") ? digits.slice(2) : digits;
-}
+const { phoneCore, rekeyPhoneMap } = require("./phone-key");
 
 class ContactStatusStore {
   constructor(userDataPath, { onChange = () => {}, debounceMs = 400 } = {}) {
@@ -26,6 +23,7 @@ class ContactStatusStore {
     this.messageIndex = loaded.messageIndex || {};
     // Resultado da checagem "tem WhatsApp?" por telefone (sem DDI).
     this.waCheck = loaded.waCheck || {};
+    this._migrateKeys();
   }
 
   _load() {
@@ -34,6 +32,37 @@ class ContactStatusStore {
       return raw && typeof raw === "object" ? raw : {};
     } catch {
       return {};
+    }
+  }
+
+  /** Números gravados sem o 9 viram a chave atual; o mesmo lead em dois formatos vira um só. */
+  _migrateKeys() {
+    const later = (a, b) => (b?.lastEventAt || 0) > (a?.lastEventAt || 0);
+    const contacts = rekeyPhoneMap(this.contacts, (a, b) => {
+      const keep = (RANK[b.status] || (b.status ? 9 : 0)) > (RANK[a.status] || (a.status ? 9 : 0)) ? b : a;
+      const other = keep === a ? b : a;
+      return {
+        ...other,
+        ...keep,
+        firstSentAt: Math.min(a.firstSentAt || Infinity, b.firstSentAt || Infinity) === Infinity ? undefined : Math.min(a.firstSentAt || Infinity, b.firstSentAt || Infinity),
+        sentAt: Math.max(a.sentAt || 0, b.sentAt || 0) || undefined,
+        messages: Math.max(Number(a.messages) || 0, Number(b.messages) || 0),
+        lastEventAt: Math.max(a.lastEventAt || 0, b.lastEventAt || 0) || undefined,
+      };
+    });
+    const waCheck = rekeyPhoneMap(this.waCheck, (a, b) => (later(a, b) ? b : a));
+    let indexChanged = false;
+    for (const [id, key] of Object.entries(this.messageIndex)) {
+      const next = phoneCore(key);
+      if (next && next !== key) {
+        this.messageIndex[id] = next;
+        indexChanged = true;
+      }
+    }
+    if (contacts.changed || waCheck.changed || indexChanged) {
+      this.contacts = contacts.map;
+      this.waCheck = waCheck.map;
+      this.flush();
     }
   }
 
@@ -136,27 +165,65 @@ class ContactStatusStore {
       const key = phoneCore(item?.phone);
       if (!key || key.length < 10) continue;
       const prev = this.contacts[key] || {};
-      const status = item.repliedAt ? "respondeu" : "enviado";
-      const keepStatus = prev.status === "descadastrado" || prev.status === "nao_contatar" || (RANK[prev.status] || 0) >= RANK[status];
+      // Histórico que já separa resposta automática da humana manda na resposta:
+      // corrige quem virou "Respondeu" só por causa da saudação automática.
+      const authoritative = item.autoReplies !== undefined;
+      const blocked = prev.status === "descadastrado" || prev.status === "nao_contatar";
+      let status;
+      if (blocked) status = prev.status;
+      else if (item.repliedAt) status = "respondeu";
+      else if (authoritative && prev.status === "respondeu") status = item.autoReplies ? "entregue" : "enviado";
+      else status = (RANK[prev.status] || 0) >= RANK.enviado ? prev.status : "enviado";
+      const replyFields = authoritative
+        ? {
+            repliedAt: item.repliedAt || undefined,
+            lastReplyAt: item.lastReplyAt || item.repliedAt || undefined,
+            replies: Number(item.replies) || 0,
+            autoReplies: Number(item.autoReplies) || 0,
+            lastAutoReplyAt: item.lastAutoReplyAt || undefined,
+          }
+        : {
+            repliedAt: prev.repliedAt || item.repliedAt || undefined,
+            lastReplyAt: Math.max(prev.lastReplyAt || 0, item.lastReplyAt || item.repliedAt || 0) || undefined,
+            replies: Math.max(Number(prev.replies) || 0, Number(item.replies) || 0),
+          };
       const next = {
         ...prev,
-        status: keepStatus ? prev.status : status,
+        status,
         firstSentAt: Math.min(prev.firstSentAt || Infinity, item.firstSentAt || item.sentAt || at),
         sentAt: Math.max(prev.sentAt || 0, item.sentAt || 0) || prev.sentAt || at,
-        repliedAt: prev.repliedAt || item.repliedAt || undefined,
-        lastReplyAt: Math.max(prev.lastReplyAt || 0, item.lastReplyAt || item.repliedAt || 0) || undefined,
+        ...replyFields,
         messages: Math.max(Number(prev.messages) || 0, Number(item.messages) || 0),
-        replies: Math.max(Number(prev.replies) || 0, Number(item.replies) || 0),
         lastEventAt: Math.max(prev.lastEventAt || 0, item.repliedAt || 0, item.sentAt || 0) || at,
         source: prev.source || "historico",
         name: prev.name || item.name || "",
       };
+      for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
       if (JSON.stringify(next) === JSON.stringify(prev)) continue;
       this.contacts[key] = next;
       changed += 1;
       this._emit(key);
     }
     return changed;
+  }
+
+  /**
+   * Tira do controle de contatados o que veio só do histórico e não é
+   * prospecção (conversa pessoal). Marcações manuais e bloqueios ficam.
+   */
+  pruneHistory(keepKeys) {
+    let removed = 0;
+    for (const [key, entry] of Object.entries(this.contacts)) {
+      // "manual" sem a marca manual = mensagem digitada no chat (versões antigas).
+      const fromHistoryOrChat = entry?.source === "historico" || entry?.source === "chat" || entry?.source === "manual";
+      if (!fromHistoryOrChat || entry.manual) continue;
+      if (entry.status === "nao_contatar" || entry.status === "descadastrado") continue;
+      if (keepKeys.has(key)) continue;
+      delete this.contacts[key];
+      removed += 1;
+      this._emit(key);
+    }
+    return removed;
   }
 
   /**
@@ -208,12 +275,25 @@ class ContactStatusStore {
   }
 
   /** Resposta do lead. Só conta para números que já contatamos. */
-  recordReply(phone, { optOut = false, at = Date.now() } = {}) {
+  recordReply(phone, { optOut = false, auto = false, at = Date.now() } = {}) {
     const key = phoneCore(phone);
     const prev = key && this.contacts[key];
     if (!prev) return null;
     // Mensagem anterior ao seu primeiro envio não é resposta à prospecção.
     if (prev.firstSentAt && at < prev.firstSentAt) return null;
+    // Resposta automática só prova que chegou; não é conversa.
+    if (auto && !optOut) {
+      const next = {
+        ...prev,
+        status: (RANK[prev.status] || 0) < RANK.entregue && RANK[prev.status] ? "entregue" : prev.status,
+        autoReplies: (Number(prev.autoReplies) || 0) + 1,
+        lastAutoReplyAt: Math.max(prev.lastAutoReplyAt || 0, at),
+        lastEventAt: Math.max(prev.lastEventAt || 0, at),
+      };
+      this.contacts[key] = next;
+      this._emit(key);
+      return next;
+    }
     // A mesma mensagem pode chegar de novo na recuperação após reconectar.
     if (prev.lastReplyAt && at <= prev.lastReplyAt && prev.status === "respondeu") return null;
     const next = {

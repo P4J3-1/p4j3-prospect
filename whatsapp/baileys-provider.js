@@ -4,6 +4,7 @@ const { normalizePhone } = require("./phone-normalizer");
 const fs = require("fs");
 const path = require("path");
 const { resolveContactIdentity } = require('./contact-identity-resolver');
+const { isAutoReply } = require("../utils/outreach-classifier");
 
 class BaileysProvider extends WhatsAppProvider {
   constructor(config, onStatus, onChatEvent, userDataPath) {
@@ -1577,17 +1578,37 @@ class BaileysProvider extends WhatsAppProvider {
         firstSent = lastSent = this._timestampToNumber(chat.timestamp) * 1000;
       }
       if (!sent) continue;
+      // Só resposta humana conta: saudação automática do WhatsApp Business não.
       let repliedAt = 0;
       let lastReplyAt = 0;
       let replies = 0;
-      for (const m of msgs) {
-        if (m?.key?.fromMe) continue;
-        const ts = this._timestampToNumber(m.messageTimestamp) * 1000;
-        if (firstSent && ts > firstSent) {
-          replies += 1;
-          if (!repliedAt || ts < repliedAt) repliedAt = ts;
-          if (ts > lastReplyAt) lastReplyAt = ts;
+      let autoReplies = 0;
+      let lastAutoReplyAt = 0;
+      let lastMine = 0;
+      let firstText = "";
+      let receivedBefore = false;
+      const ordered = msgs
+        .map((m) => ({ m, ts: this._timestampToNumber(m?.messageTimestamp) * 1000 }))
+        .filter((x) => x.ts)
+        .sort((a, b) => a.ts - b.ts);
+      for (const { m, ts } of ordered) {
+        const text = this._getMessageText(m);
+        if (m?.key?.fromMe) {
+          lastMine = ts;
+          if (!firstText && text) firstText = text;
+          continue;
         }
+        if (!text) continue;
+        if (!firstText) receivedBefore = true;
+        if (!firstSent || ts <= firstSent) continue;
+        if (isAutoReply(text, lastMine ? ts - lastMine : Infinity)) {
+          autoReplies += 1;
+          if (ts > lastAutoReplyAt) lastAutoReplyAt = ts;
+          continue;
+        }
+        replies += 1;
+        if (!repliedAt || ts < repliedAt) repliedAt = ts;
+        if (ts > lastReplyAt) lastReplyAt = ts;
       }
       const phoneJid = await this.resolvePhoneJid(jid);
       if (!phoneJid) continue;
@@ -1599,6 +1620,10 @@ class BaileysProvider extends WhatsAppProvider {
         repliedAt: repliedAt || null,
         lastReplyAt: lastReplyAt || null,
         replies,
+        autoReplies,
+        lastAutoReplyAt: lastAutoReplyAt || null,
+        firstText: String(firstText || "").slice(0, 300),
+        startedByMe: !receivedBefore,
         name: chat?.name || "",
       });
     }

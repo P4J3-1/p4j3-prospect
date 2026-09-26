@@ -61,6 +61,8 @@ const { optimizeCampaignMessage } = require("./lead-scoring/message-optimizer");
 const { computeInsights } = require("./campaigns/learning");
 const { TriageStore, computeTriage, triageKey, triageLeads } = require("./lead-scoring/lead-triage");
 const { SendQueue } = require("./campaigns/send-queue");
+const { phoneCore: phoneKey } = require("./utils/phone-key");
+const { isAutoReply, isProspectingConversation } = require("./utils/outreach-classifier");
 const { composeMessages } = require("./campaigns/outreach-composer");
 const { entryOffer, imageDiagnosis, nextOffer, objectionsFor, OFFERS } = require("./campaigns/offer-ladder");
 const { DailyQuota } = require("./campaigns/daily-quota");
@@ -2825,7 +2827,10 @@ ipcMain.handle("whatsapp-send-message", async (_, { to, content, connectionId } 
     const phoneJid = jid.endsWith("@lid")
       ? (await provider.resolvePhoneJid?.(jid).catch(() => null)) || provider._getPhoneJid?.(jid) || ""
       : jid;
-    if (phoneJid && !phoneJid.endsWith("@g.us")) contactStatus?.recordSent(phoneJid, { messageId: result.messageId, source: "manual" });
+    // Só conta como prospecção se for lead da base; conversa comum não vira "contatado".
+    if (phoneJid && !phoneJid.endsWith("@g.us") && (contactStatus?.get(phoneJid) || knownLeadPhones().has(phoneKey(phoneJid)))) {
+      contactStatus?.recordSent(phoneJid, { messageId: result.messageId, source: "chat" });
+    }
   }
   return result;
 });
@@ -2852,6 +2857,22 @@ function getAreaCache() {
 }
 
 /** Chaves (placeId e nome) de todos os leads da base: a extração não os repete. */
+/** Telefones (chave única) dos leads da base. */
+function knownLeadPhones() {
+  const phones = new Set();
+  try {
+    const raw = getLeadsFileStore().load();
+    const leads = raw ? JSON.parse(raw) : [];
+    for (const lead of Array.isArray(leads) ? leads : []) {
+      const key = phoneKey(lead?.phone || lead?.tel || lead?.telefone || lead?.whatsapp);
+      if (key.length >= 10) phones.add(key);
+    }
+  } catch (error) {
+    console.warn("[CONTACT-STATUS] base de leads:", error.message);
+  }
+  return phones;
+}
+
 function knownLeadKeys() {
   const keys = new Set();
   try {
@@ -2912,7 +2933,10 @@ async function recordIncomingReply(event) {
     const rawTs = event.message?.messageTimestamp;
     const ts = Number(typeof rawTs === "object" && rawTs ? rawTs.low : rawTs) || 0;
     const at = ts ? Math.min(Date.now(), ts * 1000) : Date.now();
-    contactStatus?.recordReply(phone, { optOut: isOptOutMessage(messageText(event.message)), at });
+    const text = messageText(event.message);
+    const prev = contactStatus?.get(phone);
+    const auto = isAutoReply(text, prev?.sentAt ? at - prev.sentAt : Infinity);
+    contactStatus?.recordReply(phone, { optOut: isOptOutMessage(text), auto, at });
   } catch (error) {
     console.warn("[CONTACT-STATUS] resposta:", error.message);
   }
@@ -2929,19 +2953,39 @@ async function syncContactHistory() {
   contactSyncRunning = (async () => {
     let changed = 0;
     let found = 0;
+    let removed = 0;
     const errors = [];
+    const leadPhones = knownLeadPhones();
+    const all = contactStatus?.getAll() || {};
+    const keep = new Set();
+    let historyLoaded = false;
     for (const [connectionId, provider] of whatsappProviders.entries()) {
       if (typeof provider.getOutreachHistory !== "function") continue;
       try {
         const history = await provider.getOutreachHistory();
-        found += history.length;
-        changed += contactStatus?.importHistory(history) || 0;
+        if (history.length) historyLoaded = true;
+        // Só prospecção: lead da base, envio feito pelo app ou conversa que você
+        // começou com texto comercial. Conversa pessoal fica de fora.
+        const prospecting = history.filter((entry) => {
+          const key = phoneKey(entry.phone);
+          const prev = all[key];
+          const ok = isProspectingConversation(entry, {
+            isKnownLead: leadPhones.has(key),
+            sentByApp: !!prev && (prev.manual || prev.source === "fila" || prev.source === "campanha"),
+          });
+          if (ok) keep.add(key);
+          return ok;
+        });
+        found += prospecting.length;
+        changed += contactStatus?.importHistory(prospecting) || 0;
       } catch (error) {
         errors.push(`${connectionId}: ${error.message}`);
       }
     }
+    // Limpa o que entrou antes do filtro (conversas pessoais).
+    if (historyLoaded && !errors.length) removed = contactStatus?.pruneHistory(keep) || 0;
     contactStatus?.flush();
-    return { success: true, found, changed, errors };
+    return { success: true, found, changed, removed, errors };
   })();
   try {
     return await contactSyncRunning;
@@ -3926,8 +3970,7 @@ async function prepareQueueDrafts(rawLeads, { limit = 200 } = {}) {
     if (!lead.phone) { skipped.sem_telefone += 1; continue; }
     if (contactStatus?.get(lead.phone)) { skipped.contatado += 1; continue; }
     if (sendQueue.activeFor(lead.phone)) { skipped.na_fila += 1; continue; }
-    const digits = String(lead.phone).replace(/\D/g, "");
-    const core = digits.length >= 12 && digits.startsWith("55") ? digits.slice(2) : digits;
+    const core = phoneKey(lead.phone);
     if (waCheck[core]?.exists === false) { skipped.sem_whatsapp += 1; continue; }
     const triage = triageStore.getAll()[triageKey(lead)] || computeTriage(lead, null);
     const offer = entryOffer(triage);
@@ -4095,17 +4138,13 @@ function scheduleKanbanQueueSync() {
 
 /** Kit de venda do lead: oferta atual, roteiro de objeções e argumento de imagem. */
 function leadSalesKit(phone) {
-  const digits = String(phone || "").replace(/@.*$/, "").replace(/D/g, "");
-  const core = digits.length >= 12 && digits.startsWith("55") ? digits.slice(2) : digits;
+  const core = phoneKey(phone);
   if (core.length < 10) return null;
   let lead = null;
   try {
     const raw = getLeadsFileStore().load();
     const all = raw ? JSON.parse(raw) : [];
-    lead = all.find((l) => {
-      const d = String(l?.phone || l?.tel || "").replace(/D/g, "");
-      return (d.length >= 12 && d.startsWith("55") ? d.slice(2) : d) === core;
-    }) || null;
+    lead = all.find((l) => phoneKey(l?.phone || l?.tel) === core) || null;
   } catch { /* base indisponível */ }
   const history = sendQueue?.historyFor(core) || [];
   const lastOffer = [...history].reverse().find((i) => i.offer)?.offer;

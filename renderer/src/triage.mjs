@@ -1,5 +1,7 @@
 // Triagem por lead (Agente de Triagem). A chave segue a mesma regra de
 // lead-scoring/lead-triage.js: telefone sem DDI, ou o nome normalizado.
+import { phoneCore } from './contactStatus.mjs';
+
 export const SEGMENTS = {
   sem_site: { label: 'Sem site', color: '#dc2626' },
   so_rede_social: { label: 'Só rede social', color: '#db2777' },
@@ -20,8 +22,7 @@ function words(text) {
 }
 
 export function triageKey(lead = {}) {
-  const digits = String(lead.phone || lead.tel || '').replace(/\D/g, '');
-  const phone = digits.length >= 12 && digits.startsWith('55') ? digits.slice(2) : digits;
+  const phone = phoneCore(lead.phone || lead.tel);
   if (phone.length >= 10) return `p:${phone}`;
   const name = words(lead.name || lead.company || lead.title).join('-');
   return name ? `n:${name}` : '';
