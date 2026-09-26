@@ -84,7 +84,7 @@ const { normalizeText } = require("./utils/text-normalizer");
 const { normalizeLeadLinks, normalizePhoneDisplay, hostOf, isSocialUrl, isAggregatorUrl } = require("./utils/lead-links");
 const { geocodeAddress, isValidCoord } = require("./utils/geocode");
 const { migrateExistingData } = require("./utils/existing-data-migrator");
-const { createLeadsFileStore } = require("./utils/leads-file-store");
+const { createLeadsFileStore, compactLead, compactLeadsJson } = require("./utils/leads-file-store");
 const { createSecretBox } = require("./utils/secret-box");
 const { ContactStatusStore } = require("./utils/contact-status-store");
 const { isOptOutMessage, messageText } = require("./campaigns/contact-guard");
@@ -1864,7 +1864,20 @@ function getLeadsFileStore() {
 // Síncrono de propósito: o renderer lê `sigma_leads` via localStorage.getItem.
 ipcMain.on("leads-store-load", (event) => {
   try {
-    event.returnValue = { success: true, value: getLeadsFileStore().load() };
+    const store = getLeadsFileStore();
+    let value = store.load();
+    // Uma vez: tira os links de fotos que deixavam a base 10x maior (e o app lento).
+    try {
+      const compact = compactLeadsJson(value);
+      if (compact) {
+        console.log("[LEADS-STORE] base compactada:", Math.round(value.length / 1024), "KB ->", Math.round(compact.length / 1024), "KB");
+        value = compact;
+        store.save(value);
+      }
+    } catch (error) {
+      console.warn("[LEADS-STORE] compactar:", error.message);
+    }
+    event.returnValue = { success: true, value };
   } catch (error) {
     event.returnValue = { success: false, error: error.message };
   }
@@ -2109,9 +2122,9 @@ ipcMain.handle("start-scrape", async (_, { query, maxResults, queryId, progressC
 
     return {
       success: true,
-      preview: data.slice(0, 3),
+      preview: data.slice(0, 3).map(compactLead),
       count: data.length,
-      data,
+      data: data.map(compactLead),
       statistics: result.statistics,
       partial: Boolean(result.partial),
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
@@ -2765,6 +2778,9 @@ ipcMain.handle("whatsapp-force-resync", async (_, { connectionId } = {}) => {
     await store.clearBaileysAuth();
     try {
       fs.unlinkSync(path.join(sessionPath, "sigma-chats.json"));
+    } catch (e) {}
+    try {
+      fs.unlinkSync(path.join(sessionPath, "sigma-profile-pics.json"));
     } catch (e) {}
     if (id) whatsappProviders.delete(id);
     activeWhatsAppId = whatsappProviders.keys().next().value || null;

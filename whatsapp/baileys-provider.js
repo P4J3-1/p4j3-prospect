@@ -28,6 +28,9 @@ class BaileysProvider extends WhatsAppProvider {
     this._chatUpdateTimer = null;
     this._profilePicCache = {}; // Cache de fotos de perfil (jid -> url|null)
     this._dataPath = path.join(userDataPath, "sigma-chats.json");
+    // Fotos de perfil (imagens) ficam em arquivo próprio, gravado só quando chega foto nova.
+    this._picsPath = path.join(userDataPath, "sigma-profile-pics.json");
+    this._picsTimer = null;
     this._mediaCacheRoot = path.join(userDataPath, "whatsapp-media-cache");
     this._stickerCacheRoot = path.join(userDataPath, "whatsapp-stickers");
     this._syncStats = null;
@@ -58,7 +61,8 @@ class BaileysProvider extends WhatsAppProvider {
         this._messages = d.messages || {};
         this._contacts = d.contacts || {};
         this._jidAliases = d.jidAliases || {};
-        this._profilePicCache = d.profilePicCache || {};
+        this._profilePicCache = this._loadPics() || d.profilePicCache || {};
+        if (d.profilePicCache && !fs.existsSync(this._picsPath)) this._savePicsSoon();
         this._normalizeStoredContacts();
         this._rebuildAliasesFromContacts();
 
@@ -893,7 +897,6 @@ class BaileysProvider extends WhatsAppProvider {
         messages: this._messages,
         contacts: this._contacts,
         jidAliases: this._jidAliases,
-        profilePicCache: this._profilePicCache,
       });
       fs.writeFile(this._dataPath, data, (err) => {
         if (err) console.log("[BAILEYS] Save error:", err.message);
@@ -901,6 +904,27 @@ class BaileysProvider extends WhatsAppProvider {
     } catch (e) {
       console.log("[BAILEYS] Serialize error:", e.message);
     }
+  }
+
+  _loadPics() {
+    try {
+      return JSON.parse(fs.readFileSync(this._picsPath, "utf-8"));
+    } catch {
+      return null;
+    }
+  }
+
+  _savePicsSoon() {
+    if (this._picsTimer) return;
+    this._picsTimer = setTimeout(() => this._savePics(), 5000);
+  }
+
+  _savePics() {
+    if (this._picsTimer) clearTimeout(this._picsTimer);
+    this._picsTimer = null;
+    fs.writeFile(this._picsPath, JSON.stringify(this._profilePicCache), (err) => {
+      if (err) console.log("[BAILEYS] Save pics error:", err.message);
+    });
   }
 
   // Force immediate save (for disconnect/shutdown)
@@ -917,9 +941,9 @@ class BaileysProvider extends WhatsAppProvider {
           messages: this._messages,
           contacts: this._contacts,
           jidAliases: this._jidAliases,
-          profilePicCache: this._profilePicCache,
         }),
       );
+      if (this._picsTimer) this._savePics();
     } catch (e) {}
   }
 
@@ -2129,6 +2153,7 @@ class BaileysProvider extends WhatsAppProvider {
     this._jidAliases = {};
     this._msgIndex = {};
     this._profilePicCache = {};
+    this._savePics();
     this._saveDataNow();
     this._emitChatUpdate();
     return { success: true };
@@ -2290,7 +2315,7 @@ class BaileysProvider extends WhatsAppProvider {
     if (contact?.imgUrl && contact.imgUrl !== "changed") {
       const dataUrl = await this._downloadImageAsDataUrl(contact.imgUrl);
       this._profilePicCache[cacheKey] = dataUrl;
-      this._saveData();
+      this._savePicsSoon();
       return dataUrl;
     }
 
@@ -2302,7 +2327,7 @@ class BaileysProvider extends WhatsAppProvider {
           if (url) {
             const dataUrl = await this._downloadImageAsDataUrl(url);
             this._profilePicCache[cacheKey] = dataUrl;
-            this._saveData();
+            this._savePicsSoon();
             return dataUrl;
           }
         } catch (e) {

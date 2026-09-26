@@ -94,3 +94,14 @@ describe('renderer lead storage', () => {
     assert.equal(env.StorageProto.getItem, originalGet);
   });
 });
+
+describe('base de leads compacta', () => {
+  const { compactLead, compactLeadsJson } = require('../utils/leads-file-store');
+  it('tira a lista de fotos e mantém contagem e foto principal', () => {
+    const lead = { name: 'A', photos: { main: 'm', thumbnail: 't', all: ['m', 'x', 'y'], count: 0 } };
+    assert.deepEqual(compactLead(lead), { name: 'A', photos: { count: 3, main: 'm' } });
+    const out = JSON.parse(compactLeadsJson(JSON.stringify([lead, { name: 'B' }])));
+    assert.deepEqual(out, [{ name: 'A', photos: { count: 3, main: 'm' } }, { name: 'B' }]);
+    assert.equal(compactLeadsJson(JSON.stringify(out)), null);
+  });
+});

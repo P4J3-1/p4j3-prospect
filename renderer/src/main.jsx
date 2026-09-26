@@ -460,6 +460,11 @@ class ErrorBoundary extends React.Component {
 console.info(`[SIGMA] UI build ${BUILD_STAMP}`);
 console.info('[SIGMA] location', typeof location !== 'undefined' ? location.href : '');
 
+// Janela fora de foco: pausa as animações (economiza CPU enquanto o senhor usa outro programa).
+const setIdle = (idle) => document.documentElement.classList.toggle('app-idle', idle);
+window.addEventListener('blur', () => setIdle(true));
+window.addEventListener('focus', () => setIdle(false));
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <ErrorBoundary>
     <App />
