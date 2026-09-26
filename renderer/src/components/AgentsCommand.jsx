@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Play, Power, Plus, Trash2, Copy, MessageCircle, X, Crosshair, Filter, Search, PenLine, MessagesSquare, LineChart, Globe, PhoneCall } from 'lucide-react';
+import { Play, Power, Plus, Trash2, Copy, MessageCircle, X, Crosshair, Filter, Search, PenLine, MessagesSquare, LineChart, Globe, PhoneCall, Sparkle } from 'lucide-react';
 import { useAutopilot } from '../useAutopilot';
 import { timeAgo } from '../contactStatus.mjs';
 
@@ -8,6 +8,7 @@ export const AGENT_META = {
   cacador: { name: 'Caçador', role: 'Busca leads novos no Google Maps quando o estoque baixa', color: '#f59e0b', Icon: Crosshair },
   radar: { name: 'Radar Web', role: 'Procura na web negócios com site fraco e audita no celular', color: '#38bdf8', Icon: Globe },
   verificador: { name: 'Verificador', role: 'Confere no WhatsApp quem da base tem conta; sem WhatsApp fica fora da fila', color: '#4ade80', Icon: PhoneCall },
+  enriquecedor: { name: 'Enriquecedor', role: 'Abre o site de quem não tem WhatsApp e acha o número verdadeiro', color: '#fb7185', Icon: Sparkle },
   triagem: { name: 'Triagem', role: 'Separa quem tem problema real: sem site, site fraco, sem automação', color: '#22d3ee', Icon: Filter },
   pesquisador: { name: 'Pesquisador', role: 'Acha o dono, o CNPJ e a melhor abordagem dos leads quentes', color: '#a78bfa', Icon: Search },
   copywriter: { name: 'Copywriter', role: 'Escreve a primeira mensagem de cada lead e põe na fila', color: '#34d399', Icon: PenLine },
@@ -15,7 +16,7 @@ export const AGENT_META = {
   analista: { name: 'Analista', role: 'Estuda os resultados e ajusta o playbook de todos', color: '#60a5fa', Icon: LineChart },
   sistema: { name: 'Sistema', color: '#94a3b8' },
 };
-const FLOW = ['cacador', 'radar', 'verificador', 'triagem', 'pesquisador', 'copywriter', 'respostas', 'analista'];
+const FLOW = ['cacador', 'radar', 'verificador', 'enriquecedor', 'triagem', 'pesquisador', 'copywriter', 'respostas', 'analista'];
 const STATUS_TEXT = { working: 'Trabalhando', idle: 'De olho', done: 'Concluiu', error: 'Com erro', off: 'Pausado' };
 const ETAPA = { abertura: 'Abertura', conexao: 'Conexão', dor: 'Dor', valor: 'Valor', oferta: 'Oferta', objecao: 'Objeção', contraproposta: 'Contraproposta', fechamento: 'Fechamento', perdido: 'Perdido' };
 const MOMENTO = { interessado: 'Interessado', curioso: 'Curioso', duvida: 'Com dúvida', objecao: 'Objeção', sem_interesse: 'Sem interesse', pediu_para_sair: 'Pediu para sair' };

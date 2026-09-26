@@ -153,6 +153,7 @@ contextBridge.exposeInMainWorld("autopilotAPI", {
   onEvent: subscribe("autopilot-event"),
   onHunt: subscribe("autopilot-hunt"),
   onAddLeads: subscribe("autopilot-add-leads"),
+  onPatchLeads: subscribe("autopilot-patch-leads"),
 });
 
 contextBridge.exposeInMainWorld("agentsAPI", {

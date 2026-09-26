@@ -707,6 +707,26 @@ function AppInner() {
   const startExtractionRef = useRef(handleStartExtraction);
   startExtractionRef.current = handleStartExtraction;
 
+  // Agente Enriquecedor: WhatsApp achado no site e diagnóstico entram na ficha do lead.
+  useEffect(() => {
+    const off = window.autopilotAPI?.onPatchLeads?.(({ patches } = {}) => {
+      if (!Array.isArray(patches) || !patches.length) return;
+      const byId = Object.fromEntries(patches.map((p) => [String(p.id), p.patch || {}]));
+      const current = readLocalArray('sigma_leads');
+      let changed = 0;
+      const next = current.map((lead) => {
+        const patch = byId[String(lead?.id)];
+        if (!patch) return lead;
+        changed += 1;
+        return { ...lead, ...patch };
+      });
+      if (!changed) return;
+      localStorage.setItem('sigma_leads', JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent('sigma:leads-updated', { detail: { leads: next } }));
+    });
+    return () => { if (typeof off === 'function') off(); };
+  }, []);
+
   // Agente Radar Web: leads achados fora do Maps entram na base como uma busca.
   useEffect(() => {
     const off = window.autopilotAPI?.onAddLeads?.(({ id, leads, mission } = {}) => {

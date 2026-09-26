@@ -57,7 +57,7 @@ const { LeadScoringService } = require("./lead-scoring");
 const { saveProspectingCSV } = require("./lead-scoring/export-service");
 const { runAiTask } = require("./lead-scoring/ai-sales-analyzer");
 const { researchLead, webSearch } = require("./lead-scoring/lead-intel");
-const { runRadar } = require("./agents/web-hunter");
+const { runRadar, auditSite, diagnose } = require("./agents/web-hunter");
 const { chromium } = require("playwright");
 const { optimizeCampaignMessage } = require("./lead-scoring/message-optimizer");
 const { computeInsights } = require("./campaigns/learning");
@@ -77,7 +77,7 @@ const { backupRoot, hasBackupToday, listBackups, runBackup } = require("./utils/
 const { KanbanStore } = require("./kanban/kanban-store");
 const { normalizeAddress } = require("./utils/address-normalizer");
 const { normalizeText } = require("./utils/text-normalizer");
-const { normalizeLeadLinks, normalizePhoneDisplay, hostOf } = require("./utils/lead-links");
+const { normalizeLeadLinks, normalizePhoneDisplay, hostOf, isSocialUrl, isAggregatorUrl } = require("./utils/lead-links");
 const { geocodeAddress, isValidCoord } = require("./utils/geocode");
 const { migrateExistingData } = require("./utils/existing-data-migrator");
 const { createLeadsFileStore } = require("./utils/leads-file-store");
@@ -4430,6 +4430,53 @@ function setupAutopilot() {
         } finally {
           waCheckRunning = false;
         }
+      },
+    },
+    {
+      id: "enriquecedor",
+      agent: "enriquecedor",
+      label: "Achando o WhatsApp verdadeiro no site",
+      everyMs: 15 * MIN,
+      run: async (ctx) => {
+        if (pendingHunts.size) return { idle: true, status: "Esperando a caçada no Maps terminar." };
+        const waCheck = contactStatus?.getWaCheck() || {};
+        // Prioridade: quem não tem WhatsApp no número do Maps (fixo) ou está sem telefone.
+        const candidates = allLeads()
+          .filter((lead) => lead?.id && lead.website && !isSocialUrl(lead.website) && !isAggregatorUrl(lead.website))
+          .filter((lead) => !autopilot.intel[`site:${hostOf(lead.website)}`])
+          .filter((lead) => !contactStatus?.get(lead.phone || ""))
+          .map((lead) => {
+            const wa = waCheck[phoneKey(lead.phone || "")];
+            return { lead, rank: !lead.phone ? 0 : wa?.exists === false ? 1 : wa ? 3 : 2 };
+          })
+          .filter((c) => c.rank < 3)
+          .sort((a, b) => a.rank - b.rank)
+          .slice(0, 5);
+        if (!candidates.length) return { idle: true, status: "Nenhum lead sem WhatsApp com site para investigar." };
+        let browser = null;
+        const patches = [];
+        try {
+          try { browser = await chromium.launch({ headless: true, channel: "chrome" }); } catch { browser = await chromium.launch({ headless: true }); }
+          for (let i = 0; i < candidates.length; i += 1) {
+            const { lead } = candidates[i];
+            const host = hostOf(lead.website);
+            ctx.progress(i, candidates.length, `Abrindo o site de ${lead.name || host}`);
+            const audit = await auditSite(browser, lead.website);
+            const found = (audit.wa || []).map((w) => (String(w).match(/(?:wa\.me\/|phone=)(\d{10,13})/) || [])[1]).find(Boolean) || "";
+            const diagnosis = diagnose(audit);
+            autopilot.setIntel(`site:${host}`, { wa: found, issues: diagnosis.issues, score: diagnosis.score });
+            const patch = { webAudit: { at: Date.now(), score: diagnosis.score, issues: diagnosis.issues, loadMs: audit.loadMs, https: audit.https, mobile: audit.viewport, whatsapp: audit.whatsapp } };
+            if (found && phoneKey(found) !== phoneKey(lead.phone || "")) {
+              Object.assign(patch, { phone: `+55 ${phoneKey(found)}`, whatsapp: `+55 ${phoneKey(found)}`, phoneOriginal: lead.phone || "", phoneSource: "site" });
+            }
+            patches.push({ id: lead.id, patch });
+          }
+        } finally {
+          await browser?.close().catch(() => {});
+        }
+        if (patches.length) safeSend("autopilot-patch-leads", { patches });
+        const newWa = patches.filter((p) => p.patch.phoneSource === "site").length;
+        return { count: patches.length, text: `${patches.length} site(s) investigados · ${newWa} WhatsApp novo(s) achado(s) no próprio site${newWa ? " (o número do Maps fica guardado)" : ""}.` };
       },
     },
     {
