@@ -115,6 +115,18 @@ export default function QueuePanel({ onClose }) {
           </div>
         )}
 
+        {queue.numbers?.length > 0 && (
+          <div className="queue-numbers" aria-label="Números no rodízio">
+            <b>Rodízio de números</b>
+            {queue.numbers.map((n) => (
+              <span key={n.id} className={`queue-number ${n.connected ? 'on' : 'off'}`} title={n.connected ? 'Conectado' : 'Desconectado: fica fora do rodízio'}>
+                <i /> {n.phone ? `+${n.phone}` : n.id} · {n.sentToday}/{n.cap} hoje
+              </span>
+            ))}
+            <label>teto por número <input type="number" min={1} max={300} value={s.perNumberDaily || 40} onChange={(e) => saveSettings({ perNumberDaily: e.target.value })} />/dia</label>
+          </div>
+        )}
+
         <div className="queue-settings">
           <label>
             <input type="checkbox" checked={s.windowEnabled !== false} onChange={(e) => saveSettings({ windowEnabled: e.target.checked })} />

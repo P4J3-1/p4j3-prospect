@@ -4053,19 +4053,26 @@ async function queueTick() {
     }
     return;
   }
-  const provider = getActiveWhatsAppProvider();
-  if (!provider || provider.getStatus?.() !== "connected") {
-    if (queueWait !== "sem_whatsapp") safeSend("queue-status", { wait: (queueWait = "sem_whatsapp") });
-    return;
-  }
+  // Rodízio: todos os números conectados, cada um com o seu teto diário.
   const quota = campaignManager?.dailyQuota;
   const limitCfg = DailyQuota.resolveLimitConfig(campaignManager?.getCampaignSettings?.() || {});
-  if (quota && activeWhatsAppId && !quota.check(activeWhatsAppId, limitCfg).allowed) {
-    if (queueWait !== "limite_diario") safeSend("queue-status", { wait: (queueWait = "limite_diario") });
+  const connected = [...whatsappProviders.entries()]
+    .filter(([id, p]) => p?.getStatus?.() === "connected" && (!quota || quota.check(id, limitCfg).allowed))
+    .map(([id]) => id);
+  if (!connected.length) {
+    const anyOnline = [...whatsappProviders.values()].some((p) => p?.getStatus?.() === "connected");
+    const wait = anyOnline ? "limite_diario" : "sem_whatsapp";
+    if (queueWait !== wait) safeSend("queue-status", { wait: (queueWait = wait) });
     return;
   }
   const item = next.item;
   const contact = contactStatus?.get(item.phone);
+  const senderId = sendQueue.pickSender(connected, contact?.connectionId || "");
+  if (!senderId) {
+    if (queueWait !== "limite_diario") safeSend("queue-status", { wait: (queueWait = "limite_diario") });
+    return;
+  }
+  const provider = whatsappProviders.get(senderId);
   if (item.kind === "primeiro" && contact) {
     sendQueue.markResult(item.id, { skipReason: "Já contatado por outro caminho" });
     return;
@@ -4084,9 +4091,9 @@ async function queueTick() {
   try {
     const result = await provider.sendMessage(item.phone, { text: item.message });
     if (result?.success && result.messageId) {
-      contactStatus?.recordSent(item.phone, { messageId: result.messageId, source: "fila", name: item.name });
-      if (quota && activeWhatsAppId) quota.recordSend(activeWhatsAppId, 1);
-      sendQueue.markResult(item.id, { ok: true, messageId: result.messageId });
+      contactStatus?.recordSent(item.phone, { messageId: result.messageId, source: "fila", name: item.name, connectionId: senderId });
+      if (quota) quota.recordSend(senderId, 1);
+      sendQueue.markResult(item.id, { ok: true, messageId: result.messageId, connectionId: senderId });
     } else {
       const error = result?.error || "Envio sem confirmação do WhatsApp";
       if (/não tem WhatsApp|sem WhatsApp/i.test(error)) contactStatus?.recordWaCheck({ [item.phone]: false });
@@ -4188,7 +4195,20 @@ ipcMain.handle("queue-get", async () => ({
   ...sendQueue.snapshot(),
   wait: queueWait,
   ab: sendQueue.abStats((phone) => contactStatus?.get(phone)),
+  numbers: senderNumbers(),
 }));
+
+/** Números no rodízio da fila: quem está online e quanto já enviou hoje. */
+function senderNumbers() {
+  const cap = sendQueue?.settings?.perNumberDaily || 40;
+  return [...whatsappProviders.entries()].map(([id, p]) => ({
+    id,
+    phone: p?.getPhoneNumber?.() || "",
+    connected: p?.getStatus?.() === "connected",
+    sentToday: sendQueue?.sentTodayBy(id) || 0,
+    cap,
+  }));
+}
 
 ipcMain.handle("lead-memory-all", async () => {
   const out = {};

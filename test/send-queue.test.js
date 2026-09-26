@@ -42,6 +42,7 @@ describe('fila de envio', () => {
 
   it('recontato: follow-up após 3 dias, nova oferta após 7, nada para quem respondeu', () => {
     const q = new SendQueue(tmp());
+    q.updateSettings({ followUpDays: 3 });
     const t0 = Date.UTC(2026, 8, 1);
     const [a, b] = q.add([
       { phone: '11922220001', name: 'A', message: 'Oi?', offer: 'site' },
@@ -110,5 +111,27 @@ describe('composição das mensagens', () => {
     assert.equal(withAi.get('a').ai, false, 'abertura não passa pela IA');
     assert.equal(withAi.get('b').ai, true);
     assert.ok(!/www\.|https?:/.test(withAi.get('b').mensagem));
+  });
+});
+
+describe('rodízio de números', () => {
+  const { SendQueue } = require('../campaigns/send-queue');
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  it('divide entre os números, respeita o teto e mantém a conversa no mesmo número', () => {
+    const q = new SendQueue(fs.mkdtempSync(path.join(os.tmpdir(), 'p4j3-rot-')));
+    q.updateSettings({ perNumberDaily: 2 });
+    const now = Date.now();
+    q.items.push(
+      { id: '1', status: 'enviado', connectionId: 'A', sentAt: now },
+      { id: '2', status: 'enviado', connectionId: 'A', sentAt: now },
+      { id: '3', status: 'enviado', connectionId: 'B', sentAt: now },
+    );
+    assert.equal(q.pickSender(['A', 'B', 'C']), 'C', 'o com mais folga');
+    assert.equal(q.pickSender(['A', 'B']), 'B');
+    assert.equal(q.pickSender(['A']), null, 'A no teto');
+    assert.equal(q.pickSender(['A', 'B'], 'B'), 'B', 'conversa continua no B');
+    assert.equal(q.pickSender(['A', 'B'], 'A'), null, 'número da conversa no teto: espera, não troca');
   });
 });

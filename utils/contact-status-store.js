@@ -115,7 +115,7 @@ class ContactStatusStore {
   }
 
   /** Mensagem enviada (campanha ou conversa manual). */
-  recordSent(phone, { messageId, source = "manual", campaignId = "", name = "", at = Date.now() } = {}) {
+  recordSent(phone, { messageId, source = "manual", campaignId = "", name = "", connectionId = "", at = Date.now() } = {}) {
     const key = phoneCore(phone);
     if (!key || key.length < 10) return null;
     if (messageId && this.messageIndex[messageId]) return this.contacts[key] || null;
@@ -130,6 +130,8 @@ class ContactStatusStore {
       source,
       campaignId: campaignId || prev.campaignId || "",
       name: name || prev.name || "",
+      // Número que falou com o lead: follow-ups continuam por ele.
+      connectionId: connectionId || prev.connectionId || "",
     };
     this.contacts[key] = next;
     if (messageId) this.messageIndex[messageId] = key;

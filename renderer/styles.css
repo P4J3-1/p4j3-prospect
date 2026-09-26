@@ -9045,3 +9045,10 @@ html[data-theme="dark"] .clp-stage:not(.ai) { background: color-mix(in srgb, var
 .quality-chip.on { background: color-mix(in srgb, var(--chip) 16%, #fff) !important; border-color: var(--chip) !important; color: color-mix(in srgb, var(--chip) 75%, #0f172a) !important; }
 .quality-chip-count { font-size: 10.5px; font-weight: 800; min-width: 18px; padding: 0 5px; border-radius: 99px; text-align: center; color: #fff; background: var(--chip); font-variant-numeric: tabular-nums; }
 html[data-theme="dark"] .quality-chip.on { background: color-mix(in srgb, var(--chip) 22%, #0f172a) !important; color: #fff !important; }
+.queue-numbers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 20px 10px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2, #f8fafc); border: 1px solid var(--border, #e2e8f0); font-size: 12.5px; }
+.queue-number { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 99px; background: #ecfdf5; color: #065f46; font-weight: 600; }
+.queue-number i { width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981; }
+.queue-number.off { background: #f1f5f9; color: #64748b; }
+.queue-number.off i { background: #94a3b8; box-shadow: none; }
+.queue-numbers label { margin-left: auto; display: flex; gap: 6px; align-items: center; color: var(--muted); }
+.queue-numbers input { width: 64px; }

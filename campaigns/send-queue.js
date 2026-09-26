@@ -13,9 +13,10 @@ const DEFAULT_SETTINGS = {
   windowStart: "08:00",
   windowEnd: "20:00",
   intervalSec: 120, // mínimo entre envios; +0–40% de variação aleatória
-  followUpDays: 3,
+  followUpDays: 2,
   newOfferDays: 7,
   dailyGoal: 40, // meta de envios por dia (painel "Hoje")
+  perNumberDaily: 40, // teto de envios por número de WhatsApp por dia (rodízio)
 };
 
 const AB_MIN_SAMPLE = 20;
@@ -146,6 +147,27 @@ class SendQueue {
     return count;
   }
 
+  /** Envios de hoje por número (rodízio). */
+  sentTodayBy(connectionId, now = Date.now()) {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    return this.items.filter((i) => i.status === "enviado" && i.connectionId === connectionId && (i.sentAt || 0) >= start.getTime()).length;
+  }
+
+  /**
+   * Qual número envia: o mesmo que já falou com o lead (a conversa continua
+   * nele); senão o conectado com menos envios hoje, abaixo do teto diário.
+   * @param {string[]} connected ids conectados
+   * @param {string} [sticky] número que já conversou com o lead
+   */
+  pickSender(connected, sticky = "", now = Date.now()) {
+    const cap = this.settings.perNumberDaily || 40;
+    const room = (id) => cap - this.sentTodayBy(id, now);
+    if (sticky && connected.includes(sticky)) return room(sticky) > 0 ? sticky : null;
+    const ranked = connected.filter((id) => room(id) > 0).sort((a, b) => room(b) - room(a));
+    return ranked[0] || null;
+  }
+
   updateSettings(patch = {}) {
     const next = { ...this.settings };
     if (typeof patch.windowEnabled === "boolean") next.windowEnabled = patch.windowEnabled;
@@ -156,6 +178,7 @@ class SendQueue {
     if (patch.followUpDays !== undefined) next.followUpDays = Math.max(1, Math.min(30, Math.round(Number(patch.followUpDays) || 3)));
     if (patch.newOfferDays !== undefined) next.newOfferDays = Math.max(1, Math.min(60, Math.round(Number(patch.newOfferDays) || 7)));
     if (patch.dailyGoal !== undefined) next.dailyGoal = Math.max(1, Math.min(1000, Math.round(Number(patch.dailyGoal) || 40)));
+    if (patch.perNumberDaily !== undefined) next.perNumberDaily = Math.max(1, Math.min(300, Math.round(Number(patch.perNumberDaily) || 40)));
     this.settings = next;
     this.save();
     return next;
@@ -180,7 +203,7 @@ class SendQueue {
     this.save();
   }
 
-  markResult(id, { ok, messageId = "", error = "", skipReason = "" }, now = Date.now()) {
+  markResult(id, { ok, messageId = "", error = "", skipReason = "", connectionId = "" }, now = Date.now()) {
     const item = this.items.find((i) => i.id === id);
     if (!item) return null;
     if (skipReason) {
@@ -190,6 +213,7 @@ class SendQueue {
       item.status = "enviado";
       item.sentAt = now;
       item.messageId = messageId;
+      if (connectionId) item.connectionId = connectionId;
       this.lastSentAt = now;
       this.nextGapMs = Math.round(this.settings.intervalSec * 1000 * (1 + Math.random() * 0.4));
     } else {
