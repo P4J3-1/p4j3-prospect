@@ -9362,3 +9362,20 @@ html[data-theme="dark"] ::placeholder { color: var(--meta); }
 .v2-subnav button { border: 0; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; padding: 5px 14px; border-radius: 7px; cursor: pointer; }
 .v2-subnav button:hover { color: var(--fg); }
 .v2-subnav button.on { background: var(--accent-soft); color: var(--fg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* v2.0 — usabilidade (auditoria): */
+/* Blocos escuros crescem com o conteúdo (antes eram espremidos e escondiam o fim da tela). */
+.ap-shell { flex-shrink: 0; }
+/* Abas do Hunter quebram linha em vez de sair da tela. */
+.scraper-tabs { flex-wrap: wrap; overflow: visible; }
+.scraper-tab { flex: 1 1 auto; white-space: nowrap; }
+/* Contraste: texto escuro sobre o verde de destaque (branco dava 2,7:1). */
+html[data-theme="dark"] :is(.btn-primary, .btn-new-extraction, .brand-icon-box, .wa-send, .cta-new, .sidebar-plus) { color: #04241b; }
+html[data-theme="dark"] :is(.btn-primary, .btn-new-extraction) :is(span, svg) { color: inherit; }
+.quality-chip-count { color: #0b1220; }
+/* Funil: cards legíveis e botão para carregar mais. */
+.kanban-column-cards :is(small, span) { font-size: max(11px, 1em); }
+.kanban-more { width: 100%; margin-top: 6px; padding: 8px; border-radius: 10px; border: 1px dashed var(--border-hover); background: transparent; color: var(--fg-2); font-size: 12px; cursor: pointer; }
+.kanban-more:hover { color: var(--fg); border-color: var(--accent); }
+.kanban-card-title > span { color: var(--fg-2); }
+.ag-tabs em, .ig-count { color: #fff; }

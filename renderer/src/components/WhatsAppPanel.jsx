@@ -1200,9 +1200,10 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     const name = String(chat?.name || '').trim().toLocaleLowerCase('pt-BR');
     return (board?.cards || []).find((card) => {
       const profile = card?.entity?.profile || {};
-      const cardPhone = String(profile.phone || profile.whatsapp || '').replace(/\D/g, '');
+      // Mesmo número com ou sem 55 e com ou sem o 9 (o WhatsApp guarda números antigos sem ele).
+      const cardPhone = phoneCore(profile.phone || profile.whatsapp || '');
       const cardName = String(profile.name || '').trim().toLocaleLowerCase('pt-BR');
-      return (phone && cardPhone && (cardPhone === phone || cardPhone.endsWith(phone) || phone.endsWith(cardPhone)))
+      return (phone && cardPhone && phoneCore(phone) === cardPhone)
         || (name && cardName && name === cardName);
     }) || null;
   };
@@ -1214,11 +1215,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     try {
       const result = await window.kanbanAPI?.getBoard?.();
       const board = result?.board || result;
-      setChatContextMenu((current) => current?.chat === chat ? { ...current, loading: false } : current);
+      setChatContextMenu((current) => current?.chat?.jid === chat?.jid ? { ...current, loading: false } : current);
       setChatKanbanColumns(board?.board?.columns || []);
       setChatKanbanCard(findKanbanCardForChat(chat, board));
     } catch {
-      setChatContextMenu((current) => current?.chat === chat ? { ...current, loading: false } : current);
+      setChatContextMenu((current) => current?.chat?.jid === chat?.jid ? { ...current, loading: false } : current);
       setChatKanbanColumns([]);
       setChatKanbanCard(null);
     }

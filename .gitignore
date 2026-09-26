@@ -17,3 +17,6 @@ nul
 !assets/*.png
 !assets/*.ico
 renderer/mr*.png
+
+# Auditoria de UX (fotos têm dados de clientes: nunca versionar)
+audit/

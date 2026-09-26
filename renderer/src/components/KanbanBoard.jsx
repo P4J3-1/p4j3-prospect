@@ -945,6 +945,8 @@ export default function KanbanBoard({ onNavigate, addLog }) {
   const [filter, setFilter] = useState('all');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedCard, setSelectedCard] = useState(null);
+  // Desenha 40 cards por coluna (783 de uma vez travava a tela); o resto sob demanda.
+  const [shownByColumn, setShownByColumn] = useState({});
   const [pendingOutcome, setPendingOutcome] = useState('');
   const [draggingKey, setDraggingKey] = useState(null);
   const [showActivity, setShowActivity] = useState(false);
@@ -1324,7 +1326,7 @@ export default function KanbanBoard({ onNavigate, addLog }) {
                 </div>
               ) : null}
               <div className="kanban-column-cards">
-                {stageCards.length === 0 ? <div className="kanban-column-empty">Arraste um lead para esta etapa</div> : stageCards.map((card) => {
+                {stageCards.length === 0 ? <div className="kanban-column-empty">Arraste um lead para esta etapa</div> : stageCards.slice(0, shownByColumn[column.id] || 40).map((card) => {
                   const profile = card.entity.profile || {};
                   const band = scoreBand(profile.score, thresholds);
                   return (
@@ -1351,6 +1353,11 @@ export default function KanbanBoard({ onNavigate, addLog }) {
                     </article>
                   );
                 })}
+                {stageCards.length > (shownByColumn[column.id] || 40) && (
+                  <button type="button" className="kanban-more" onClick={() => setShownByColumn((cur) => ({ ...cur, [column.id]: (cur[column.id] || 40) + 80 }))}>
+                    Mostrar mais ({stageCards.length - (shownByColumn[column.id] || 40)})
+                  </button>
+                )}
               </div>
             </section>
           );

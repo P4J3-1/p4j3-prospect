@@ -17,7 +17,8 @@
     "qa:ui": "npm run build:renderer && electron scripts/capture-open-design-ui.js",
     "qa:compare": "node scripts/compare-open-design-ui.js",
     "qa:packaged": "node scripts/smoke-packaged.js",
-    "dev:renderer": "vite"
+    "dev:renderer": "vite",
+    "audit:ux": "node scripts/audit-ux.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc13",
