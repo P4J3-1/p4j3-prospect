@@ -4264,7 +4264,17 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     }
   };
 
-  useEffect(() => { setAiReply(null); }, [activeChatJid]);
+  // Ao abrir a conversa: se o Agente de Respostas já preparou algo, mostra aqui.
+  useEffect(() => {
+    setAiReply(null);
+    if (!activeLeadPhone || activeLeadPhone.length < 10 || !window.autopilotAPI?.getState) return undefined;
+    let alive = true;
+    window.autopilotAPI.getState().then((res) => {
+      const draft = res?.replyDrafts?.[activeLeadPhone];
+      if (alive && draft?.sugestoes?.length) setAiReply({ loading: false, data: draft, fromAgent: true });
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [activeChatJid, activeLeadPhone]);
 
   const requestAiReply = async () => {
     if (!window.aiAPI?.suggestReply) return;
@@ -6085,6 +6095,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         ) : (
                           <span>
                             <b>{MOMENT_LABELS[aiReply.data.momento] || 'Lead'}</b>
+                            {aiReply.fromAgent ? ' · preparada pelo Agente de Respostas' : ''}
                             {aiReply.data.leitura ? ` · ${aiReply.data.leitura}` : ''}
                           </span>
                         )}
@@ -6094,7 +6105,11 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                         <>
                           <div className="wa-ai-suggestion-list">
                             {aiReply.data.sugestoes.map((text) => (
-                              <button key={text} type="button" className="wa-ai-suggestion" title="Usar esta resposta (você revisa antes de enviar)" onClick={() => { setInputText(text); setAiReply(null); }}>
+                              <button key={text} type="button" className="wa-ai-suggestion" title="Usar esta resposta (você revisa antes de enviar)" onClick={() => {
+                                setInputText(text);
+                                if (aiReply.fromAgent) window.autopilotAPI?.dismissReply?.(activeLeadPhone);
+                                setAiReply(null);
+                              }}>
                                 {text}
                               </button>
                             ))}
