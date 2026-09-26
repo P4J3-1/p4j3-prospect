@@ -143,6 +143,17 @@ const subscribe = (channel) => (callback) => {
   return () => ipcRenderer.removeListener(channel, listener);
 };
 
+contextBridge.exposeInMainWorld("autopilotAPI", {
+  getState: () => ipcRenderer.invoke("autopilot-state"),
+  settings: (patch) => ipcRenderer.invoke("autopilot-settings", { patch }),
+  runNow: (stageId) => ipcRenderer.invoke("autopilot-run", { stageId }),
+  dismissReply: (phone) => ipcRenderer.invoke("autopilot-dismiss-reply", { phone }),
+  intel: (phone) => ipcRenderer.invoke("autopilot-intel", { phone }),
+  huntDone: (payload) => ipcRenderer.send("autopilot-hunt-done", payload || {}),
+  onEvent: subscribe("autopilot-event"),
+  onHunt: subscribe("autopilot-hunt"),
+});
+
 contextBridge.exposeInMainWorld("agentsAPI", {
   getState: () => ipcRenderer.invoke("agents-state"),
   update: (id, patch) => ipcRenderer.invoke("agents-update", { id, patch }),

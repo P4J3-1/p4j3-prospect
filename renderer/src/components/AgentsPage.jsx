@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bot, Play, RefreshCw, Copy, AlertTriangle } from 'lucide-react';
+import { Bot, Play, RefreshCw, Copy } from 'lucide-react';
 import { readLocalArray } from '../leadData';
 import { useTriage } from '../useTriage';
 import { SEGMENTS, triageFor } from '../triage.mjs';
 import { timeAgo } from '../contactStatus.mjs';
+import AgentsCommand from './AgentsCommand';
 
 const AUTO_AGENTS = new Set(['triagem', 'analista']);
 
@@ -83,22 +84,16 @@ export default function AgentsPage({ onNavigate }) {
 
   return (
     <section className="settings-open-design-view agents-page">
-      <div className="page-head">
+      <AgentsCommand onNavigate={onNavigate} aiConfigured={state.aiConfigured} />
+
+      <div className="page-head" style={{ marginTop: 8 }}>
         <div>
-          <h1 style={{ fontSize: 20 }}>Agentes de IA</h1>
+          <h2 style={{ fontSize: 17, margin: 0 }}>Ajustes dos agentes</h2>
           <p className="camp-hint" style={{ marginTop: 4, maxWidth: 720 }}>
-            Cada agente cuida de uma etapa da prospecção. O Analista estuda os resultados e escreve um playbook que todos os outros seguem: o sistema melhora a cada campanha.
+            Liga/desliga e limite diário de IA de cada agente. O Analista escreve o playbook que todos os outros seguem.
           </p>
         </div>
       </div>
-
-      {!state.aiConfigured && (
-        <div className="camp-alert od-alert" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <AlertTriangle size={15} />
-          <span>A IA não está configurada: os agentes trabalham só com regras.</span>
-          <button type="button" className="btn btn-sm btn-primary" onClick={() => onNavigate?.('ai')}>Configurar IA</button>
-        </div>
-      )}
 
       <div className="table-wrap settings-open-design-card">
         <h2 style={{ fontSize: 15, margin: 0 }}>Sua base agora</h2>

@@ -454,10 +454,10 @@ function AppInner() {
 
   const runExtractionJob = async (job, { navigate = true } = {}) => {
     const searchId = job.id;
-    if (extractionRunningRef.current) return;
+    if (extractionRunningRef.current) return { added: 0, error: 'Já existe uma extração em andamento.' };
     if (!window.electronAPI || typeof window.electronAPI.startScrape !== 'function') {
       addNotification({ type: 'error', category: 'scraper', title: 'Extração indisponível', message: 'A ponte do desktop não está disponível. Reinicie o aplicativo.' });
-      return;
+      return { added: 0, error: 'Ponte do desktop indisponível.' };
     }
     extractionRunningRef.current = true;
     if (navigate) setActiveTab('scraper');
@@ -596,7 +596,7 @@ function AppInner() {
           title: 'Extração pausada',
           message: `O que já foi coletado continua salvo na base (${addedThisRun} novos leads nesta sessão).`,
         });
-        return;
+        return { added: addedThisRun, cancelled: true };
       }
       const hadPriorProgress = (job.completedKeys || []).length > 0;
       if (addedThisRun === 0 && !hadPriorProgress) {
@@ -613,6 +613,7 @@ function AppInner() {
           + (goal && newSoFar() < goal ? ` A região esgotou antes da meta de ${goal}: tente outro nicho ou cidade.` : ''),
         duration: 5000,
       });
+      return { added: addedThisRun };
     } catch (err) {
       addNotification({
         type: 'error',
@@ -620,21 +621,22 @@ function AppInner() {
         title: 'Erro na extração',
         message: err?.message || 'Não foi possível concluir a busca. Tente novamente.',
       });
+      return { added: addedThisRun, error: err?.message || 'Falha na busca.' };
     } finally {
       extractionRunningRef.current = false;
       setActiveExtraction(null);
     }
   };
 
-  const handleStartExtraction = async ({ niche, niches, neigh, neighborhoods, city, limit, goal, coverage }) => {
+  const handleStartExtraction = async ({ niche, niches, neigh, neighborhoods, city, limit, goal, coverage, navigate = true, source = '' }) => {
     if (activeExtraction || extractionRunningRef.current) {
-      addNotification({
+      if (navigate) addNotification({
         type: 'info',
         category: 'scraper',
         title: 'Extração em andamento',
         message: 'Aguarde a busca atual terminar ou cancele-a antes de iniciar outra.',
       });
-      return;
+      return { added: 0, error: 'Já existe uma extração em andamento.' };
     }
     const nicheList = (Array.isArray(niches) && niches.length ? niches : splitBatchInput(niche, { max: 20 })).slice(0, 20);
     const neighList = (Array.isArray(neighborhoods) && neighborhoods.length
@@ -642,13 +644,13 @@ function AppInner() {
       : splitBatchInput(neigh, { max: 50 })).slice(0, 600);
     if (!nicheList.length) {
       addNotification({ type: 'error', category: 'scraper', title: 'Falta o nicho', message: 'Informe ao menos um nicho para iniciar a extração.' });
-      return;
+      return { added: 0, error: 'Falta o nicho.' };
     }
     const rawCount = nicheList.length * Math.max(1, neighList.length);
     const targets = buildExtractionTargets(nicheList, neighList);
     if (!targets.length) {
       addNotification({ type: 'error', category: 'scraper', title: 'Nada para buscar', message: 'Confira nichos e bairros e tente novamente.' });
-      return;
+      return { added: 0, error: 'Nada para buscar.' };
     }
     if (rawCount > targets.length) {
       addNotification({
@@ -695,11 +697,36 @@ function AppInner() {
     addNotification({
       type: 'info',
       category: 'scraper',
-      title: 'Iniciando extração gigante',
+      title: source === 'cacador' ? 'Agente Caçador saiu para caçar' : 'Iniciando extração gigante',
       message: targets.length > 1 ? `${job.label} — ${targets.length} buscas em sequência.` : `Buscando ${job.label}...`,
     });
-    await runExtractionJob(job, { navigate: true });
+    return runExtractionJob(job, { navigate });
   };
+  const startExtractionRef = useRef(handleStartExtraction);
+  startExtractionRef.current = handleStartExtraction;
+
+  // Agente Caçador (piloto automático): extrai sem tirar você da tela atual.
+  useEffect(() => {
+    const off = window.autopilotAPI?.onHunt?.(async (req) => {
+      let result = { added: 0, error: 'Falha ao iniciar' };
+      try {
+        result = await startExtractionRef.current({
+          niches: [req.niche],
+          neighborhoods: Array.isArray(req.neighborhoods) ? req.neighborhoods : [],
+          city: req.city,
+          goal: req.goal,
+          limit: 1000,
+          coverage: { variations: true, grid: true },
+          navigate: false,
+          source: 'cacador',
+        }) || result;
+      } catch (error) {
+        result = { added: 0, error: error?.message || 'Falhou' };
+      }
+      window.autopilotAPI.huntDone({ id: req.id, added: result.added || 0, error: result.error || '' });
+    });
+    return () => { if (typeof off === 'function') off(); };
+  }, []);
 
   // Retomada automática: se o app fechou no meio de uma extração gigante,
   // volta de onde parou ao abrir.

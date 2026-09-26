@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const { resolveContactIdentity } = require('./contact-identity-resolver');
 const { isAutoReply } = require("../utils/outreach-classifier");
+const { phoneCore } = require("../utils/phone-key");
 
 class BaileysProvider extends WhatsAppProvider {
   constructor(config, onStatus, onChatEvent, userDataPath) {
@@ -1549,6 +1550,26 @@ class BaileysProvider extends WhatsAppProvider {
       }
     } catch { /* mapeamento indisponível: segue sem telefone */ }
     return null;
+  }
+
+  /** Conversa (texto) com um telefone, em qualquer formato — inclusive via @lid. */
+  conversationFor(phone, limit = 20) {
+    const key = phoneCore(phone);
+    if (!key) return [];
+    const jids = new Set([...Object.keys(this._chats || {}), ...Object.keys(this._messages || {})]);
+    let jid = null;
+    for (const candidate of jids) {
+      if (candidate.endsWith("@g.us")) continue;
+      if (phoneCore(this._getPhoneJid(candidate) || candidate) === key) {
+        jid = candidate;
+        break;
+      }
+    }
+    if (!jid) return [];
+    return this.getMessages(jid)
+      .map((m) => ({ fromMe: !!m?.key?.fromMe, text: this._getMessageText(m), at: this._timestampToNumber(m?.messageTimestamp) * 1000 }))
+      .filter((m) => m.text)
+      .slice(-limit);
   }
 
   /**

@@ -67,6 +67,7 @@ const { composeMessages } = require("./campaigns/outreach-composer");
 const { entryOffer, imageDiagnosis, nextOffer, objectionsFor, OFFERS } = require("./campaigns/offer-ladder");
 const { DailyQuota } = require("./campaigns/daily-quota");
 const { AgentStore } = require("./agents/agent-store");
+const { Autopilot } = require("./agents/autopilot");
 const { runAnalyst, suggestReplies, writeProposal } = require("./agents/ai-agents");
 const { LeadMemory, temperatureOf } = require("./campaigns/lead-memory");
 const { backupRoot, hasBackupToday, listBackups, runBackup } = require("./utils/backup");
@@ -99,6 +100,7 @@ let leadScoringService = null;
 let kanbanStore = null;
 let contactStatus = null;
 let agentStore = null;
+let autopilot = null;
 let triageStore = null;
 let sendQueue = null;
 let leadMemory = null;
@@ -1521,6 +1523,7 @@ app.whenReady().then(() => {
   setInterval(() => {
     refreshWhatsApp({ auto: true }).catch((error) => console.warn("[WA-REFRESH]", error.message));
   }, 15 * 60 * 1000);
+  setupAutopilot();
   campaignManager = new CampaignManager(app.getPath("userData"));
   campaignManager.setProvidersMap(whatsappProviders);
   campaignManager.setCampaignSettingsProvider(() => {
@@ -4265,6 +4268,244 @@ ipcMain.handle("queue-settings", async (_, { patch } = {}) => {
   return { success: true, settings: sendQueue.updateSettings(patch || {}) };
 });
 
+// ─── PILOTO AUTOMÁTICO (agentes trabalhando sozinhos, ao vivo) ───
+function allLeads() {
+  try {
+    const raw = getLeadsFileStore().load();
+    const leads = raw ? JSON.parse(raw) : [];
+    return Array.isArray(leads) ? leads : [];
+  } catch {
+    return [];
+  }
+}
+
+function leadByPhone(phone) {
+  const key = phoneKey(phone);
+  return allLeads().find((lead) => phoneKey(lead?.phone || lead?.tel) === key) || null;
+}
+
+/** Lead ainda não abordado, com telefone, fora da fila e sem "não tem WhatsApp". */
+function isAvailableLead(lead, waCheck) {
+  const phone = lead?.phone || lead?.tel;
+  if (!phone || phoneKey(phone).length < 10) return false;
+  if (contactStatus?.get(phone)) return false;
+  if (sendQueue?.activeFor(phone)) return false;
+  if (sendQueue?.historyFor(phone)?.length) return false;
+  return waCheck?.[phoneKey(phone)]?.exists !== false;
+}
+
+/** Junta ao lead o que o Pesquisador achou (saudação e decisor melhoram a mensagem). */
+function withIntel(lead) {
+  const intel = autopilot?.intel?.[phoneKey(lead?.phone || lead?.tel)];
+  if (!intel) return lead;
+  return { ...lead, saudacao: lead.saudacao || intel.saudacao || "", decisor: lead.decisor || intel.decisor?.nome || "" };
+}
+
+const pendingHunts = new Map();
+
+function setupAutopilot() {
+  const MIN = 60 * 1000;
+  const stages = [
+    {
+      id: "respostas",
+      agent: "respostas",
+      label: "Lendo conversas que esperam você",
+      everyMs: 2 * MIN,
+      run: async (ctx) => {
+        const provider = getActiveWhatsAppProvider();
+        if (!provider?.conversationFor) return { idle: true, status: "WhatsApp desconectado." };
+        const drafts = autopilot.replyDrafts;
+        const waiting = Object.entries(contactStatus?.getAll() || {})
+          .filter(([, c]) => c?.status === "respondeu" && (c.lastReplyAt || 0) > (c.sentAt || 0))
+          .filter(([key, c]) => (drafts[key]?.lastReplyAt || 0) < c.lastReplyAt)
+          .slice(0, 5);
+        if (!waiting.length) return { idle: true, status: "Nenhuma conversa esperando você." };
+        if (!agentAi("respostas")) return { idle: true, status: "IA indisponível ou limite do dia do Agente de Respostas." };
+        let done = 0;
+        for (const [key, c] of waiting) {
+          ctx.progress(done, waiting.length, `Lendo a conversa com ${c.name || key}`);
+          const messages = provider.conversationFor(key, 16);
+          if (!messages.length) continue;
+          const lead = leadByPhone(key) || { name: c.name || "", phone: key };
+          const r = await suggestReplyFor(messages, lead);
+          autopilot.setReplyDraft(key, {
+            name: c.name || lead.name || "",
+            lastReplyAt: c.lastReplyAt,
+            ultimaMensagem: String([...messages].reverse().find((m) => !m.fromMe)?.text || "").slice(0, 300),
+            momento: r.momento,
+            leitura: r.leitura,
+            objecao: r.objecao,
+            sugestoes: r.sugestoes,
+            proximoPasso: r.proximoPasso,
+            temperatura: r.temperatura,
+          });
+          done += 1;
+          notifyUser({ title: `Resposta pronta: ${c.name || key}`, body: "O agente leu a conversa e preparou 3 respostas. Revise e envie você." });
+        }
+        return { count: done, text: done ? `${done} resposta(s) preparada(s) para você revisar e enviar.` : "", idle: !done };
+      },
+    },
+    {
+      id: "triagem",
+      agent: "triagem",
+      label: "Triando leads novos",
+      everyMs: 5 * MIN,
+      run: async (ctx) => {
+        const pending = allLeads()
+          .filter((lead) => lead?.phone || lead?.tel)
+          .filter((lead) => !triageStore.has(triageKey(cleanLeadInput(lead))))
+          .slice(0, 60);
+        if (!pending.length) return { idle: true, status: "Todos os leads com telefone já estão triados." };
+        ctx.progress(0, pending.length, `Triando ${pending.length} lead(s)`);
+        const res = await runTriageAgent(pending, { auto: true });
+        if (!res.success) throw new Error(res.error || "Triagem falhou");
+        return { count: res.triaged, text: `${res.triaged} lead(s) triados · ${res.hot} de alto potencial.` };
+      },
+    },
+    {
+      id: "pesquisador",
+      agent: "pesquisador",
+      label: "Pesquisando dono e empresa dos melhores leads",
+      everyMs: 10 * MIN,
+      run: async (ctx) => {
+        const waCheck = contactStatus?.getWaCheck() || {};
+        const triage = triageStore.getAll();
+        const candidates = allLeads()
+          .filter((lead) => isAvailableLead(lead, waCheck))
+          .map((lead) => ({ lead, t: triage[triageKey(cleanLeadInput(lead))] }))
+          .filter(({ lead, t }) => t && (t.level === "alto" || (t.score || 0) >= 60) && !autopilot.intel[phoneKey(lead.phone || lead.tel)])
+          .sort((a, b) => (b.t.score || 0) - (a.t.score || 0))
+          .slice(0, Math.max(1, autopilot.settings.researchPerRun || 3));
+        if (!candidates.length) return { idle: true, status: "Nenhum lead quente sem pesquisa." };
+        let done = 0;
+        for (const { lead } of candidates) {
+          const clean = cleanLeadInput(lead);
+          ctx.progress(done, candidates.length, `Pesquisando ${clean.name}`);
+          const runAi = agentAi("pesquisador");
+          const intel = await researchLead(clean, currentAiSettings(), { runAi, insights: currentInsights() });
+          autopilot.setIntel(phoneKey(clean.phone), {
+            decisor: intel.decisor || null,
+            saudacao: intel.saudacao || "",
+            abordagem: intel.abordagem || "",
+            chance: intel.chance ?? null,
+            proximosPassos: intel.proximosPassos || [],
+            company: intel.company || null,
+          });
+          agentStore.log("pesquisador", `Pesquisou ${clean.name}${intel.decisor?.nome ? ` · decisor: ${intel.decisor.nome}` : ""}.`, !intel.aiError);
+          done += 1;
+        }
+        return { count: done, text: `${done} lead(s) pesquisados (dono, CNPJ e melhor abordagem).` };
+      },
+    },
+    {
+      id: "copywriter",
+      agent: "copywriter",
+      label: "Escrevendo mensagens para a fila",
+      everyMs: 10 * MIN,
+      run: async (ctx) => {
+        const drafts = sendQueue.items.filter((i) => i.status === "rascunho").length;
+        const target = autopilot.settings.draftTarget || 20;
+        if (drafts >= target) return { idle: true, status: `${drafts} mensagens esperando sua aprovação (meta ${target}).` };
+        const waCheck = contactStatus?.getWaCheck() || {};
+        const triage = triageStore.getAll();
+        const candidates = allLeads()
+          .filter((lead) => isAvailableLead(lead, waCheck))
+          .map((lead) => ({ lead, t: triage[triageKey(cleanLeadInput(lead))] }))
+          .filter(({ t }) => t)
+          .sort((a, b) => (b.t.score || 0) - (a.t.score || 0))
+          .map(({ lead }) => withIntel(lead));
+        if (!candidates.length) return { idle: true, status: "Sem leads triados disponíveis: o Caçador vai buscar mais." };
+        const want = Math.min(target - drafts, 10);
+        ctx.progress(0, want, `Escrevendo ${want} mensagem(ns)`);
+        const res = await prepareQueueDrafts(candidates, { limit: want });
+        return { count: res.added || 0, text: res.added ? `${res.added} mensagem(ns) na fila esperando sua aprovação.` : "", idle: !res.added };
+      },
+    },
+    {
+      id: "cacador",
+      agent: "cacador",
+      label: "Caçando leads novos no Google Maps",
+      everyMs: 15 * MIN,
+      run: async () => {
+        if (pendingHunts.size) return { idle: true, status: "Caçada em andamento…" };
+        const waCheck = contactStatus?.getWaCheck() || {};
+        const available = allLeads().filter((lead) => isAvailableLead(lead, waCheck)).length;
+        const reserve = autopilot.settings.reserveLeads || 40;
+        if (available >= reserve) return { idle: true, status: `Estoque bom: ${available} leads disponíveis (mínimo ${reserve}).` };
+        const mission = autopilot.nextMission();
+        if (!mission) return { idle: true, status: "Cadastre uma missão (nicho + cidade) para o Caçador." };
+        if (!mainWindow || mainWindow.isDestroyed()) return { idle: true, status: "Janela do app fechada." };
+        const id = `hunt_${Date.now()}`;
+        const goal = autopilot.settings.huntGoal || 40;
+        const done = new Promise((resolve) => {
+          const timer = setTimeout(() => { pendingHunts.delete(id); resolve({ error: "Tempo esgotado" }); }, 45 * MIN);
+          pendingHunts.set(id, (result) => { clearTimeout(timer); pendingHunts.delete(id); resolve(result || {}); });
+        });
+        safeSend("autopilot-hunt", { id, niche: mission.niche, city: mission.city, neighborhoods: mission.neighborhoods, goal });
+        autopilot.setLive("cacador", { status: "working", task: `Caçando ${mission.niche} em ${mission.city} (meta ${goal} novos)` });
+        done.then((result) => {
+          const text = result.error
+            ? `Caçada de ${mission.niche} em ${mission.city} falhou: ${result.error}`
+            : `Caçada de ${mission.niche} em ${mission.city}: ${result.added || 0} lead(s) novos na base.`;
+          if (!result.error) autopilot.countStage("cacador", result.added || 0);
+          autopilot.log("cacador", text, result.error ? "error" : "ok");
+          autopilot.setLive("cacador", { status: result.error ? "error" : "done", task: text, finishedAt: Date.now() });
+          autopilot.emit();
+        });
+        return { working: true, status: `Caçando ${mission.niche} em ${mission.city} (meta ${goal} novos)…`, text: `Estoque baixo (${available}). Saiu para caçar ${mission.niche} em ${mission.city}.` };
+      },
+    },
+    {
+      id: "analista",
+      agent: "analista",
+      label: "Estudando resultados e atualizando o playbook",
+      everyMs: 6 * 60 * MIN,
+      run: async () => {
+        const res = await runAnalystAgent({ auto: true });
+        if (res.skipped) return { idle: true, status: "Aguardando 25 envios novos para reestudar." };
+        if (!res.success) throw new Error(res.error || "Analista falhou");
+        return { count: 1, text: "Playbook atualizado com os resultados mais recentes." };
+      },
+    },
+  ];
+  autopilot = new Autopilot(app.getPath("userData"), {
+    stages,
+    onEvent: (event) => safeSend("autopilot-event", event),
+  });
+  autopilot.start();
+}
+
+ipcMain.handle("autopilot-state", async () => ({ success: true, ...(autopilot?.snapshot() || {}) }));
+
+ipcMain.handle("autopilot-settings", async (_, { patch } = {}) => {
+  try {
+    return { success: true, settings: autopilot.updateSettings(patch || {}), ...autopilot.snapshot() };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("autopilot-run", async (_, { stageId } = {}) => {
+  try {
+    const result = await autopilot.runNow(String(stageId || ""));
+    return { success: !result?.error, error: result?.error, ...autopilot.snapshot() };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("autopilot-dismiss-reply", async (_, { phone } = {}) => {
+  autopilot?.dismissReplyDraft(phoneKey(phone));
+  return { success: true };
+});
+
+ipcMain.handle("autopilot-intel", async (_, { phone } = {}) => ({ success: true, intel: autopilot?.intel?.[phoneKey(phone)] || null }));
+
+ipcMain.on("autopilot-hunt-done", (_, { id, added, error } = {}) => {
+  const resolve = pendingHunts.get(String(id || ""));
+  if (resolve) resolve({ added: Number(added) || 0, error: error ? String(error).slice(0, 200) : "" });
+});
+
 ipcMain.handle("agents-state", async () => {
   return { success: true, ...agentStore.snapshot(), aiConfigured: hasAiConfigured(currentAiSettings()), insights: currentInsights() };
 });
@@ -4351,8 +4592,17 @@ ipcMain.handle("ai-optimize-message", async (_, { template, followUp } = {}) => 
 
 ipcMain.handle("ai-suggest-reply", async (_, { messages, lead } = {}) => {
   try {
+    return { success: true, ...(await suggestReplyFor(messages, lead)) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/** Agente de Respostas: lê a conversa e devolve 3 respostas + o momento do lead. */
+async function suggestReplyFor(messages, lead) {
+  {
     const runAi = agentAi("respostas");
-    if (!runAi) return { success: false, error: "Configure a IA e confira o limite do Agente de Respostas." };
+    if (!runAi) throw new Error("Configure a IA e confira o limite do Agente de Respostas.");
     const list = (Array.isArray(messages) ? messages : []).slice(-16).map((m) => ({
       fromMe: !!m?.fromMe,
       text: limitString(String(m?.text || ""), 600, ""),
@@ -4384,11 +4634,9 @@ ipcMain.handle("ai-suggest-reply", async (_, { messages, lead } = {}) => {
     }, runAi);
     agentStore.log("respostas", `Sugestões para ${clean.name || "conversa"} (lead ${result.momento.replace(/_/g, " ")}).`);
     const memory = leadMemory?.recordReading(clean.phone, { momento: result.momento, leitura: result.leitura, objecao: result.objecao });
-    return { success: true, ...result, temperatura: temperatureOf(contactStatus?.get(clean.phone), memory) };
-  } catch (error) {
-    return { success: false, error: error.message };
+    return { ...result, temperatura: temperatureOf(contactStatus?.get(clean.phone), memory) };
   }
-});
+}
 
 ipcMain.handle("lead-scoring-test-connection", async (_, { ai } = {}) => {
   try {

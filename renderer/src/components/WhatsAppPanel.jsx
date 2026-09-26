@@ -4110,6 +4110,29 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     }
   };
 
+  // Outra tela (ex.: Central de Agentes) pediu para abrir uma conversa com o
+  // texto já escrito. Nada é enviado: o texto fica no campo para você revisar.
+  const pendingChatHandled = useRef(false);
+  useEffect(() => {
+    const open = async (pending) => {
+      if (!pending?.phone) return;
+      const key = phoneCore(pending.phone);
+      const existing = chats.find((chat) => !chat.isGroup && phoneCore(chat.phoneJid || chat.phone || chat.jid) === key);
+      if (existing) await handleSelectChat(existing);
+      else await handleStartNewChat({ phone: key.length <= 11 ? `55${key}` : key, name: pending.name || '' });
+      if (pending.text) setInputText(pending.text);
+    };
+    if (!pendingChatHandled.current && window.__p4j3PendingChat && chats.length) {
+      pendingChatHandled.current = true;
+      const pending = window.__p4j3PendingChat;
+      window.__p4j3PendingChat = null;
+      open(pending);
+    }
+    const onOpen = (event) => open(event.detail);
+    window.addEventListener('sigma:open-chat', onOpen);
+    return () => window.removeEventListener('sigma:open-chat', onOpen);
+  }, [chats]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const forwardCandidates = useMemo(() => {
     const query = forwardSearch.trim().toLowerCase();
     return chats.filter((chat) => !query || `${chat.name || ''} ${chat.phone || ''} ${chat.jid || ''}`.toLowerCase().includes(query));
