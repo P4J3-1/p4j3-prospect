@@ -73,6 +73,7 @@ const { Autopilot } = require("./agents/autopilot");
 const { DEFAULT_OFFERS } = require("./agents/sales-playbook");
 const { understand, SCREENS, AGENT_IDS, norm } = require("./agents/jarvis");
 const { buildDiagnosis, renderDiagnosisHtml } = require("./agents/diagnosis");
+const { siteMockHtml, chatMockHtml, shortName } = require("./agents/mockups");
 const { whatsappXray } = require("./utils/whatsapp-xray");
 const { runAnalyst, suggestReplies, writeProposal } = require("./agents/ai-agents");
 const { LeadMemory, temperatureOf } = require("./campaigns/lead-memory");
@@ -4362,6 +4363,8 @@ function allLeads() {
 
 function leadByPhone(phone) {
   const key = phoneKey(phone);
+  // Telefone vazio/curto não identifica ninguém (senão casaria com qualquer lead sem telefone).
+  if (key.length < 10) return null;
   return allLeads().find((lead) => phoneKey(lead?.phone || lead?.tel) === key) || null;
 }
 
@@ -4908,10 +4911,60 @@ async function createDiagnosis(phone, leadHint = null) {
   }
 }
 
-ipcMain.handle("diagnosis-create", async (_, { phone, name } = {}) => {
+/** Renderiza um HTML em PNG (1080x1350, formato que o WhatsApp mostra inteiro no celular). */
+async function renderPng(html, file) {
+  // Offscreen: renderiza no tamanho exato, sem depender do tamanho da tela.
+  const win = new BrowserWindow({ show: false, width: 1080, height: 1350, useContentSize: true, enableLargerThanScreen: true, webPreferences: { sandbox: true, javascript: false, offscreen: true } });
+  try {
+    // Tela menor que 1350px: renderiza em escala e amplia o PNG no fim (nitidez mantida pelo fator de escala).
+    const { height: screenH } = screen.getPrimaryDisplay().workAreaSize;
+    const scale = Math.min(1, (screenH - 40) / 1350);
+    win.setContentSize(Math.round(1080 * scale), Math.round(1350 * scale));
+    win.webContents.setZoomFactor(scale);
+    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    win.webContents.setZoomFactor(scale);
+    await new Promise((r) => setTimeout(r, 300));
+    let image = await win.webContents.capturePage();
+    if (scale < 1) image = image.resize({ width: 1080, height: 1350, quality: "best" });
+    fs.writeFileSync(file, image.toPNG());
+    rememberAllowedMediaPath(file);
+    return file;
+  } finally {
+    win.destroy();
+  }
+}
+
+/** Pacote do diagnóstico: PDF + "como ficaria o site" + "simulação de atendimento". */
+async function createDiagnosisPack(phone, leadHint = null) {
+  const pdf = await createDiagnosis(phone, leadHint);
+  const lead = leadByPhone(phone) || leadHint || {};
+  const seller = currentAiSettings().commercial || {};
+  const data = {
+    name: lead.name || "",
+    category: lead.category || "",
+    region: lead.neighborhood || lead.city || "",
+    rating: lead.rating || "",
+    reviews: lead.reviews || lead.reviewCount || lead.totalReviews || "",
+    seller: [seller.sellerName, seller.agencyName].filter(Boolean).join(" · ") || "P4J3",
+  };
+  const base = pdf.path.replace(/\.pdf$/i, "");
+  const site = await renderPng(siteMockHtml(data), `${base}-site.png`);
+  const chat = await renderPng(chatMockHtml(data), `${base}-atendimento.png`);
+  const first = shortName(lead.name);
+  return {
+    ...pdf,
+    images: [
+      { path: site, fileName: path.basename(site), caption: `E assim ficaria o site da ${first} no celular: rápido, aparecendo no Google e com o botão de WhatsApp.` },
+      { path: chat, fileName: path.basename(chat), caption: "E este é o atendimento automático: o cliente pergunta às 22h e já sai com horário marcado. Você só confirma." },
+    ],
+  };
+}
+
+ipcMain.handle("diagnosis-create", async (_, { phone, name, pack = true } = {}) => {
   try {
     const hint = name ? resolveLead(limitString(name, 120, ""), null) : null;
-    return { success: true, ...(await createDiagnosis(limitString(phone, 40, ""), hint)) };
+    const target = limitString(phone, 40, "");
+    return { success: true, ...(pack ? await createDiagnosisPack(target, hint) : await createDiagnosis(target, hint)) };
   } catch (error) {
     return { success: false, error: error.message };
   }
@@ -4920,7 +4973,7 @@ ipcMain.handle("diagnosis-create", async (_, { phone, name } = {}) => {
 ipcMain.handle("diagnosis-open", async (_, { filePath } = {}) => {
   const resolved = path.resolve(String(filePath || ""));
   // Só abre arquivos da pasta de diagnósticos.
-  if (!resolved.startsWith(diagnosisDir() + path.sep) || !fs.existsSync(resolved)) return { success: false, error: "Arquivo não encontrado." };
+  if (!resolved.startsWith(diagnosisDir() + path.sep) || !/\.(pdf|png)$/i.test(resolved) || !fs.existsSync(resolved)) return { success: false, error: "Arquivo não encontrado." };
   const err = await shell.openPath(resolved);
   return err ? { success: false, error: err } : { success: true };
 });
@@ -5000,12 +5053,12 @@ ipcMain.handle("jarvis-command", async (_, { text, context, history } = {}) => {
       const lead = resolveLead(p.lead, contexto);
       if (!lead) return { success: true, reply: "De qual lead, senhor? Não encontrei na base." };
       const phone = lead.phone || lead.tel || "";
-      const doc = await createDiagnosis(phone, lead);
+      const doc = await createDiagnosisPack(phone, lead);
       if (phoneKey(phone).length < 10) {
         shell.openPath(doc.path);
         return { success: true, reply: `Diagnóstico de ${lead.name} pronto (abri o PDF). Ele não tem telefone na base, então não dá para enviar pelo WhatsApp.` };
       }
-      openChat = { phone: phoneKey(phone), name: lead.name || "", text: "", attachment: { path: doc.path, fileName: doc.fileName, caption: doc.caption, ai: doc.ai } };
+      openChat = { phone: phoneKey(phone), name: lead.name || "", text: "", attachment: { path: doc.path, fileName: doc.fileName, caption: doc.caption, ai: doc.ai, images: doc.images } };
       navigate = "whatsapp";
       reply = `Diagnóstico de ${lead.name} pronto e anexado na conversa. Revise e clique em enviar, senhor.`;
     } else if (plan.acao === "nao_contatar") {

@@ -128,6 +128,9 @@ function renderDiagnosisHtml(c, { lead = {}, seller = {}, date = new Date() } = 
   td { padding: 6px 8px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
   td.w { width: 72px; font-weight: 800; color: #0891b2; white-space: nowrap; }
   td.g { color: #475569; width: 34%; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .steps div { border-radius: 10px; padding: 9px 10px; background: #f0fdf4; border: 1px solid #bbf7d0; font-size: 11.3px; line-height: 1.4; display: flex; gap: 8px; align-items: flex-start; }
+  .steps b { flex: 0 0 22px; height: 22px; border-radius: 50%; background: #16a34a; color: #fff; display: grid; place-items: center; font-size: 12px; }
   .next { margin-top: 12px; background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 11px 13px; font-size: 12.5px; }
   .next b { color: #67e8f9; }
   .foot { position: absolute; bottom: 9mm; left: 15mm; right: 15mm; display: flex; justify-content: space-between; font-size: 9.5px; color: #94a3b8; }
@@ -140,6 +143,12 @@ function renderDiagnosisHtml(c, { lead = {}, seller = {}, date = new Date() } = 
   <h2>O que está custando clientes</h2>
   <div class="probs">${c.problemas.map((p, i) => `<div class="prob"><span class="n">${i + 1}</span><b>${escapeHtml(p.titulo)}</b><span class="imp">Impacto: ${escapeHtml(p.impacto)}</span><span class="sol">Como resolver: ${escapeHtml(p.solucao)}</span></div>`).join("")}</div>
   ${c.plano?.length ? `<h2>Plano de 30 dias</h2><table>${c.plano.map((p) => `<tr><td class="w">${escapeHtml(p.semana)}</td><td>${escapeHtml(p.acao)}</td><td class="g">${escapeHtml(p.ganho)}</td></tr>`).join("")}</table>` : ""}
+  <h2>Como o atendimento automático funciona</h2>
+  <div class="steps">
+    <div><b>1</b><span>O cliente chama no WhatsApp a qualquer hora e pergunta o preço.</span></div>
+    <div><b>2</b><span>Recebe na hora os serviços, valores e horários livres, com o nome de vocês.</span></div>
+    <div><b>3</b><span>Escolhe o horário e já fica agendado. Vocês só confirmam.</span></div>
+  </div>
   <div class="next"><b>Próximo passo:</b> ${escapeHtml(c.proximo_passo)}</div>
   <div class="foot"><span>Preparado por ${who}</span><span>Análise feita com dados públicos do Google e do site da empresa.</span></div>
 </div></body></html>`;

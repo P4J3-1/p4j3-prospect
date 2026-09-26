@@ -4274,22 +4274,29 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
     const res = await window.diagnosisAPI.create(activeLeadPhone, activeLead?.name || activeChatName).catch((e) => ({ success: false, error: e?.message }));
     setDiagnosis(res?.success ? { ...res, phone: activeLeadPhone } : { error: res?.error || 'Não foi possível gerar.', phone: activeLeadPhone });
   };
-  const sendDiagnosis = async () => {
+  /** Envia o PDF e, se pedido, as imagens (site no celular + atendimento), com pausa humana. */
+  const sendDiagnosis = async (withImages = true) => {
     if (!diagnosis?.path) return;
     const toJid = getSendJid();
-    setDiagnosis((d) => ({ ...d, sending: true }));
-    const res = await window.chatAPI.sendMedia(toJid, diagnosis.path, diagnosis.caption, activeConnectionId);
-    if (res?.success) {
+    const files = [{ path: diagnosis.path, fileName: diagnosis.fileName, caption: diagnosis.caption, icon: '📄' }]
+      .concat(withImages ? (diagnosis.images || []).map((img) => ({ ...img, icon: '🖼️' })) : []);
+    setDiagnosis((d) => ({ ...d, sending: true, error: '' }));
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i];
+      if (i > 0) await new Promise((r) => setTimeout(r, 2500));
+      const res = await window.chatAPI.sendMedia(toJid, file.path, file.caption, activeConnectionId);
+      if (!res?.success) {
+        setDiagnosis((d) => ({ ...d, sending: false, error: res?.error || 'Falhou o envio.' }));
+        return;
+      }
       setMessages((prev) => [...prev, {
-        key: { fromMe: true, id: res.messageId || `local_diag_${Date.now()}` },
-        message: { conversation: `📄 ${diagnosis.fileName}\n${diagnosis.caption}` },
+        key: { fromMe: true, id: res.messageId || `local_diag_${Date.now()}_${i}` },
+        message: { conversation: `${file.icon} ${file.fileName}\n${file.caption}` },
         messageTimestamp: Math.round(Date.now() / 1000),
       }]);
-      setDiagnosis((d) => ({ ...d, sending: false, sent: true }));
-      loadChats();
-    } else {
-      setDiagnosis((d) => ({ ...d, sending: false, error: res?.error || 'Falhou o envio.' }));
     }
+    setDiagnosis((d) => ({ ...d, sending: false, sent: true }));
+    loadChats();
   };
   // Conversa aberta → contexto do J.A.R.V.I.S.
   useEffect(() => {
@@ -6448,19 +6455,27 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                 <div className="clp-diag">
                   {!diagnosis || diagnosis.error ? (
                     <button type="button" className="clp-diag-btn" onClick={createDiagnosis} disabled={diagnosis?.loading}>
-                      📄 Gerar diagnóstico gratuito (PDF)
+                      📄 Gerar diagnóstico gratuito (PDF + imagens)
                     </button>
                   ) : diagnosis.loading ? (
                     <span className="clp-diag-status">Montando o diagnóstico com os dados reais…</span>
                   ) : (
                     <div className="clp-diag-ready">
-                      <b>📄 {diagnosis.fileName}</b>
+                      <b>📄 Diagnóstico pronto{diagnosis.images?.length ? ` + ${diagnosis.images.length} imagens` : ''}</b>
                       <span>{diagnosis.ai ? 'Escrito pela IA com os dados do lead.' : 'Montado com os dados do lead.'} Revise antes de enviar.</span>
+                      <div className="clp-diag-files">
+                        <button type="button" className="clp-link" onClick={() => window.diagnosisAPI.open(diagnosis.path)}>📄 Ver PDF</button>
+                        {(diagnosis.images || []).map((img) => (
+                          <button key={img.path} type="button" className="clp-link" onClick={() => window.diagnosisAPI.open(img.path)}>🖼️ {/site/.test(img.fileName) ? 'Ver site no celular' : 'Ver atendimento'}</button>
+                        ))}
+                      </div>
                       <div>
-                        <button type="button" className="btn btn-sm" onClick={() => window.diagnosisAPI.open(diagnosis.path)}>Abrir</button>
-                        <button type="button" className="btn btn-sm btn-primary" disabled={diagnosis.sending || diagnosis.sent} onClick={sendDiagnosis}>
-                          {diagnosis.sent ? 'Enviado ✓' : diagnosis.sending ? 'Enviando…' : 'Enviar na conversa'}
+                        <button type="button" className="btn btn-sm btn-primary" disabled={diagnosis.sending || diagnosis.sent} onClick={() => sendDiagnosis(true)}>
+                          {diagnosis.sent ? 'Enviado ✓' : diagnosis.sending ? 'Enviando…' : diagnosis.images?.length ? 'Enviar tudo' : 'Enviar na conversa'}
                         </button>
+                        {diagnosis.images?.length > 0 && !diagnosis.sent && (
+                          <button type="button" className="btn btn-sm" disabled={diagnosis.sending} onClick={() => sendDiagnosis(false)}>Só o PDF</button>
+                        )}
                         <button type="button" className="btn btn-sm btn-ghost" onClick={createDiagnosis} disabled={diagnosis.sending}>Refazer</button>
                       </div>
                     </div>

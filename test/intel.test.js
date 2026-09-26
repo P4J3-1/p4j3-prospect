@@ -79,3 +79,15 @@ describe('diagnóstico gratuito', () => {
     assert.ok(!/https?:\/\//.test(html));
   });
 });
+
+describe('imagens de demonstração', () => {
+  const { siteMockHtml, chatMockHtml, servicesFor } = require('../agents/mockups');
+  it('serviços pelo nicho e dados do lead escapados, sem link', () => {
+    assert.deepEqual(servicesFor('Barbearia'), ['Corte masculino', 'Barba na navalha', 'Pigmentação']);
+    const site = siteMockHtml({ name: '<script>x</script> Pizzaria - Guará', category: 'Pizzaria', rating: 4.8, reviews: 115 });
+    const chat = chatMockHtml({ name: 'Pizzaria Bella - Guará', category: 'Pizzaria' });
+    assert.ok(!site.includes('<script>x'));
+    assert.ok(chat.includes('Pizzaria Bella') && !chat.includes('Guará'));
+    assert.ok(!/https?:\/\//.test(site + chat));
+  });
+});
