@@ -8939,3 +8939,63 @@ html[data-theme="dark"] .hunt-tile span { color: #94a3b8; }
 .ai-usage small { color: var(--ap-muted); font-size: 11.5px; white-space: nowrap; }
 .ai-bar { height: 7px; border-radius: 99px; background: rgba(148, 163, 184, .18); overflow: hidden; }
 .ai-bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #a78bfa, #22d3ee); }
+
+/* ═════ Central de Agentes v2: mais vida e cor ═════ */
+@property --ap-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+.ap-shell { background:
+    radial-gradient(700px 300px at 8% 0%, rgba(34, 211, 238, .22), transparent 60%),
+    radial-gradient(700px 360px at 55% -20%, rgba(244, 114, 182, .16), transparent 60%),
+    radial-gradient(800px 420px at 105% 20%, rgba(167, 139, 250, .26), transparent 60%),
+    linear-gradient(160deg, #0c1733, #070b1a 70%); }
+.ap-shell::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: .55;
+  background-image: radial-gradient(1.2px 1.2px at 12% 22%, #fff, transparent), radial-gradient(1px 1px at 72% 12%, #c7d2fe, transparent),
+    radial-gradient(1.4px 1.4px at 42% 68%, #a5f3fc, transparent), radial-gradient(1px 1px at 88% 58%, #f5d0fe, transparent),
+    radial-gradient(1.2px 1.2px at 24% 84%, #fff, transparent), radial-gradient(1px 1px at 60% 40%, #fde68a, transparent);
+  animation: ap-twinkle 6s ease-in-out infinite alternate; }
+@keyframes ap-twinkle { to { opacity: .2; } }
+
+/* Faixa "Hoje" */
+.ap-today { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+.ap-today-chip { --c: #22d3ee; display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; border-radius: 14px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--c) 22%, transparent), rgba(15, 23, 42, .55));
+  border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); box-shadow: 0 10px 24px -14px var(--c); }
+.ap-today-chip i { width: 30px; height: 30px; border-radius: 10px; display: grid; place-items: center; font-style: normal; color: #fff;
+  background: radial-gradient(circle at 30% 28%, color-mix(in srgb, var(--c) 30%, #fff), var(--c) 60%, color-mix(in srgb, var(--c) 50%, #000)); }
+.ap-today-chip b { display: block; font-size: 18px; color: #fff; line-height: 1; font-variant-numeric: tabular-nums; }
+.ap-today-chip span { font-size: 11px; color: #cbd5e1; }
+
+/* Pods: halo de cor, borda viva quando trabalha */
+.ap-pod { overflow: hidden; background:
+    radial-gradient(120% 60% at 50% 0%, color-mix(in srgb, var(--c) 22%, transparent), transparent 70%),
+    linear-gradient(180deg, rgba(30, 41, 59, .78), rgba(15, 23, 42, .78)); }
+.ap-pod::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px; pointer-events: none; opacity: 0;
+  background: conic-gradient(from var(--ap-angle), transparent 0 60%, var(--c) 75%, #fff 80%, var(--c) 85%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; transition: opacity .3s; }
+.ap-pod.is-working::before { opacity: 1; animation: ap-border 2.2s linear infinite; }
+@keyframes ap-border { to { --ap-angle: 360deg; } }
+.ap-pod.is-working .ap-orb-core { animation: ap-bob 1.6s ease-in-out infinite; }
+@keyframes ap-bob { 50% { transform: translateY(-3px) scale(1.04); } }
+.ap-pod.is-done .ap-orb::after { content: "✓"; position: absolute; right: -2px; bottom: 0; width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #052e16; background: #4ade80; box-shadow: 0 0 12px rgba(74, 222, 128, .8); }
+.ap-orb-core { transition: transform .3s; }
+.ap-pod:hover .ap-orb-core { transform: scale(1.08) rotate(-4deg); }
+.ap-pod footer b { font-size: 15px; color: var(--c); text-shadow: 0 0 12px color-mix(in srgb, var(--c) 60%, transparent); }
+
+/* Partículas correndo entre os agentes */
+.ap-link { height: 3px; border-radius: 3px; overflow: visible; }
+.ap-link.live { background: rgba(103, 232, 249, .18); animation: none; }
+.ap-link.live::before, .ap-link.live::after { content: ""; position: absolute; top: -2px; left: 0; width: 7px; height: 7px; border-radius: 50%;
+  background: #67e8f9; box-shadow: 0 0 10px #67e8f9, 0 0 20px #22d3ee; animation: ap-particle 1.8s linear infinite; }
+.ap-link.live::after { animation-delay: .9s; background: #f0abfc; box-shadow: 0 0 10px #f0abfc, 0 0 20px #e879f9; }
+@keyframes ap-particle { from { left: -4px; opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } to { left: calc(100% - 3px); opacity: 0; } }
+
+/* Feed: faixa de cor por agente */
+.ap-feed li { border-radius: 10px; padding: 8px 8px; background: linear-gradient(90deg, color-mix(in srgb, var(--c) 10%, transparent), transparent 60%); }
+.ap-feed li + li { margin-top: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  .ap-pod.is-working::before, .ap-link.live::before, .ap-link.live::after, .ap-shell::after { animation: none !important; }
+}
+.ap-pod { flex: 1 1 128px; min-width: 124px; padding: 14px 8px 10px; }
+.ap-link { flex-basis: 14px; }
+.ap-pod-task { font-size: 11.5px; }
+.ap-pod footer { font-size: 10.5px; flex-wrap: wrap; justify-content: center; gap: 2px 8px; }

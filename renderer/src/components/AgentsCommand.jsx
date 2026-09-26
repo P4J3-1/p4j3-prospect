@@ -192,6 +192,27 @@ export default function AgentsCommand({ onNavigate, aiConfigured }) {
         </button>
       </header>
 
+      <div className="ap-today" aria-label="Hoje">
+        {[
+          ['cacador', 'leads caçados no Maps'],
+          ['radar', 'sites fracos achados'],
+          ['pesquisador', 'leads pesquisados'],
+          ['copywriter', 'mensagens escritas'],
+          ['respostas', 'respostas preparadas'],
+        ].map(([id, label]) => {
+          const meta = AGENT_META[id];
+          const stage = stages.find((s) => s.id === id);
+          if (!meta || !stage) return null;
+          const Icon = meta.Icon;
+          return (
+            <div key={id} className="ap-today-chip" style={{ '--c': meta.color }}>
+              <i>{Icon ? <Icon size={15} /> : null}</i>
+              <div><b>{stage.today}</b><span>{label} hoje</span></div>
+            </div>
+          );
+        })}
+      </div>
+
       {!aiConfigured && (
         <div className="ap-alert">Sem IA configurada, os agentes trabalham só com regras (sem mensagens personalizadas nem respostas).
           <button type="button" onClick={() => onNavigate?.('ai')}>Configurar IA</button>
