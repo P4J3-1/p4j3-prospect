@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { PROVIDERS } from '../aiProviders.mjs';
 
+const DEEPSEEK_MODELS = [
+  { id: 'deepseek-flash', name: 'Flash', hint: 'Rápido e barato. Ideal para os agentes rodarem o dia todo.' },
+  { id: 'deepseek-v4-pro', name: 'Pro', hint: 'Raciocínio mais profundo. Para propostas e análises.' },
+];
+const AGENT_NAMES = { triagem: 'Triagem', pesquisador: 'Pesquisador', copywriter: 'Copywriter', respostas: 'Respostas', proposta: 'Proposta', analista: 'Analista' };
+
 const TONES = [
   { id: 'consultivo', label: 'Consultivo' },
   { id: 'direto', label: 'Direto' },
@@ -10,11 +16,12 @@ const TONES = [
 function fromSettings(settings = {}) {
   const ai = settings.ai || {};
   const commercial = settings.commercial || {};
-  const provider = PROVIDERS[ai.provider] ? ai.provider : 'openrouter';
+  // Sem chave salva, começa pelo DeepSeek (o provedor usado pelo P4J3).
+  const provider = ai.hasApiKey && PROVIDERS[ai.provider] ? ai.provider : 'deepseek';
   return {
     provider,
-    model: ai.model || PROVIDERS[provider].defaultModel,
-    baseUrl: ai.baseUrl || PROVIDERS[provider].base,
+    model: (provider === ai.provider && ai.model) || PROVIDERS[provider].defaultModel,
+    baseUrl: (provider === ai.provider && ai.baseUrl) || PROVIDERS[provider].base,
     key: '',
     hasApiKey: Boolean(ai.hasApiKey),
     sellerName: commercial.sellerName || '',
@@ -36,6 +43,7 @@ export default function AiSettingsPage() {
   const [status, setStatus] = useState({ text: '', ok: false });
   const [busy, setBusy] = useState(false);
   const [insights, setInsights] = useState(null);
+  const [usage, setUsage] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -50,6 +58,10 @@ export default function AiSettingsPage() {
         const res = await window.aiAPI?.getInsights?.();
         if (alive && res?.success) setInsights(res.insights);
       } catch { /* sem campanhas ainda */ }
+      try {
+        const res = await window.agentsAPI?.getState?.();
+        if (alive && res?.success) setUsage(res.agents || []);
+      } catch { /* agentes indisponíveis */ }
     })();
     return () => { alive = false; };
   }, []);
@@ -57,7 +69,7 @@ export default function AiSettingsPage() {
   if (!draft) return <section className="settings-open-design-view"><p className="camp-hint">Carregando…</p></section>;
 
   const set = (patch) => setDraft((current) => ({ ...current, ...patch }));
-  const provider = PROVIDERS[draft.provider] || PROVIDERS.openrouter;
+  const provider = PROVIDERS[draft.provider] || PROVIDERS.deepseek;
   const apiKeyPayload = draft.key || (draft.hasApiKey ? '********' : '');
 
   const chooseProvider = (id) => {
@@ -121,90 +133,115 @@ export default function AiSettingsPage() {
 
   return (
     <section className="settings-open-design-view ai-settings-page">
-      <div className="page-head">
-        <div>
-          <h1 style={{ fontSize: 20 }}>Inteligência Artificial</h1>
-          <p className="camp-hint" style={{ marginTop: 4 }}>
-            A IA pesquisa cada lead, identifica o decisor, sugere a abordagem, estima a chance de fechamento e reescreve suas mensagens com base nos resultados das campanhas.
-          </p>
-        </div>
-      </div>
-
-      <div className="table-wrap settings-open-design-card">
-        <div className="field">
-          <label>Provedor</label>
-          <div className="ai-provider-grid" role="radiogroup" aria-label="Provedor de IA">
-            {Object.entries(PROVIDERS).map(([id, p]) => (
-              <button
-                key={id}
-                type="button"
-                role="radio"
-                aria-checked={draft.provider === id}
-                className={`btn btn-sm ${draft.provider === id ? 'btn-primary' : ''}`}
-                onClick={() => chooseProvider(id)}
-              >
-                {p.name}
-              </button>
-            ))}
+      <div className="ap-shell ai-engine">
+        <div className="ap-floor" aria-hidden="true" />
+        <header className="ap-hero">
+          <div>
+            <span className="ap-kicker">Motor de IA</span>
+            <h1>O cérebro que move seus agentes</h1>
+            <p>Pesquisa cada lead, acha o decisor, escreve as mensagens, lê as respostas e aprende com os resultados. Tudo com a sua chave DeepSeek, guardada criptografada só neste computador.</p>
           </div>
-          {draft.provider === 'deepseek' && (
-            <span className="camp-hint">Crie a chave em platform.deepseek.com → API Keys. Modelo recomendado: deepseek-flash (rápido); deepseek-v4-pro para análises mais profundas.</span>
-          )}
-        </div>
-
-        <div className="field">
-          <label htmlFor="aiPageKey">API Key</label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              id="aiPageKey"
-              type={showKey ? 'text' : 'password'}
-              autoComplete="new-password"
-              spellCheck="false"
-              style={{ flex: 1 }}
-              placeholder={draft.hasApiKey ? 'Chave salva — cole outra para substituir' : 'Cole a API key do provedor'}
-              value={draft.key}
-              onChange={(e) => set({ key: e.target.value.trim() })}
-            />
-            <button type="button" className="btn btn-sm" onClick={() => setShowKey((v) => !v)}>
-              {showKey ? 'Ocultar' : 'Mostrar'}
-            </button>
+          <div className={`ai-status ${draft.hasApiKey ? 'on' : ''}`}>
+            <span className="ap-power-orb" aria-hidden="true">{draft.hasApiKey ? '✓' : '!'}</span>
+            <span>
+              <b>{draft.hasApiKey ? `${provider.name} conectado` : 'IA desligada'}</b>
+              <small>{draft.hasApiKey ? `modelo ${draft.model}` : 'Cole a chave abaixo e salve'}</small>
+            </span>
           </div>
-          <span className="camp-hint">Fica salva só neste computador e nunca aparece de novo na tela.</span>
-        </div>
+        </header>
 
-        <div className="field">
-          <label htmlFor="aiPageModel">Modelo</label>
-          <input
-            id="aiPageModel"
-            list="aiPageModels"
-            spellCheck="false"
-            value={draft.model}
-            onChange={(e) => set({ model: e.target.value })}
-          />
-          <datalist id="aiPageModels">
-            {provider.models.map((m) => <option key={m} value={m} />)}
-          </datalist>
-        </div>
+        <div className="ai-engine-grid">
+          <section className="ap-panel">
+            <header className="ap-panel-head">
+              <h2>{provider.name}</h2>
+              <span>{draft.provider === 'deepseek' ? 'Crie a chave em platform.deepseek.com → API Keys.' : 'Provedor alternativo compatível com OpenAI.'}</span>
+            </header>
+            <label className="ai-label" htmlFor="aiPageKey">API key</label>
+            <div className="ai-key-row">
+              <input
+                id="aiPageKey"
+                type={showKey ? 'text' : 'password'}
+                autoComplete="new-password"
+                spellCheck="false"
+                placeholder={draft.hasApiKey ? 'Chave salva — cole outra para substituir' : 'sk-…'}
+                value={draft.key}
+                onChange={(e) => set({ key: e.target.value.trim() })}
+              />
+              <button type="button" className="ap-mini" onClick={() => setShowKey((v) => !v)}>{showKey ? 'Ocultar' : 'Mostrar'}</button>
+            </div>
 
-        {draft.provider === 'custom' && (
-          <div className="field">
-            <label htmlFor="aiPageBase">Base URL</label>
-            <input
-              id="aiPageBase"
-              spellCheck="false"
-              placeholder="https://sua-api.com/v1"
-              value={draft.baseUrl}
-              onChange={(e) => set({ baseUrl: e.target.value })}
-            />
-          </div>
-        )}
+            {draft.provider === 'deepseek' ? (
+              <div className="ai-models" role="radiogroup" aria-label="Modelo">
+                {DEEPSEEK_MODELS.map((m) => (
+                  <button key={m.id} type="button" role="radio" aria-checked={draft.model === m.id} className={`ai-model ${draft.model === m.id ? 'on' : ''}`} onClick={() => set({ model: m.id })}>
+                    <b>{m.name}</b>
+                    <span>{m.hint}</span>
+                    <code>{m.id}</code>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <>
+                <label className="ai-label" htmlFor="aiPageModel">Modelo</label>
+                <input id="aiPageModel" className="ai-input" list="aiPageModels" spellCheck="false" value={draft.model} onChange={(e) => set({ model: e.target.value })} />
+                <datalist id="aiPageModels">{provider.models.map((m) => <option key={m} value={m} />)}</datalist>
+              </>
+            )}
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button type="button" className="btn" disabled={busy || !(draft.key || draft.hasApiKey)} onClick={handleTest}>Testar conexão</button>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={handleSave}>Salvar</button>
-          {status.text && (
-            <span className="camp-hint" style={{ color: status.ok ? 'var(--success)' : 'var(--danger, #dc2626)' }} role="status">{status.text}</span>
-          )}
+            {draft.provider === 'custom' && (
+              <>
+                <label className="ai-label" htmlFor="aiPageBase">Base URL</label>
+                <input id="aiPageBase" className="ai-input" spellCheck="false" placeholder="https://sua-api.com/v1" value={draft.baseUrl} onChange={(e) => set({ baseUrl: e.target.value })} />
+              </>
+            )}
+
+            <div className="ai-actions">
+              <button type="button" className="ap-mini" disabled={busy || !(draft.key || draft.hasApiKey)} onClick={handleTest}>Testar conexão</button>
+              <button type="button" className="ap-mini primary" disabled={busy} onClick={handleSave}>Salvar</button>
+              {status.text && <span className={`ai-status-text ${status.ok ? 'ok' : ''}`} role="status">{status.text}</span>}
+            </div>
+
+            <details className="ai-others">
+              <summary>Outros provedores</summary>
+              <div className="ai-provider-grid" role="radiogroup" aria-label="Provedor de IA">
+                {Object.entries(PROVIDERS).map(([id, p]) => (
+                  <button key={id} type="button" role="radio" aria-checked={draft.provider === id} className={`ap-mini ${draft.provider === id ? 'primary' : ''}`} onClick={() => chooseProvider(id)}>
+                    {p.name}
+                  </button>
+                ))}
+              </div>
+            </details>
+          </section>
+
+          <section className="ap-panel">
+            <header className="ap-panel-head">
+              <h2>Consumo de hoje</h2>
+              <span>Chamadas de IA e tokens por agente (limite diário em Agentes).</span>
+            </header>
+            {!usage?.length ? (
+              <p className="ap-empty">Os agentes ainda não usaram a IA hoje.</p>
+            ) : (
+              <>
+                <div className="ai-total">
+                  <b>{usage.reduce((sum, a) => sum + (a.tokensToday || 0), 0).toLocaleString('pt-BR')}</b>
+                  <span>tokens hoje · {usage.reduce((sum, a) => sum + (a.usedToday || 0), 0)} chamadas</span>
+                </div>
+                <ul className="ai-usage">
+                  {usage.map((a) => {
+                    const limit = a.settings?.dailyLimit || 0;
+                    const pct = limit ? Math.min(100, Math.round(((a.usedToday || 0) / limit) * 100)) : 0;
+                    return (
+                      <li key={a.id}>
+                        <span>{AGENT_NAMES[a.id] || a.name}</span>
+                        <div className="ai-bar"><i style={{ width: `${pct}%` }} /></div>
+                        <small>{a.usedToday || 0}/{limit} · {(a.tokensToday || 0).toLocaleString('pt-BR')} tok</small>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+          </section>
         </div>
       </div>
 
