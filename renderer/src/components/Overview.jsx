@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import ProspectFlow from './ProspectFlow';
+import JarvisCore from './JarvisCore';
+import { useAutopilot } from '../useAutopilot';
 import {
   Bell,
   Clock3,
@@ -121,6 +123,7 @@ function compactExtractionLabel(search) {
 }
 
 function Overview({ onNavigate, onNewExtraction, leadsCount = 0 }) {
+  const [autopilotState] = useAutopilot();
   const [categoryView, setCategoryView] = useState(() => localStorage.getItem('sigma_overview_category_view') || 'bars');
   const [searchView, setSearchView] = useState(() => localStorage.getItem('sigma_overview_search_view') || 'bars');
   const [recentFilter, setRecentFilter] = useState('all');
@@ -418,6 +421,11 @@ function Overview({ onNavigate, onNewExtraction, leadsCount = 0 }) {
 
   return (
     <div className="overview-view">
+      {/* Deck de comando: o J.A.R.V.I.S. abre o dia com o que importa. */}
+      <section className="ap-shell jv-deck" aria-label="J.A.R.V.I.S.">
+        <div className="ap-floor" aria-hidden="true" />
+        <JarvisCore autopilot={autopilotState} onNavigate={onNavigate} />
+      </section>
       <section className="overview-hero hero-op" aria-label="Resumo da base" data-od-id="dashboard-total">
         <div className="overview-hero-main hero-main">
           <div className="overview-kicker lb">Total de leads na base</div>

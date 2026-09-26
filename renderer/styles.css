@@ -9171,3 +9171,5 @@ html[data-theme="dark"] .quality-chip.on { background: color-mix(in srgb, var(--
 .queue-risk.alto { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
 .queue-risk.medio { background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; }
 .queue-risk button { justify-self: start; }
+.jv-deck { padding: 14px 16px 16px; margin-bottom: 18px; }
+.jv-deck .jv { margin: 0; }
