@@ -28,6 +28,20 @@ export function leadPhone(lead) {
   return lead?.phone || lead?.tel || lead?.telefone || lead?.whatsapp || '';
 }
 
+/**
+ * Respostas do Agente de Respostas que ainda valem: o lead respondeu e ela foi
+ * escrita depois da sua última mensagem (as outras já foram usadas ou eram
+ * respostas automáticas).
+ */
+export function liveReplyDrafts(drafts = {}, contacts = {}) {
+  const out = {};
+  for (const [phone, d] of Object.entries(drafts || {})) {
+    const c = contacts?.[phoneCore(phone)];
+    if (c?.status === 'respondeu' && d?.sugestoes?.length && (d.at || 0) > (c.sentAt || 0)) out[phone] = d;
+  }
+  return out;
+}
+
 /** Entrada de status do lead, ou null se nunca foi contatado. */
 export function contactFor(contacts, lead) {
   const key = phoneCore(leadPhone(lead));

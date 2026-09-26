@@ -71,7 +71,7 @@ const { DailyQuota } = require("./campaigns/daily-quota");
 const { AgentStore } = require("./agents/agent-store");
 const { Autopilot } = require("./agents/autopilot");
 const { DEFAULT_OFFERS } = require("./agents/sales-playbook");
-const { understand, SCREENS, AGENT_IDS, norm } = require("./agents/jarvis");
+const { understand, ACTIONS: JARVIS_ACTIONS, SCREENS, AGENT_IDS, norm } = require("./agents/jarvis");
 const { buildDiagnosis, renderDiagnosisHtml } = require("./agents/diagnosis");
 const { siteMockHtml, chatMockHtml, shortName } = require("./agents/mockups");
 const { whatsappXray } = require("./utils/whatsapp-xray");
@@ -3975,7 +3975,7 @@ async function runAnalystAgent({ auto = false } = {}) {
     if (!s.auto || newSends < 25) return { success: true, skipped: true };
   }
   const runAi = agentAi("analista");
-  if (!runAi) return { success: false, error: "IA indisponível: confira a chave DeepSeek em Inteligência Artificial ou se o Agente Analista está ligado." };
+  if (!runAi) return { success: false, error: "IA indisponível: confira a chave DeepSeek em Agentes → Motor de IA ou se o Agente Analista está ligado." };
   analystRunning = true;
   try {
     const settings = currentAiSettings();
@@ -4317,7 +4317,7 @@ function commercialForAgents() {
 async function proposalFor(phone, messages) {
   {
     const runAi = agentAi("proposta");
-    if (!runAi) throw new Error("IA indisponível: confira a chave DeepSeek em Inteligência Artificial ou se o Agente de Proposta está ligado.");
+    if (!runAi) throw new Error("IA indisponível: confira a chave DeepSeek em Agentes → Motor de IA ou se o Agente de Proposta está ligado.");
     const kit = leadSalesKit(phone);
     if (!kit) throw new Error("Lead sem telefone válido.");
     const lead = cleanLeadInput(leadByPhone(phone) || {});
@@ -5004,7 +5004,7 @@ ipcMain.handle("jarvis-briefing", async () => {
   return { success: true, text: lines.join(" ") };
 });
 
-ipcMain.handle("jarvis-command", async (_, { text, context, history } = {}) => {
+ipcMain.handle("jarvis-command", async (_, { text, context, history, direct } = {}) => {
   const order = limitString(text, 500, "").trim();
   if (!order) return { success: false, error: "Diga o que fazer." };
   try {
@@ -5015,7 +5015,10 @@ ipcMain.handle("jarvis-command", async (_, { text, context, history } = {}) => {
     const focusLead = !focusPhone && contexto?.lead?.nome ? resolveLead(contexto.lead.nome, null) : null;
     const dossie = focusPhone || focusLead ? leadDossier(focusPhone, focusLead) : null;
     const historico = (Array.isArray(history) ? history : []).slice(-6).map((h) => ({ de: h?.from === "voce" ? "vendedor" : "jarvis", texto: limitString(String(h?.text || ""), 300, "") }));
-    const plan = await understand(order, { runAi: agentAi("jarvis"), dados, contexto, dossie, historico });
+    // Botões de sugestão mandam a ação pronta: executa na hora, sem gastar IA.
+    const plan = direct && JARVIS_ACTIONS.includes(direct.acao)
+      ? { acao: direct.acao, parametros: direct.parametros && typeof direct.parametros === "object" ? direct.parametros : {}, resposta: "", ai: false }
+      : await understand(order, { runAi: agentAi("jarvis"), dados, contexto, dossie, historico });
     const p = plan.parametros || {};
     let reply = plan.resposta;
     let navigate = "";
@@ -5230,7 +5233,7 @@ ipcMain.handle("ai-optimize-message", async (_, { template, followUp } = {}) => 
   try {
     const runAi = agentAi("copywriter");
     if (!runAi) {
-      return { success: false, error: "IA indisponível: confira a chave DeepSeek em Inteligência Artificial ou se o Agente Copywriter está ligado." };
+      return { success: false, error: "IA indisponível: confira a chave DeepSeek em Agentes → Motor de IA ou se o Agente Copywriter está ligado." };
     }
     const result = await optimizeCampaignMessage({
       template: limitString(template, 2000, ""),
@@ -5258,7 +5261,7 @@ ipcMain.handle("ai-suggest-reply", async (_, { messages, lead, etapa } = {}) => 
 async function suggestReplyFor(messages, lead, etapa = "") {
   {
     const runAi = agentAi("respostas");
-    if (!runAi) throw new Error("IA indisponível: confira a chave DeepSeek em Inteligência Artificial ou se o Agente de Respostas está ligado.");
+    if (!runAi) throw new Error("IA indisponível: confira a chave DeepSeek em Agentes → Motor de IA ou se o Agente de Respostas está ligado.");
     const list = (Array.isArray(messages) ? messages : []).slice(-16).map((m) => ({
       fromMe: !!m?.fromMe,
       text: limitString(String(m?.text || ""), 600, ""),

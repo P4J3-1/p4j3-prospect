@@ -12,6 +12,8 @@ export default defineConfig({
     // Mantém nomes legíveis no stack de erro do React (evita só "at main")
     minify: false,
     sourcemap: true,
+    // Telas carregam sob demanda (chunks), mas o CSS fica num arquivo só (nome fixo).
+    cssCodeSplit: false,
     // Nome FIXO — nunca mais index-HASH.js fantasma (ex.: 7F4QwPd2) preso em cache
     rollupOptions: {
       output: {

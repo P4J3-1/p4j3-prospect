@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import KanbanAgent from './KanbanAgent';
 import {
   Activity,
   ArrowRight,
@@ -988,7 +989,9 @@ export default function KanbanBoard({ onNavigate, addLog }) {
     loadBoard();
     const refresh = () => loadBoard({ quiet: true });
     window.addEventListener('sigma:leads-updated', refresh);
-    return () => window.removeEventListener('sigma:leads-updated', refresh);
+    // Ao vivo: os agentes movem cards pelo WhatsApp; relê o quadro (sem reenviar a base).
+    const live = setInterval(() => { window.kanbanAPI?.getBoard?.().then(applyBoard).catch(() => {}); }, 120000);
+    return () => { clearInterval(live); window.removeEventListener('sigma:leads-updated', refresh); };
   }, [loadBoard]);
 
   const columns = board?.board?.columns || [];
@@ -1240,6 +1243,8 @@ export default function KanbanBoard({ onNavigate, addLog }) {
           );
         })}
       </div>
+
+      <KanbanAgent cards={board?.cards || []} onNavigate={onNavigate} onOpenCard={(card) => setSelectedCard(card)} />
 
       <div className="kanban-toolbar">
         <label className="kanban-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar empresa, cidade ou telefone…" aria-label="Buscar no Kanban" /></label>

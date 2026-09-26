@@ -133,7 +133,7 @@ export default function LeadIntelPanel({ lead, triage, onClose, onSave, onOpenWh
           {error && <div className="camp-alert od-alert">{error}</div>}
           {!aiConfigured && intel && (
             <div className="camp-alert od-alert">
-              Resultado sem IA (só busca e regras). Configure a IA em <a href="#ai" onClick={onClose}>Inteligência Artificial</a> para decisor, abordagem e chance de fechamento completos.
+              Resultado sem IA (só busca e regras). Configure a IA em <a href="#agents" onClick={() => { window.__p4j3AgentsTab = 'motor'; onClose?.(); }}>Agentes → Motor de IA</a> para decisor, abordagem e chance de fechamento completos.
             </div>
           )}
           {intel?.aiError && <div className="camp-alert od-alert">IA indisponível agora: {intel.aiError}</div>}

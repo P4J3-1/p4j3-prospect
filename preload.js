@@ -163,6 +163,7 @@ contextBridge.exposeInMainWorld("diagnosisAPI", {
 
 contextBridge.exposeInMainWorld("jarvisAPI", {
   command: (text, context, history) => ipcRenderer.invoke("jarvis-command", { text, context, history }),
+  act: (acao, parametros, context) => ipcRenderer.invoke("jarvis-command", { text: String(acao || ""), context, direct: { acao, parametros } }),
   comment: (phone) => ipcRenderer.invoke("jarvis-comment", { phone }),
   briefing: () => ipcRenderer.invoke("jarvis-briefing"),
   xray: () => ipcRenderer.invoke("whatsapp-xray"),

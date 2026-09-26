@@ -1,6 +1,6 @@
 // Inteligência do J.A.R.V.I.S.: intenção de compra por lead, resultado por
 // nicho/região e o briefing do dia. Funções puras (testáveis, sem React).
-import { contactFor, leadPhone, phoneCore } from './contactStatus.mjs';
+import { contactFor, leadPhone, liveReplyDrafts, phoneCore } from './contactStatus.mjs';
 import { triageFor } from './triage.mjs';
 
 const DAY = 86400000;
@@ -86,7 +86,7 @@ export function dailyBriefing({ name = '', leads = [], contacts = {}, queue = {}
     if (!phone || contactFor(contacts, lead)) return false;
     return waCheck[phoneCore(phone)]?.exists !== false && (triageFor(triage, lead)?.score ?? 0) >= 45;
   }).length;
-  const replies = Object.keys(autopilot?.replyDrafts || {}).length;
+  const replies = Object.keys(liveReplyDrafts(autopilot?.replyDrafts, contacts)).length;
   const best = resultsBy(leads, contacts, 'nicho').find((g) => g.sent >= 5 && g.replied > 0);
   const linhas = [];
   linhas.push(`${sentToday} contato(s) feitos hoje${queue.settings?.dailyGoal ? ` de uma meta de ${queue.settings.dailyGoal}` : ''}.`);
@@ -97,16 +97,13 @@ export function dailyBriefing({ name = '', leads = [], contacts = {}, queue = {}
   linhas.push(`${ready} lead(s) prontos para abordar na base.`);
   if (best) linhas.push(`Nicho que mais responde: ${best.key} (${best.rate}% em ${best.sent} contatos).`);
   if (autopilot && !autopilot.settings?.enabled) linhas.push('O piloto automático está desligado.');
-  const risky = (queue.numbers || []).find((n) => n.risk?.level === 'alto') || (queue.risk?.level === 'alto' ? { phone: '', risk: queue.risk } : null);
-  if (risky) linhas.unshift(`⚠ Risco alto de bloqueio no número ${risky.phone ? `+${risky.phone}` : ''}: ${risky.risk.reasons[0]}.`);
 
   let acao = null;
   // Quem esperou mais vem primeiro.
   const firstWaiting = Object.entries(contacts || {})
     .filter(([, c]) => c?.status === 'respondeu' && (c.lastReplyAt || 0) > (c.sentAt || 0))
     .sort((a, b) => (a[1].lastReplyAt || 0) - (b[1].lastReplyAt || 0))[0];
-  if (risky) acao = { tipo: 'fila', texto: 'Proteger o número (ajustar a fila)', go: 'scraper' };
-  else if (firstWaiting) acao = { tipo: 'responder', texto: `Responder ${firstWaiting[1].name || 'quem está esperando'}${waiting > 1 ? ` (+${waiting - 1})` : ''}`, go: 'whatsapp', phone: firstWaiting[0], name: firstWaiting[1].name || '' };
+  if (firstWaiting) acao = { tipo: 'responder', texto: `Responder ${firstWaiting[1].name || 'quem está esperando'}${waiting > 1 ? ` (+${waiting - 1})` : ''}`, go: 'whatsapp', phone: firstWaiting[0], name: firstWaiting[1].name || '' };
   else if (replies) acao = { tipo: 'respostas', texto: `Ver as ${replies} resposta(s) prontas`, go: 'agents' };
   else if (drafts) acao = { tipo: 'fila', texto: `Aprovar ${drafts} mensagem(ns) da fila`, go: 'scraper' };
   else if (autopilot && !autopilot.settings?.enabled) acao = { tipo: 'piloto', texto: 'Ligar o piloto automático', go: 'agents' };

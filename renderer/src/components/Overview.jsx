@@ -187,10 +187,15 @@ function Overview({ onNavigate, onNewExtraction, leadsCount = 0 }) {
     };
     const refresh = () => loadDealStats();
     loadDealStats();
+    // Ao vivo: números do funil a cada 2 min (só leitura, sem reenviar a base).
+    const live = setInterval(() => {
+      window.kanbanAPI?.getBoard?.().then((res) => { if (mounted && res?.board) setKanbanSnapshot(res.board); }).catch(() => {});
+    }, 120000);
     window.addEventListener('sigma:deal-updated', refresh);
     window.addEventListener('sigma:leads-updated', refresh);
     return () => {
       mounted = false;
+      clearInterval(live);
       window.removeEventListener('sigma:deal-updated', refresh);
       window.removeEventListener('sigma:leads-updated', refresh);
     };

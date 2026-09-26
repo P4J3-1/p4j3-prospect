@@ -1,9 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Play, Power, Plus, Trash2, Copy, MessageCircle, X, Crosshair, Filter, Search, PenLine, MessagesSquare, LineChart, Globe, PhoneCall, Sparkle } from 'lucide-react';
-import { useAutopilot } from '../useAutopilot';
+import React, { useEffect, useState } from 'react';
+import { Play, Plus, Trash2, Copy, MessageCircle, X, Crosshair, Filter, Search, PenLine, MessagesSquare, LineChart, Globe, PhoneCall, Sparkle } from 'lucide-react';
 import { timeAgo } from '../contactStatus.mjs';
-import JarvisCore from './JarvisCore';
-import XrayPanel from './XrayPanel';
 
 // Ordem do fluxo na tela (a ordem de execução é do processo principal).
 export const AGENT_META = {
@@ -19,7 +16,7 @@ export const AGENT_META = {
   sistema: { name: 'Sistema', color: '#94a3b8' },
   jarvis: { name: 'J.A.R.V.I.S.', color: '#67e8f9' },
 };
-const FLOW = ['cacador', 'radar', 'verificador', 'enriquecedor', 'triagem', 'pesquisador', 'copywriter', 'respostas', 'analista'];
+export const FLOW = ['cacador', 'radar', 'verificador', 'enriquecedor', 'triagem', 'pesquisador', 'copywriter', 'respostas', 'analista'];
 const STATUS_TEXT = { working: 'Trabalhando', idle: 'De olho', done: 'Concluiu', error: 'Com erro', off: 'Pausado' };
 const ETAPA = { abertura: 'Abertura', conexao: 'Conexão', dor: 'Dor', valor: 'Valor', oferta: 'Oferta', objecao: 'Objeção', contraproposta: 'Contraproposta', fechamento: 'Fechamento', perdido: 'Perdido' };
 const MOMENTO = { interessado: 'Interessado', curioso: 'Curioso', duvida: 'Com dúvida', objecao: 'Objeção', sem_interesse: 'Sem interesse', pediu_para_sair: 'Pediu para sair' };
@@ -31,35 +28,38 @@ function nextIn(ts, now) {
   return `em ${Math.round(min / 60)} h`;
 }
 
-function Pod({ stage, enabled, now, onRun }) {
+/** Card de um agente: o que faz, o que está fazendo, liga/desliga e rodar agora. */
+export function AgentCard({ stage, step, enabled, pilotOn, now, onRun, onToggle }) {
   const meta = AGENT_META[stage.agent] || AGENT_META.sistema;
   const status = !enabled && stage.live?.status !== 'working' ? 'off' : stage.live?.status || 'idle';
   const p = stage.live?.progress;
   const Icon = meta.Icon || Play;
   return (
-    <article className={`ap-pod is-${status}`} style={{ '--c': meta.color }}>
-      <div className="ap-orb" aria-hidden="true">
-        <span className="ap-orb-ring" />
-        <span className="ap-orb-core"><Icon size={20} /></span>
-      </div>
-      <h3>{meta.name}</h3>
-      <span className="ap-pod-status">{STATUS_TEXT[status] || status}</span>
-      <p className="ap-pod-task" title={stage.live?.task || meta.role}>{stage.live?.task || meta.role}</p>
-      {p?.total ? (
-        <div className="ap-progress"><span style={{ width: `${Math.round((p.done / p.total) * 100)}%` }} /></div>
-      ) : <div className="ap-progress ghost" />}
+    <article className={`ag-card is-${status}`} style={{ '--c': meta.color }}>
+      <header>
+        <span className="ag-ico"><Icon size={18} /></span>
+        <div>
+          <small>Etapa {step}</small>
+          <h3>{meta.name}</h3>
+        </div>
+        <label className="ag-switch" title={enabled ? 'Pausar este agente' : 'Ligar este agente'}>
+          <input type="checkbox" checked={enabled} onChange={(e) => onToggle(stage.id, e.target.checked)} />
+          <i />
+        </label>
+      </header>
+      <span className="ag-status"><i />{STATUS_TEXT[status] || status}</span>
+      <p title={stage.live?.task || meta.role}>{stage.live?.task || meta.role}</p>
+      {p?.total ? <div className="ag-progress"><span style={{ width: `${Math.round((p.done / p.total) * 100)}%` }} /></div> : null}
       <footer>
         <span><b>{stage.today}</b> hoje</span>
-        <span>{enabled ? `próxima ${nextIn(stage.nextRunAt, now)}` : '—'}</span>
+        <span>{enabled && pilotOn ? `próxima ${nextIn(stage.nextRunAt, now)}` : enabled ? 'aguardando o piloto' : 'pausado'}</span>
+        <button type="button" disabled={status === 'working'} onClick={() => onRun(stage.id)} title="Rodar agora"><Play size={12} /> Rodar</button>
       </footer>
-      <button type="button" className="ap-run" disabled={status === 'working'} onClick={() => onRun(stage.id)}>
-        <Play size={12} /> Rodar agora
-      </button>
     </article>
   );
 }
 
-function ReplyCard({ phone, draft, onNavigate }) {
+export function ReplyCard({ phone, draft, onNavigate }) {
   const [copied, setCopied] = useState(-1);
   const use = (text) => {
     window.__p4j3PendingChat = { phone, name: draft.name, text };
@@ -106,7 +106,7 @@ function ReplyCard({ phone, draft, onNavigate }) {
   );
 }
 
-function Missions({ settings, onSave, plan }) {
+export function Missions({ settings, onSave, plan }) {
   const [rows, setRows] = useState(settings.missions || []);
   const [dirty, setDirty] = useState(false);
   useEffect(() => { if (!dirty) setRows(settings.missions || []); }, [settings.missions, dirty]);
@@ -171,142 +171,5 @@ function Missions({ settings, onSave, plan }) {
         <label>Pesquisas por rodada <input type="number" min={1} max={20} value={settings.researchPerRun} onChange={(e) => onSave({ researchPerRun: e.target.value })} /></label>
       </div>
     </section>
-  );
-}
-
-/** Central de Agentes: piloto automático, agentes ao vivo e respostas prontas. */
-export default function AgentsCommand({ onNavigate, aiConfigured }) {
-  const [state, setState] = useAutopilot();
-  const [now, setNow] = useState(Date.now());
-  const [error, setError] = useState('');
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 15000);
-    return () => clearInterval(t);
-  }, []);
-
-  const stages = useMemo(() => {
-    const byId = Object.fromEntries((state?.stages || []).map((s) => [s.id, s]));
-    return FLOW.map((id) => byId[id]).filter(Boolean);
-  }, [state?.stages]);
-  const replies = Object.entries(state?.replyDrafts || {}).sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
-
-  if (!state) return <div className="ap-shell"><p className="ap-empty">Carregando a central…</p></div>;
-  const enabled = !!state.settings?.enabled;
-  const working = stages.filter((s) => s.live?.status === 'working').length;
-
-  const save = async (patch) => {
-    setError('');
-    const res = await window.autopilotAPI.settings(patch);
-    if (!res?.success) setError(res?.error || 'Não foi possível salvar.');
-    else setState((current) => ({ ...current, ...res }));
-  };
-  const runNow = async (stageId) => {
-    setError('');
-    const res = await window.autopilotAPI.runNow(stageId);
-    if (!res?.success && res?.error) setError(res.error);
-  };
-
-  return (
-    <div className={`ap-shell ${enabled ? 'on' : ''}`}>
-      <div className="ap-floor" aria-hidden="true" />
-      <header className="ap-hero">
-        <div>
-          <span className="ap-kicker">Central de Agentes</span>
-          <h1>Sua equipe de prospecção trabalhando {enabled ? 'agora' : 'quando você ligar'}</h1>
-          <p>
-            Eles caçam, triam, pesquisam, escrevem e leem respostas sozinhos, 24h.
-            <b> Nada é enviado sem você:</b> mensagens vão para a fila de aprovação e respostas ficam prontas aqui.
-          </p>
-        </div>
-        <button type="button" className={`ap-power ${enabled ? 'on' : ''}`} onClick={() => save({ enabled: !enabled })} aria-pressed={enabled}>
-          <span className="ap-power-orb"><Power size={22} /></span>
-          <span>
-            <b>Piloto automático {enabled ? 'ligado' : 'desligado'}</b>
-            <small>{enabled ? `${working ? `${working} agente(s) trabalhando agora` : 'de olho, rodando no ritmo de cada um'}` : 'Clique para os agentes começarem'}</small>
-          </span>
-        </button>
-      </header>
-
-      <JarvisCore autopilot={state} onNavigate={onNavigate} />
-
-      <div className="ap-today" aria-label="Hoje">
-        {[
-          ['cacador', 'leads caçados no Maps'],
-          ['radar', 'sites fracos achados'],
-          ['pesquisador', 'leads pesquisados'],
-          ['copywriter', 'mensagens escritas'],
-          ['respostas', 'respostas preparadas'],
-        ].map(([id, label]) => {
-          const meta = AGENT_META[id];
-          const stage = stages.find((s) => s.id === id);
-          if (!meta || !stage) return null;
-          const Icon = meta.Icon;
-          return (
-            <div key={id} className="ap-today-chip" style={{ '--c': meta.color }}>
-              <i>{Icon ? <Icon size={15} /> : null}</i>
-              <div><b>{stage.today}</b><span>{label} hoje</span></div>
-            </div>
-          );
-        })}
-      </div>
-
-      {!aiConfigured && (
-        <div className="ap-alert">Sem IA configurada, os agentes trabalham só com regras (sem mensagens personalizadas nem respostas).
-          <button type="button" onClick={() => onNavigate?.('ai')}>Configurar IA</button>
-        </div>
-      )}
-      {error && <div className="ap-alert">{error}</div>}
-
-      <div className="ap-flow">
-        {stages.map((stage, index) => (
-          <React.Fragment key={stage.id}>
-            <Pod stage={stage} enabled={enabled && !(state.settings?.disabledStages || []).includes(stage.id)} now={now} onRun={runNow} />
-            {index < stages.length - 1 && <span className={`ap-link ${enabled ? 'live' : ''}`} aria-hidden="true" />}
-          </React.Fragment>
-        ))}
-      </div>
-
-      <div className="ap-grid">
-        <section className="ap-panel">
-          <header className="ap-panel-head">
-            <h2>Respostas prontas <em>{replies.length}</em></h2>
-            <span>Quem respondeu e o que dizer agora. Escolha uma e revise antes de enviar.</span>
-          </header>
-          {!replies.length ? (
-            <p className="ap-empty">Nenhuma conversa esperando você. Quando um lead responder, o agente lê e prepara as respostas aqui.</p>
-          ) : (
-            <div className="ap-replies">
-              {replies.map(([phone, draft]) => <ReplyCard key={phone} phone={phone} draft={draft} onNavigate={onNavigate} />)}
-            </div>
-          )}
-        </section>
-
-        <section className="ap-panel ap-feed-panel">
-          <header className="ap-panel-head">
-            <h2><span className={`ap-live-dot ${enabled ? 'on' : ''}`} /> Ao vivo</h2>
-            <span>Tudo o que os agentes fizeram.</span>
-          </header>
-          <ul className="ap-feed">
-            {!(state.feed || []).length && <li className="ap-empty">Ligue o piloto automático para ver os agentes trabalhando.</li>}
-            {(state.feed || []).map((entry) => {
-              const meta = AGENT_META[entry.agent] || AGENT_META.sistema;
-              return (
-                <li key={`${entry.at}-${entry.agent}-${entry.text}`} className={`k-${entry.kind}`} style={{ '--c': meta.color }}>
-                  <i />
-                  <div>
-                    <b>{meta.name}</b> <span className="ap-time">{timeAgo(entry.at, now)}</span>
-                    <p>{entry.text}</p>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      </div>
-
-      <XrayPanel />
-
-      <Missions settings={state.settings} onSave={save} plan={state.plan} />
-    </div>
   );
 }

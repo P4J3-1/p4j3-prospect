@@ -10,6 +10,9 @@ export function installLeadStorage({
   StorageProto = globalThis.Storage?.prototype,
 } = {}) {
   if (!api || !storage || !StorageProto) return false;
+  // Nunca instala duas vezes: uma segunda instalação veria o getItem já
+  // interceptado e, ao "limpar a cópia antiga", apagaria o arquivo de leads.
+  if (StorageProto.getItem?.__sigmaLeads) return true;
 
   const { getItem, setItem, removeItem, clear } = StorageProto;
   const loaded = api.load();
@@ -36,6 +39,7 @@ export function installLeadStorage({
   StorageProto.getItem = function patchedGetItem(key) {
     return isLeads(this, key) ? cache : getItem.call(this, key);
   };
+  StorageProto.getItem.__sigmaLeads = true;
   StorageProto.setItem = function patchedSetItem(key, value) {
     if (!isLeads(this, key)) return setItem.call(this, key, value);
     cache = String(value);

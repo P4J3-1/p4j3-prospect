@@ -86,6 +86,15 @@ describe('renderer lead storage', () => {
     assert.deepEqual(api.saves, ['[{"id":2}]', null]);
   });
 
+  it('instalar duas vezes não apaga o arquivo de leads', () => {
+    const env = makeStorageEnv();
+    const api = makeApi('[leads]');
+    installLeadStorage({ api, ...env });
+    installLeadStorage({ api, ...env });
+    assert.deepEqual(api.saves, []);
+    assert.equal(env.storage.getItem('sigma_leads'), '[leads]');
+  });
+
   it('mantém o localStorage original se o carregamento falhar', () => {
     const env = makeStorageEnv();
     const originalGet = env.StorageProto.getItem;

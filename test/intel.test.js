@@ -91,3 +91,74 @@ describe('imagens de demonstração', () => {
     assert.ok(!/https?:\/\//.test(site + chat));
   });
 });
+
+describe('agente Crítico', () => {
+  const now = Date.UTC(2026, 8, 26, 15);
+  it('várias sugestões com ação pronta, quem espera primeiro, sem "proteger número"', async () => {
+    const { critique } = await import('../renderer/src/critic.mjs');
+    const leads = [];
+    const contacts = {};
+    for (let i = 0; i < 10; i += 1) {
+      const phone = `6199999${String(1000 + i)}`;
+      leads.push({ name: `Barbearia ${i}`, phone, category: 'Barbearia', neighborhood: 'Ceilândia', state: 'DF' });
+      contacts[phone] = i < 3 ? { status: 'respondeu', sentAt: now - 5 * 3600e3, lastReplyAt: now - (3 - i) * 3600e3, name: `Barbearia ${i}` } : { status: 'enviado', sentAt: now - 86400e3 };
+    }
+    for (let i = 0; i < 12; i += 1) {
+      const phone = `6198888${String(1000 + i)}`;
+      leads.push({ name: `Pet ${i}`, phone, category: 'Pet shop' });
+      contacts[phone] = { status: 'enviado', sentAt: now - 86400e3 };
+    }
+    const list = critique({ leads, contacts, queue: { items: [{ status: 'rascunho' }, { status: 'rascunho' }], numbers: [{ phone: '1', risk: { level: 'alto', reasons: ['x'] } }] }, autopilot: { settings: { enabled: false }, replyDrafts: {} }, now });
+    assert.equal(list[0].id, 'responder:61999991000'); // esperou mais
+    assert.ok(list.length >= 5);
+    assert.ok(list.some((x) => x.id === 'aprovar' && x.acao.acao === 'aprovar'));
+    assert.ok(list.some((x) => x.id === 'cacar:Barbearia' && x.acao.parametros.cidade === 'Ceilândia, DF'));
+    assert.ok(list.some((x) => x.id === 'nicho-frio:Pet shop'));
+    assert.ok(list.some((x) => x.id === 'piloto'));
+    assert.ok(!JSON.stringify(list).match(/roteger/));
+  });
+});
+
+describe('agente do Kanban', () => {
+  const now = Date.UTC(2026, 8, 26, 15);
+  const card = (key, columnId, phone, extra = {}) => ({ entityKey: key, columnId, entity: { profile: { name: `Loja ${key} - Guará`, phone } }, ...extra });
+  it('pendências com o texto pronto para confirmar', async () => {
+    const { kanbanTasks } = await import('../renderer/src/critic.mjs');
+    const tasks = kanbanTasks({
+      cards: [
+        card('a', 'contacted', '5561999990001'),
+        card('b', 'proposal', '61999990002', { movedAt: now - 3 * 86400e3 }),
+        card('c', 'sent', '61999990003'),
+        card('d', 'won', '61999990004'),
+        card('e', 'new', '', { reminderAt: now - 1000, reminderNote: 'Ligar para o dono' }),
+      ],
+      contacts: {
+        61999990001: { status: 'respondeu', sentAt: now - 86400e3, lastReplyAt: now - 3600e3 },
+        61999990002: { status: 'lido', sentAt: now - 5 * 86400e3 },
+        61999990003: { status: 'lido', sentAt: now - 4 * 86400e3 },
+      },
+      replyDrafts: { 61999990001: { at: now - 1800e3, sugestoes: ['Claro! Posso te mostrar como funciona?'] } },
+      now,
+    });
+    const byId = Object.fromEntries(tasks.map((t) => [t.id, t]));
+    assert.equal(byId['responder:61999990001'].acao.text, 'Claro! Posso te mostrar como funciona?');
+    assert.match(byId['cobrar:61999990002'].acao.text, /proposta/);
+    assert.equal(byId['followup:61999990003'].acao.text, 'Oi, Loja! Tudo bem? Conseguiu ver minha mensagem?');
+    assert.equal(byId['valor:d'].acao.tipo, 'card');
+    assert.equal(byId['lembrete:e'].detalhe, 'Ligar para o dono');
+    assert.ok(!tasks.some((t) => /https?:/.test(t.acao.text || '')));
+  });
+});
+
+describe('agente do Kanban: resposta já escrita', () => {
+  it('mostra a resposta pronta escrita depois da sua última mensagem', async () => {
+    const { kanbanTasks } = await import('../renderer/src/critic.mjs');
+    const now = Date.UTC(2026, 8, 26, 15);
+    const cards = [{ entityKey: 'x', columnId: 'contacted', entity: { profile: { name: 'Studio X', phone: '61999990009' } } }];
+    const contacts = { 61999990009: { status: 'respondeu', sentAt: now - 7200e3 } };
+    const fresh = kanbanTasks({ cards, contacts, replyDrafts: { 61999990009: { at: now - 3600e3, sugestoes: ['Posso te mostrar?'] } }, now });
+    assert.equal(fresh[0]?.acao.text, 'Posso te mostrar?');
+    const stale = kanbanTasks({ cards, contacts, replyDrafts: { 61999990009: { at: now - 9000e3, sugestoes: ['velha'] } }, now });
+    assert.equal(stale.length, 0);
+  });
+});

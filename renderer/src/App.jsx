@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import {
   EyeOff,
   Search,
@@ -13,23 +13,22 @@ import {
   Kanban,
   MessageCircle,
   Settings2,
-  Bot,
   Workflow,
 } from 'lucide-react';
 import Overview from './components/Overview';
-import MapScraperView from './components/MapScraperView';
-import LeadsManager from './components/LeadsManager';
-import LeadScoring from './components/LeadScoring';
-import KanbanBoard from './components/KanbanBoard';
-import WhatsAppPanel from './components/WhatsAppPanel';
+const MapScraperView = lazy(() => import('./components/MapScraperView'));
+const LeadsManager = lazy(() => import('./components/LeadsManager'));
+const LeadScoring = lazy(() => import('./components/LeadScoring'));
+const KanbanBoard = lazy(() => import('./components/KanbanBoard'));
+const WhatsAppPanel = lazy(() => import('./components/WhatsAppPanel'));
 import NewExtractionModal from './components/NewExtractionModal';
 import OnboardingTour from './components/OnboardingTour';
 import { NotificationProvider, useNotifications } from './components/NotificationCenter';
 import UpdateBanner from './components/UpdateBanner';
 import UpdateSettingsCard from './components/UpdateSettingsCard';
 import BackupCard from './components/BackupCard';
-import AiSettingsPage from './components/AiSettingsPage';
-import AgentsPage from './components/AgentsPage';
+const IntelligencePage = lazy(() => import('./components/IntelligencePage'));
+const AgentsPage = lazy(() => import('./components/AgentsPage'));
 import JarvisConsole from './components/JarvisConsole';
 import { setJarvisContext } from './jarvisContext';
 import { dedupeLeads, normalizeLeadCollection, readLocalArray } from './leadData';
@@ -159,10 +158,9 @@ function CommandPalette({ open, onClose, onNavigate, onNewExtraction }) {
     { id: 'scraper', label: 'Ir para Hunter Maps', desc: 'Mapa + feed de leads', icon: '◎', action: () => { onNavigate('scraper'); onClose(false); } },
     { id: 'overview', label: 'Ir para Visão Geral', desc: 'Centro de comando', icon: '▦', action: () => { onNavigate('overview'); onClose(false); } },
     { id: 'base', label: 'Ir para Base de Leads', desc: 'Filtrar, organizar e exportar', icon: '▤', action: () => { onNavigate('base'); onClose(false); } },
-    { id: 'scoring', label: 'Ir para Lead Scoring', desc: 'Quem ligar primeiro', icon: '✦', action: () => { onNavigate('scoring'); onClose(false); } },
     { id: 'kanban', label: 'Ir para Kanban', desc: 'Funil comercial de todos os leads', icon: '▤', action: () => { onNavigate('kanban'); onClose(false); } },
     { id: 'whatsapp', label: 'Ir para WhatsApp', desc: 'Chats e campanhas', icon: '◐', action: () => { onNavigate('whatsapp'); onClose(false); } },
-    { id: 'ai', label: 'Configurar Inteligência Artificial', desc: 'Provedor, chave, perfil e aprendizado', icon: '✦', action: () => { onNavigate('ai'); onClose(false); } },
+    { id: 'ai', label: 'Ir para Inteligência', desc: 'Feedback, oportunidades e ações do Crítico', icon: '✦', action: () => { onNavigate('ai'); onClose(false); } },
     { id: 'new', label: 'Nova Extração…', desc: 'Criar busca no Google Maps', icon: '＋', action: () => { onClose(false); onNewExtraction(); } },
   ];
   const filtered = q.trim() ? items.filter(i => (`${i.label} ${i.desc}`.toLowerCase().includes(q.toLowerCase()))) : items;
@@ -285,9 +283,9 @@ function AppInner() {
   }, []);
   useEffect(()=>{
     const onKey=(e)=>{
-      if((e.metaKey||e.ctrlKey) && /^[1-8]$/.test(e.key)){
+      if((e.metaKey||e.ctrlKey) && /^[1-7]$/.test(e.key)){
         e.preventDefault();
-        const map=['overview','scraper','base','scoring','kanban','whatsapp','ai','agents'];
+        const map=['overview','scraper','base','kanban','whatsapp','ai','agents'];
         const i=Number(e.key)-1; if(map[i]) setActiveTab(map[i]);
       }
       if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='k' && activeTab === 'overview'){
@@ -850,8 +848,8 @@ function AppInner() {
         );
       case 'ai':
         return (
-          <ErrorBoundaryLite label="Inteligência Artificial">
-            <AiSettingsPage />
+          <ErrorBoundaryLite label="Inteligência">
+            <IntelligencePage onNavigate={navigate} />
           </ErrorBoundaryLite>
         );
       case 'settings':
@@ -1023,19 +1021,11 @@ function AppInner() {
           </button>
 
           <button
-            className={`nav-item ${activeTab === 'scoring' ? 'active' : ''}`}
-            onClick={() => navigate('scoring')}
-          >
-            <span className="ico" aria-hidden="true"><Sparkles size={17} /></span>
-            <span className="nav-label-text">Lead Scoring</span><span className="nav-kbd">4</span>
-          </button>
-
-          <button
             className={`nav-item ${activeTab === 'kanban' ? 'active' : ''}`}
             onClick={() => navigate('kanban')}
           >
             <span className="ico" aria-hidden="true"><Kanban size={17} /></span>
-            <span className="nav-label-text">Kanban</span><span className="nav-kbd">5</span>
+            <span className="nav-label-text">Kanban</span><span className="nav-kbd">4</span>
           </button>
 
           <button
@@ -1043,15 +1033,15 @@ function AppInner() {
             onClick={() => navigate('whatsapp')}
           >
             <span className="ico" aria-hidden="true"><MessageCircle size={17} /></span>
-            <span className="nav-label-text">WhatsApp</span><span className="nav-kbd">6</span>
+            <span className="nav-label-text">WhatsApp</span><span className="nav-kbd">5</span>
           </button>
 
           <button
             className={`nav-item ${activeTab === 'ai' ? 'active' : ''}`}
             onClick={() => navigate('ai')}
           >
-            <span className="ico" aria-hidden="true"><Bot size={17} /></span>
-            <span className="nav-label-text">Inteligência Artificial</span><span className="nav-kbd">7</span>
+            <span className="ico" aria-hidden="true"><Sparkles size={17} /></span>
+            <span className="nav-label-text">Inteligência</span><span className="nav-kbd">6</span>
           </button>
 
           <button
@@ -1059,7 +1049,7 @@ function AppInner() {
             onClick={() => navigate('agents')}
           >
             <span className="ico" aria-hidden="true"><Workflow size={17} /></span>
-            <span className="nav-label-text">Agentes</span><span className="nav-kbd">8</span>
+            <span className="nav-label-text">Agentes</span><span className="nav-kbd">7</span>
           </button>
 
         </nav>
@@ -1108,7 +1098,7 @@ function AppInner() {
         <main className="app-screen-container">
           <UpdateBanner />
           <div key={activeTab} className="view-transition" style={{ flex:1, display:'flex', flexDirection:'column' }}>
-            {renderContent()}
+            <Suspense fallback={<div className="tab-loading">Carregando…</div>}>{renderContent()}</Suspense>
           </div>
         </main>
         {activeTab === 'overview' && <CommandPalette open={isCmdOpen} onClose={setIsCmdOpen} onNavigate={setActiveTab} onNewExtraction={() => setIsNewExtractionOpen(true)} />}

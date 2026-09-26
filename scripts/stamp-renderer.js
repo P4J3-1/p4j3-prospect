@@ -24,10 +24,12 @@ html = html.replace(/\s*<style>\s*#sigma-build-banner[\s\S]*?<\/style>/gi, "");
 html = html.replace(/\s*<div id="sigma-build-banner">[\s\S]*?<\/div>/gi, "");
 html = html.replace(/\s*<script>\s*setTimeout\(function \(\) \{[\s\S]*?\[SIGMA\] scripts[\s\S]*?<\/script>/gi, "");
 
-// cache-bust em scripts e css
+// cache-bust só no CSS. O JS de entrada fica sem ?v=: as telas carregadas sob
+// demanda importam "./sigma-app.js" e, com query, o navegador criaria uma
+// segunda cópia do app (e do React). O cache já é limpo a cada abertura.
 html = html.replace(
   /(src|href)="(\.\/assets\/[^"?]+)(?:\?[^"]*)?"/g,
-  (_, attr, asset) => `${attr}="${asset}?v=${stamp}"`,
+  (_, attr, asset) => (asset.endsWith(".js") ? `${attr}="${asset}"` : `${attr}="${asset}?v=${stamp}"`),
 );
 
 // título visível

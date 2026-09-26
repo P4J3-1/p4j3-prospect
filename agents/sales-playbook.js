@@ -19,7 +19,7 @@ const OPENERS = [
   "{Oi|Olá}! {Tudo bem|Como vai}? Esse número ainda é de {{empresa}}?",
 ];
 
-/** Ofertas de entrada sugeridas (o dono edita em Inteligência Artificial → Seu negócio). */
+/** Ofertas de entrada sugeridas (o dono edita em Agentes → Motor de IA). */
 const DEFAULT_OFFERS = [
   "Ajuste completo do Google (perfil, fotos, horários e respostas às avaliações) — R$ 300",
   "Resposta automática no WhatsApp para quem chama fora do horário — R$ 300",

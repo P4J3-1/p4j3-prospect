@@ -789,7 +789,7 @@ export default function MapScraperView({
         type: 'success',
         category: 'system',
         title: 'Triagem concluída',
-        message: `${res.triaged} lead(s) triados · ${res.hot || 0} de alto potencial${res.aiUsed ? ` · ${res.aiUsed} com IA` : ' · sem IA (configure em Inteligência Artificial)'}.`,
+        message: `${res.triaged} lead(s) triados · ${res.hot || 0} de alto potencial${res.aiUsed ? ` · ${res.aiUsed} com IA` : ' · sem IA (configure em Agentes → Motor de IA)'}.`,
       });
     } catch (error) {
       addNotification({ type: 'warning', category: 'system', title: 'Triagem', message: error?.message || 'Não foi possível triar agora.' });

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Zap, MessageCircle } from 'lucide-react';
+import { Zap, MessageCircle, RefreshCw } from 'lucide-react';
 import { readLocalArray } from '../leadData';
 import { useContactStatus, useWaCheck } from '../useContactStatus';
 import { useTriage } from '../useTriage';
@@ -7,6 +7,8 @@ import { useQueue } from '../useQueue';
 import { useLeadMemory } from '../useLeadMemory';
 import { CONTACT_STATUS } from '../contactStatus.mjs';
 import { dailyBriefing, resultsBy, topIntent } from '../intel.mjs';
+import { critique, KINDS } from '../critic.mjs';
+import { runSuggestion } from '../runSuggestion';
 
 /**
  * Núcleo J.A.R.V.I.S.: briefing do dia, quem agir agora (intenção) e o que
@@ -21,6 +23,14 @@ export default function JarvisCore({ autopilot, onNavigate }) {
   const [name, setName] = useState('');
   const [by, setBy] = useState('nicho');
   const [leadsVersion, setLeadsVersion] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  const [busyId, setBusyId] = useState('');
+  const [showAll, setShowAll] = useState(false);
+  // Reavalia sozinho a cada minuto (tudo local, sem gastar IA).
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     window.leadScoringAPI?.getSettings?.().then((res) => setName(res?.settings?.commercial?.sellerName || '')).catch(() => {});
@@ -31,45 +41,23 @@ export default function JarvisCore({ autopilot, onNavigate }) {
 
   const leads = useMemo(() => readLocalArray('sigma_leads'), [leadsVersion, contacts]); // eslint-disable-line react-hooks/exhaustive-deps
   const briefing = useMemo(
-    () => dailyBriefing({ name, leads, contacts, queue, autopilot, triage, waCheck }),
-    [name, leads, contacts, queue, autopilot, triage, waCheck],
+    () => dailyBriefing({ name, leads, contacts, queue, autopilot, triage, waCheck, now }),
+    [name, leads, contacts, queue, autopilot, triage, waCheck, now],
+  );
+  const suggestions = useMemo(
+    () => critique({ leads, contacts, queue, autopilot, triage, waCheck, memory, now }),
+    [leads, contacts, queue, autopilot, triage, waCheck, memory, now],
   );
   const hot = useMemo(() => topIntent(leads, { contacts, triage, memory }), [leads, contacts, triage, memory]);
   const results = useMemo(() => resultsBy(leads, contacts, by).slice(0, 6), [leads, contacts, by]);
   const working = (autopilot?.stages || []).filter((s) => s.live?.status === 'working').length;
 
-  /** Executa a próxima ação de verdade (abre a conversa certa, a fila, liga o piloto…). */
-  const runAction = (acao) => {
-    if (!acao) return;
-    if (acao.tipo === 'responder' && acao.phone) {
-      const pending = { phone: acao.phone, name: acao.name, text: '' };
-      window.__p4j3PendingChat = pending;
-      window.dispatchEvent(new CustomEvent('sigma:open-chat', { detail: pending }));
-      onNavigate?.('whatsapp');
-      return;
-    }
-    if (acao.tipo === 'fila' || acao.tipo === 'montar') {
-      window.__p4j3OpenQueue = acao.tipo === 'fila';
-      if (acao.tipo === 'montar') {
-        window.__p4j3PendingFilter = { aba: 'disponiveis', filtro: 'pronto' };
-        window.dispatchEvent(new CustomEvent('sigma:hunter-filter', { detail: window.__p4j3PendingFilter }));
-      } else {
-        window.dispatchEvent(new CustomEvent('sigma:open-queue'));
-      }
-      onNavigate?.('scraper');
-      return;
-    }
-    if (acao.tipo === 'piloto') {
-      window.autopilotAPI?.settings?.({ enabled: true });
-      return;
-    }
-    if (acao.tipo === 'respostas') {
-      onNavigate?.('agents');
-      setTimeout(() => document.querySelector('.ap-replies, .ap-grid')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
-      return;
-    }
-    onNavigate?.(acao.go);
+  const run = async (item) => {
+    if (!item?.acao || busyId) return;
+    setBusyId(item.id);
+    try { await runSuggestion(item.acao, onNavigate); } finally { setBusyId(''); }
   };
+  const visible = showAll ? suggestions : suggestions.slice(0, 5);
 
   const openChat = (item) => {
     window.__p4j3PendingChat = { phone: item.key, name: item.lead.name, text: '' };
@@ -94,9 +82,36 @@ export default function JarvisCore({ autopilot, onNavigate }) {
         <ul>
           {briefing.linhas.map((l) => <li key={l}>{l}</li>)}
         </ul>
-        {briefing.acao && (
-          <button type="button" className="jv-action" onClick={() => runAction(briefing.acao)}>
-            <Zap size={14} /> Próxima ação: {briefing.acao.texto}
+      </div>
+
+      <div className="jv-sugs">
+        <div className="jv-results-head">
+          <h3>Sugestões <em>crítico · ao vivo</em></h3>
+          <button type="button" className="jv-refresh" title="Reavaliar agora" onClick={() => setNow(Date.now())}><RefreshCw size={13} /></button>
+        </div>
+        {!suggestions.length ? (
+          <p className="ap-empty">Tudo em dia, senhor. Nada pendente agora.</p>
+        ) : (
+          <ul>
+            {visible.map((item) => (
+              <li key={item.id} className="jv-sug" style={{ '--c': KINDS[item.kind]?.color }}>
+                <div>
+                  <small>{KINDS[item.kind]?.label}</small>
+                  <b>{item.titulo}</b>
+                  <span>{item.detalhe}</span>
+                </div>
+                {item.acao && (
+                  <button type="button" disabled={Boolean(busyId)} onClick={() => run(item)}>
+                    <Zap size={13} /> {busyId === item.id ? 'Fazendo…' : item.acao.texto}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {suggestions.length > 5 && (
+          <button type="button" className="jv-more" onClick={() => setShowAll((v) => !v)}>
+            {showAll ? 'Mostrar menos' : `Ver todas (${suggestions.length})`}
           </button>
         )}
       </div>
