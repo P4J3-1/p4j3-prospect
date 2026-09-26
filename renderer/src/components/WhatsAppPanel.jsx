@@ -45,6 +45,8 @@ import { resolveGroupMembers } from '../leadMatch.mjs';
 import { buildNewChatCandidates } from '../newChatCandidates.mjs';
 import { useContactStatus, useMystery } from '../useContactStatus';
 import { intentScore } from '../intel.mjs';
+import { setJarvisContext } from '../jarvisContext';
+import { jarvisPref, jarvisSay } from '../jarvisVoice';
 import { useTriage } from '../useTriage';
 import { CONTACT_STATUS, phoneCore, timeAgo } from '../contactStatus.mjs';
 import { SEGMENTS, triageFor } from '../triage.mjs';
@@ -4260,6 +4262,29 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const conversationStarted = activeContact?.status === 'respondeu';
   const leadMemoryMap = useLeadMemory();
   const mysteryMap = useMystery();
+  // Conversa aberta → contexto do J.A.R.V.I.S.
+  useEffect(() => {
+    if (!activeChatJid) {
+      setJarvisContext({ conversa: null });
+      return;
+    }
+    setJarvisContext({
+      conversa: {
+        name: activeLead?.name || activeChatName,
+        phone: activeLeadPhone,
+        messages: messages.slice(-12).map((m) => ({ fromMe: !!m?.key?.fromMe, text: extractText(unwrapMessage(m?.message || {})) || '' })).filter((m) => m.text),
+      },
+    });
+  }, [activeChatJid, activeLeadPhone, activeLead, activeChatName, messages]);
+  // Comentário ao navegar: 1 frase ao abrir a conversa de um lead (não de conversa pessoal).
+  const commentedRef = useRef('');
+  useEffect(() => {
+    if (!activeLeadPhone || activeLeadPhone.length < 10 || commentedRef.current === activeLeadPhone) return;
+    if (!activeLead && !contacts[activeLeadPhone]) return;
+    commentedRef.current = activeLeadPhone;
+    if (!jarvisPref('comentarios')) return;
+    window.jarvisAPI?.comment?.(activeLeadPhone).then((res) => jarvisSay(res?.text)).catch(() => {});
+  }, [activeLeadPhone, activeLead, contacts]);
   // HUD do lead: intenção, temperatura, cliente oculto e o próximo passo.
   const leadHud = useMemo(() => {
     const memory = leadMemoryMap[activeLeadPhone];

@@ -45,6 +45,7 @@ import {
 import { useNotifications } from './NotificationCenter';
 import { useContactStatus, useWaCheck, useMystery } from '../useContactStatus';
 import { useAutopilot } from '../useAutopilot';
+import { setJarvisContext } from '../jarvisContext';
 import { useTriage } from '../useTriage';
 import { CONTACT_STATUS, contactFor, phoneCore, timeAgo } from '../contactStatus.mjs';
 import { triageFor } from '../triage.mjs';
@@ -355,6 +356,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   const [groupSearch, setGroupSearch] = useState('');
 
   const [activeLead, setActiveLead] = useState(null);
+  useEffect(() => { setJarvisContext({ lead: activeLead || null }); }, [activeLead]);
   const [leadModalTab, setLeadModalTab] = useState('dados');
   const [phonePromptLead, setPhonePromptLead] = useState(null);
   const [kanbanSnapshot, setKanbanSnapshot] = useState({ cards: [], board: { columns: [] } });

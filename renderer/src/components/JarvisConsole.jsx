@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Volume2, VolumeX, X } from 'lucide-react';
-import { speak, voiceEnabled, setVoiceEnabled } from '../jarvisVoice';
+import { Send, Volume2, VolumeX, X, Eye, Sunrise } from 'lucide-react';
+import { speak, voiceEnabled, setVoiceEnabled, jarvisPref, setJarvisPref } from '../jarvisVoice';
+import { getJarvisContext } from '../jarvisContext';
 
 const SUGGESTIONS = [
+  'O que acha deste lead?',
+  'Como respondo esta conversa?',
   'Como estamos hoje?',
   'Caçar barbearia em Taguatinga, DF',
   'Radar de pet shop em Ceilândia, DF',
@@ -21,6 +24,10 @@ export default function JarvisConsole({ onNavigate }) {
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState([{ from: 'jarvis', text: 'Às suas ordens, senhor. O que vamos prospectar?' }]);
   const [voice, setVoice] = useState(voiceEnabled());
+  const [comments, setComments] = useState(jarvisPref('comentarios'));
+  const [briefingOn, setBriefingOn] = useState(jarvisPref('briefing'));
+  const logRef = useRef(log);
+  logRef.current = log;
   const inputRef = useRef(null);
   const listRef = useRef(null);
 
@@ -33,6 +40,20 @@ export default function JarvisConsole({ onNavigate }) {
       if (e.key === 'Escape') setOpen(false);
     };
     const onOpen = () => setOpen(true);
+    const onLocalSay = (e) => {
+      const said = e.detail?.text;
+      if (said) setLog((l) => [...l, { from: 'jarvis', text: said }].slice(-40));
+    };
+    window.addEventListener('sigma:jarvis-say', onLocalSay);
+    // Briefing falado ao abrir o app (uma vez).
+    const briefingTimer = setTimeout(async () => {
+      if (!jarvisPref('briefing')) return;
+      const res = await window.jarvisAPI?.briefing?.().catch(() => null);
+      if (res?.text) {
+        setLog((l) => [...l, { from: 'jarvis', text: res.text }].slice(-40));
+        speak(res.text);
+      }
+    }, 7000);
     window.addEventListener('keydown', onKey);
     window.addEventListener('sigma:jarvis-open', onOpen);
     // Avisos proativos (lead respondeu, caçada concluída): falados e no histórico.
@@ -44,6 +65,8 @@ export default function JarvisConsole({ onNavigate }) {
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('sigma:jarvis-open', onOpen);
+      window.removeEventListener('sigma:jarvis-say', onLocalSay);
+      clearTimeout(briefingTimer);
       if (typeof off === 'function') off();
     };
   }, []);
@@ -58,10 +81,20 @@ export default function JarvisConsole({ onNavigate }) {
     setBusy(true);
     setLog((l) => [...l, { from: 'voce', text: value }]);
     try {
-      const res = await window.jarvisAPI.command(value);
+      // Ela vê a tela junto com você e lembra o que acabou de ser dito.
+      const history = logRef.current.slice(-6).map((m) => ({ from: m.from, text: m.text }));
+      const res = await window.jarvisAPI.command(value, getJarvisContext(), history);
       const reply = res?.success ? res.reply : res?.error || 'Não consegui agora, senhor.';
       setLog((l) => [...l, { from: 'jarvis', text: reply, ai: res?.ai }].slice(-40));
       speak(reply, { priority: true });
+      if (res?.openChat?.phone) {
+        window.__p4j3PendingChat = res.openChat;
+        window.dispatchEvent(new CustomEvent('sigma:open-chat', { detail: res.openChat }));
+      }
+      if (res?.filter) {
+        window.__p4j3PendingFilter = res.filter;
+        window.dispatchEvent(new CustomEvent('sigma:hunter-filter', { detail: res.filter }));
+      }
       if (res?.navigate) onNavigate?.(res.navigate);
     } catch (error) {
       setLog((l) => [...l, { from: 'jarvis', text: error?.message || 'Falhou.' }]);
@@ -85,8 +118,14 @@ export default function JarvisConsole({ onNavigate }) {
           <span className={`jv-console-core ${busy ? 'busy' : ''}`} aria-hidden="true" />
           <div>
             <b>J.A.R.V.I.S.</b>
-            <small>{busy ? 'processando…' : 'ouvindo suas ordens · Ctrl+J'}</small>
+            <small>{busy ? 'analisando…' : `vendo: ${({ overview: 'Visão Geral', scraper: 'Hunter Maps', base: 'Base de Leads', kanban: 'Kanban', whatsapp: 'WhatsApp', agents: 'Agentes', ai: 'IA', scoring: 'Lead Scoring', settings: 'Configurações' })[getJarvisContext().tela] || 'o sistema'}${getJarvisContext().conversa?.nome ? ` · ${getJarvisContext().conversa.nome}` : getJarvisContext().lead?.nome ? ` · ${getJarvisContext().lead.nome}` : ''} · Ctrl+J`}</small>
           </div>
+          <button type="button" className={`ap-icon ${comments ? 'on' : ''}`} title={comments ? 'Comentários ao navegar: ligados' : 'Comentários ao navegar: desligados'} onClick={() => { setJarvisPref('comentarios', !comments); setComments(!comments); }}>
+            <Eye size={16} />
+          </button>
+          <button type="button" className={`ap-icon ${briefingOn ? 'on' : ''}`} title={briefingOn ? 'Briefing ao abrir: ligado' : 'Briefing ao abrir: desligado'} onClick={() => { setJarvisPref('briefing', !briefingOn); setBriefingOn(!briefingOn); }}>
+            <Sunrise size={16} />
+          </button>
           <button type="button" className="ap-icon" title={voice ? 'Desligar voz' : 'Ligar voz'} onClick={() => { setVoiceEnabled(!voice); setVoice(!voice); }}>
             {voice ? <Volume2 size={16} /> : <VolumeX size={16} />}
           </button>

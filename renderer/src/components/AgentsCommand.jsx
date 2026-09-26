@@ -260,7 +260,7 @@ export default function AgentsCommand({ onNavigate, aiConfigured }) {
       <div className="ap-flow">
         {stages.map((stage, index) => (
           <React.Fragment key={stage.id}>
-            <Pod stage={stage} enabled={enabled} now={now} onRun={runNow} />
+            <Pod stage={stage} enabled={enabled && !(state.settings?.disabledStages || []).includes(stage.id)} now={now} onRun={runNow} />
             {index < stages.length - 1 && <span className={`ap-link ${enabled ? 'live' : ''}`} aria-hidden="true" />}
           </React.Fragment>
         ))}

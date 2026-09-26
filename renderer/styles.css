@@ -9202,3 +9202,4 @@ html[data-theme="dark"] .quality-chip.on { background: color-mix(in srgb, var(--
 .intel-chip { font-size: 11px; padding: 2px 7px; border-radius: 99px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; background: #f1f5f9; color: #334155; }
 .intel-chip.hot { background: #fef3c7; color: #92400e; font-weight: 700; } .intel-chip.mid { background: #e0f2fe; color: #075985; } .intel-chip.low { background: #f1f5f9; color: #64748b; }
 .intel-chip.good { background: #dcfce7; color: #166534; } .intel-chip.bad { background: #fee2e2; color: #991b1b; }
+.jv-console .ap-icon.on { color: #67e8f9; }

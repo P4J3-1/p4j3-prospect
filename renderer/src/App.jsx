@@ -31,6 +31,7 @@ import BackupCard from './components/BackupCard';
 import AiSettingsPage from './components/AiSettingsPage';
 import AgentsPage from './components/AgentsPage';
 import JarvisConsole from './components/JarvisConsole';
+import { setJarvisContext } from './jarvisContext';
 import { dedupeLeads, normalizeLeadCollection, readLocalArray } from './leadData';
 import { splitBatchInput, buildExtractionTargets, MAX_MATRIX_TARGETS } from './batchSplit.mjs';
 
@@ -705,6 +706,10 @@ function AppInner() {
   };
   const saveExtractionPartialRef = useRef(saveExtractionPartial);
   saveExtractionPartialRef.current = saveExtractionPartial;
+  // O J.A.R.V.I.S. sabe em que tela o senhor está.
+  useEffect(() => {
+    setJarvisContext({ tela: activeTab, lead: null, ...(activeTab !== 'whatsapp' ? { conversa: null } : {}) });
+  }, [activeTab]);
   const startExtractionRef = useRef(handleStartExtraction);
   startExtractionRef.current = handleStartExtraction;
 

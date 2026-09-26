@@ -157,7 +157,9 @@ contextBridge.exposeInMainWorld("autopilotAPI", {
 });
 
 contextBridge.exposeInMainWorld("jarvisAPI", {
-  command: (text) => ipcRenderer.invoke("jarvis-command", { text }),
+  command: (text, context, history) => ipcRenderer.invoke("jarvis-command", { text, context, history }),
+  comment: (phone) => ipcRenderer.invoke("jarvis-comment", { phone }),
+  briefing: () => ipcRenderer.invoke("jarvis-briefing"),
   xray: () => ipcRenderer.invoke("whatsapp-xray"),
   onSay: subscribe("jarvis-say"),
 });

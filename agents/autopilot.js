@@ -82,6 +82,13 @@ class Autopilot {
     const next = { ...this.settings };
     if (typeof patch.enabled === "boolean") next.enabled = patch.enabled;
     if (typeof patch.autoMissions === "boolean") next.autoMissions = patch.autoMissions;
+    // Pausar/retomar um agente específico: { stage: "radar", on: false }.
+    if (patch.stage && typeof patch.on === "boolean") {
+      const off = new Set(next.disabledStages || []);
+      if (patch.on) off.delete(String(patch.stage));
+      else off.add(String(patch.stage));
+      next.disabledStages = [...off];
+    }
     for (const key of ["reserveLeads", "huntGoal", "draftTarget", "researchPerRun"]) {
       if (patch[key] !== undefined) next[key] = Math.max(0, Math.min(500, Math.round(Number(patch[key]) || 0)));
     }
@@ -181,6 +188,7 @@ class Autopilot {
       for (const stage of this.stages) {
         if (!this.settings.enabled) break;
         if (!this.isDue(stage)) continue;
+        if ((this.settings.disabledStages || []).includes(stage.id)) continue;
         await this.runStage(stage);
       }
     } finally {

@@ -52,3 +52,14 @@ describe('ordens do J.A.R.V.I.S.', () => {
     assert.deepEqual(fallback.parametros, { quantidade: 10 });
   });
 });
+
+describe('J.A.R.V.I.S. com contexto', () => {
+  const { parseByRules } = require('../agents/jarvis');
+  it('ordens novas: conversa, proposta, não contatar, ajustar e pausar agente', () => {
+    assert.deepEqual(parseByRules('abre a conversa da COTTA'), { acao: 'abrir_conversa', parametros: { lead: 'COTTA' } });
+    assert.equal(parseByRules('gerar proposta').parametros.lead, 'este');
+    assert.deepEqual(parseByRules('muda a meta para 60'), { acao: 'ajustar', parametros: { alvo: 'meta_diaria', valor: 60 } });
+    assert.deepEqual(parseByRules('pausa o radar'), { acao: 'agente', parametros: { nome: 'radar', ligar: false } });
+    assert.equal(parseByRules('mostra os quentes').parametros.filtro, 'alto_potencial');
+  });
+});

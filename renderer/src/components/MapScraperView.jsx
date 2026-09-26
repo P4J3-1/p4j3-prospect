@@ -38,6 +38,7 @@ import LeadIntelPanel from './LeadIntelPanel';
 import QueuePanel from './QueuePanel';
 import WhatsAppRefresh from './WhatsAppRefresh';
 import { useAutopilot } from '../useAutopilot';
+import { setJarvisContext } from '../jarvisContext';
 import { useQueue, activeQueueByPhone } from '../useQueue';
 import { useLeadMemory, TEMPERATURE } from '../useLeadMemory';
 import { useContactStatus, useWaCheck, useMystery } from '../useContactStatus';
@@ -349,6 +350,25 @@ export default function MapScraperView({
 
   // Seleção e foco
   const [selectedLeadId, setSelectedLeadId] = useState(null);
+  useEffect(() => {
+    const lead = selectedLeadId ? leads.find((l, i) => (l.id || `lead_${i}`) === selectedLeadId) : null;
+    setJarvisContext({ lead: lead || null });
+  }, [selectedLeadId, leads]);
+  // "Mostra os quentes": o J.A.R.V.I.S. aplica aba + filtro.
+  useEffect(() => {
+    const apply = (f) => {
+      if (!f) return;
+      if (f.aba) setScraperTab(f.aba);
+      setQualityChips(f.filtro ? [f.filtro] : []);
+    };
+    if (window.__p4j3PendingFilter) {
+      apply(window.__p4j3PendingFilter);
+      window.__p4j3PendingFilter = null;
+    }
+    const onFilter = (e) => { apply(e.detail); window.__p4j3PendingFilter = null; };
+    window.addEventListener('sigma:hunter-filter', onFilter);
+    return () => window.removeEventListener('sigma:hunter-filter', onFilter);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);

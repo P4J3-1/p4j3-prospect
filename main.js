@@ -71,7 +71,7 @@ const { DailyQuota } = require("./campaigns/daily-quota");
 const { AgentStore } = require("./agents/agent-store");
 const { Autopilot } = require("./agents/autopilot");
 const { DEFAULT_OFFERS } = require("./agents/sales-playbook");
-const { understand, SCREENS } = require("./agents/jarvis");
+const { understand, SCREENS, AGENT_IDS, norm } = require("./agents/jarvis");
 const { whatsappXray } = require("./utils/whatsapp-xray");
 const { runAnalyst, suggestReplies, writeProposal } = require("./agents/ai-agents");
 const { LeadMemory, temperatureOf } = require("./campaigns/lead-memory");
@@ -4765,19 +4765,111 @@ function approveBest(quantity = 20) {
   return approved;
 }
 
-ipcMain.handle("jarvis-command", async (_, { text } = {}) => {
+/** Resolve "COTTA", "este" ou um telefone para um lead da base. */
+function resolveLead(ref, contexto) {
+  const text = String(ref || "").trim();
+  const focus = contexto?.conversa?.telefone || contexto?.lead?.telefone || "";
+  if (!text || /^(este|esse|essa|esta|ele|ela|dele|dela|atual)$/i.test(text)) {
+    if (!focus) return null;
+    return leadByPhone(focus) || { name: contexto?.conversa?.nome || contexto?.lead?.nome || "", phone: focus };
+  }
+  const digits = text.replace(/\D/g, "");
+  if (digits.length >= 10) return leadByPhone(digits) || { name: "", phone: digits };
+  const wanted = norm(text);
+  const leads = allLeads();
+  return leads.find((l) => norm(l?.name) === wanted)
+    || leads.find((l) => norm(l?.name).includes(wanted))
+    || leads.find((l) => wanted.includes(norm(l?.name)) && norm(l?.name).length >= 4)
+    || null;
+}
+
+/** Dossiê do lead em foco: tudo que o sistema sabe dele, para a análise. */
+function leadDossier(phone, leadHint = null) {
+  const key = phoneKey(phone);
+  const lead = (key.length >= 10 ? leadByPhone(key) : null) || leadHint || {};
+  if (key.length < 10 && !lead.name) return null;
+  const clean = cleanLeadInput(lead);
+  const triage = triageStore?.getAll()?.[triageKey(clean)] || null;
+  const contact = contactStatus?.get(key) || null;
+  const m = contactStatus?.getMystery(key) || null;
+  const provider = getActiveWhatsAppProvider();
+  return {
+    nome: lead.name || contact?.name || "",
+    nicho: lead.category || "",
+    regiao: lead.neighborhood || lead.city || "",
+    avaliacao: lead.rating ? `${lead.rating} (${lead.reviews || lead.reviewCount || 0})` : "",
+    site: lead.website || "",
+    potencial: triage?.score ?? null,
+    problemas: triage?.findings || [],
+    diagnostico_site: lead.webAudit?.issues || [],
+    telefone: key.length >= 10 ? key : "sem telefone",
+    whatsapp_confirmado: contactStatus?.getWaCheck()?.[key]?.exists ?? null,
+    status_contato: contact?.status || "nao_contatado",
+    ultima_resposta: contact?.lastReplyAt ? new Date(contact.lastReplyAt).toLocaleString("pt-BR") : "",
+    respostas_automaticas: contact?.autoReplies || 0,
+    cliente_oculto: m ? (m.delayMin != null ? `respondeu um cliente em ${m.delayMin} min` : "não respondeu o cliente") : "",
+    dono: autopilot?.intel?.[key]?.decisor?.nome || lead.decisor || "",
+    memoria: leadMemory?.get(key) || null,
+    na_fila: (sendQueue?.historyFor(key) || []).slice(-3).map((i) => `${i.kind}: ${i.status}`),
+    conversa: provider?.conversationFor && key.length >= 10 ? provider.conversationFor(key, 12).map((x) => ({ de: x.fromMe ? "voce" : "lead", texto: x.text.slice(0, 300) })) : [],
+  };
+}
+
+/** Uma frase de leitura rápida do lead (sem IA: instantânea e sem custo). */
+function quickRead(phone, leadHint = null) {
+  const d = leadDossier(phone, leadHint);
+  if (!d) return "";
+  const parts = [];
+  if (d.telefone === "sem telefone") {
+    return `${d.nome} não tem telefone na base${d.potencial != null ? ` (potencial ${d.potencial})` : ""}${d.problemas[0] ? `; ${d.problemas[0].toLowerCase()}` : ""}. Sem WhatsApp não dá para abordar: o Enriquecedor pode procurar o número no site, senhor.`;
+  }
+  if (d.status_contato === "respondeu") parts.push(`${d.nome || "Este lead"} respondeu${d.ultima_resposta ? ` (${d.ultima_resposta.slice(11, 16)})` : ""}`);
+  else if (d.status_contato === "nao_contatado") parts.push(`${d.nome || "Este lead"} ainda não foi abordado`);
+  else parts.push(`${d.nome || "Este lead"}: mensagem ${d.status_contato}, ainda sem resposta`);
+  if (d.potencial != null) parts.push(`potencial ${d.potencial}`);
+  if (d.cliente_oculto) parts.push(`no teste de cliente oculto, ${d.cliente_oculto}`);
+  else if (d.problemas[0]) parts.push(d.problemas[0].toLowerCase());
+  const next = d.status_contato === "respondeu" ? "sugiro conduzir com IA decide a próxima" : d.status_contato === "nao_contatado" ? "sugiro começar pela abertura curta" : "vale aguardar o follow-up";
+  return `${parts.join(", ")}. ${next[0].toUpperCase()}${next.slice(1)}, senhor.`;
+}
+
+const ADJUST_LIMITS = {
+  meta_diaria: [1, 1000], teto_por_numero: [1, 300], intervalo: [30, 3600], rascunhos: [0, 500], reserva: [0, 500],
+};
+
+ipcMain.handle("jarvis-comment", async (_, { phone } = {}) => ({ success: true, text: quickRead(limitString(phone, 40, "")) }));
+
+ipcMain.handle("jarvis-briefing", async () => {
+  const d = jarvisData();
+  const lines = [`${new Date().getHours() < 12 ? "Bom dia" : new Date().getHours() < 18 ? "Boa tarde" : "Boa noite"}, senhor.`];
+  lines.push(`Hoje foram ${d.hoje.enviados} contato${d.hoje.enviados === 1 ? "" : "s"} e ${d.hoje.responderam} resposta${d.hoje.responderam === 1 ? "" : "s"}.`);
+  if (d.esperando_voce.length) lines.push(`${d.esperando_voce.length} lead${d.esperando_voce.length === 1 ? " está" : "s estão"} esperando o senhor${d.esperando_voce[0] ? `, a começar por ${d.esperando_voce[0]}` : ""}.`);
+  if (d.fila.rascunho) lines.push(`Há ${d.fila.rascunho} mensagens na fila para aprovar.`);
+  lines.push(d.piloto_ligado ? "Os agentes estão em campo." : "O piloto automático está desligado.");
+  return { success: true, text: lines.join(" ") };
+});
+
+ipcMain.handle("jarvis-command", async (_, { text, context, history } = {}) => {
   const order = limitString(text, 500, "").trim();
   if (!order) return { success: false, error: "Diga o que fazer." };
   try {
     const dados = jarvisData();
-    const plan = await understand(order, { runAi: agentAi("jarvis"), dados });
+    const contexto = context && typeof context === "object" ? context : null;
+    const focusPhone = contexto?.conversa?.telefone || contexto?.lead?.telefone || "";
+    // Lead na tela sem telefone: acha pelo nome para analisar mesmo assim.
+    const focusLead = !focusPhone && contexto?.lead?.nome ? resolveLead(contexto.lead.nome, null) : null;
+    const dossie = focusPhone || focusLead ? leadDossier(focusPhone, focusLead) : null;
+    const historico = (Array.isArray(history) ? history : []).slice(-6).map((h) => ({ de: h?.from === "voce" ? "vendedor" : "jarvis", texto: limitString(String(h?.text || ""), 300, "") }));
+    const plan = await understand(order, { runAi: agentAi("jarvis"), dados, contexto, dossie, historico });
     const p = plan.parametros || {};
     let reply = plan.resposta;
     let navigate = "";
+    let openChat = null;
+    let filter = null;
     if (plan.acao === "cacar" || plan.acao === "radar") {
       const niche = limitString(p.nicho, 80, "").trim();
       const city = limitString(p.cidade, 80, "").trim();
-      if (!niche || !city) return { success: true, reply: "Preciso do nicho e da cidade, senhor. Ex.: caçar barbearia em Taguatinga, DF." };
+      if (!niche || !city) return { success: true, reply: "Preciso do nicho e da cidade, senhor. Por exemplo: caçar barbearia em Taguatinga, DF." };
       if (plan.acao === "cacar") {
         if (pendingHunts.size) {
           autopilot.pinMission("cacador", { niche, city });
@@ -4793,7 +4885,7 @@ ipcMain.handle("jarvis-command", async (_, { text } = {}) => {
       autopilot.log("jarvis", `Ordem: ${order}`, "info");
     } else if (plan.acao === "aprovar") {
       const approved = approveBest(p.quantidade);
-      reply = `${approved} mensagem(ns) de maior potencial aprovada(s). Saindo no ritmo seguro, senhor.`;
+      reply = `${approved} mensagem(ns) de maior potencial aprovada(s). Saindo no ritmo configurado, senhor.`;
       autopilot.log("jarvis", reply, "ok");
     } else if (plan.acao === "responder") {
       autopilot.runNow("respostas").catch(() => {});
@@ -4803,12 +4895,61 @@ ipcMain.handle("jarvis-command", async (_, { text } = {}) => {
       reply ||= p.ligar !== false ? "Piloto automático ligado. Os agentes estão em campo." : "Piloto automático pausado.";
     } else if (plan.acao === "abrir") {
       navigate = SCREENS[p.tela] ? p.tela : "";
-      reply ||= navigate ? `Abrindo ${SCREENS[navigate]}.` : "Não achei essa tela.";
+      reply ||= navigate ? `Abrindo ${SCREENS[navigate]}.` : "Não encontrei essa tela, senhor.";
+    } else if (plan.acao === "abrir_conversa" || plan.acao === "proposta") {
+      const lead = resolveLead(p.lead, contexto);
+      const phone = lead?.phone || lead?.tel;
+      if (!phone) return { success: true, reply: `Não encontrei "${p.lead || "esse lead"}" na base, senhor.` };
+      let textToType = limitString(String(p.texto || ""), 1500, "");
+      if (plan.acao === "proposta") {
+        const result = await proposalFor(phone, dossie?.conversa?.map((x) => ({ fromMe: x.de === "voce", text: x.texto })) || []);
+        textToType = result.proposta;
+        moveLeadInKanban(phone, "proposal");
+        reply = `Proposta de ${lead.name || "lead"} pronta no campo da conversa. Revise antes de enviar, senhor.`;
+      }
+      openChat = { phone: phoneKey(phone), name: lead.name || "", text: textToType };
+      navigate = "whatsapp";
+      reply ||= `Abrindo a conversa com ${lead.name || phone}.`;
+    } else if (plan.acao === "nao_contatar") {
+      const lead = resolveLead(p.lead, contexto);
+      const phone = lead?.phone || lead?.tel;
+      if (!phone) return { success: true, reply: "Qual lead, senhor? Não encontrei na base." };
+      contactStatus.setManual(phone, "nao_contatar", { name: lead.name || "" });
+      campaignManager?.doNotContact?.add(phone, "marcado pelo J.A.R.V.I.S.");
+      reply = `${lead.name || phone} marcado para nunca ser contatado. Dá para desfazer no Hunter Maps.`;
+      autopilot.log("jarvis", reply, "info");
+    } else if (plan.acao === "filtrar") {
+      filter = {
+        aba: ["disponiveis", "fila", "contatados", "responderam", "nao_contatar", "todos"].includes(p.aba) ? p.aba : "disponiveis",
+        filtro: ["pronto", "alto_potencial", "sem_site", "site_fraco", "atendimento_manual", "whatsapp", "web", "decisor", "tel"].includes(p.filtro) ? p.filtro : "",
+      };
+      navigate = "scraper";
+      reply ||= "Filtrando no Hunter Maps, senhor.";
+    } else if (plan.acao === "ajustar") {
+      const alvo = String(p.alvo || "");
+      const limits = ADJUST_LIMITS[alvo];
+      const valor = Math.round(Number(p.valor));
+      if (!limits || !Number.isFinite(valor)) return { success: true, reply: "Diga o que ajustar e o valor, senhor. Ex.: muda a meta para 60." };
+      const v = Math.max(limits[0], Math.min(limits[1], valor));
+      if (alvo === "meta_diaria") sendQueue.updateSettings({ dailyGoal: v });
+      if (alvo === "teto_por_numero") sendQueue.updateSettings({ perNumberDaily: v });
+      if (alvo === "intervalo") sendQueue.updateSettings({ intervalSec: v });
+      if (alvo === "rascunhos") autopilot.updateSettings({ draftTarget: v });
+      if (alvo === "reserva") autopilot.updateSettings({ reserveLeads: v });
+      reply = `Feito: ${alvo.replace(/_/g, " ")} agora é ${v}${v !== valor ? ` (limite seguro do sistema)` : ""}.`;
+      autopilot.log("jarvis", reply, "info");
+    } else if (plan.acao === "agente") {
+      const nome = String(p.nome || "");
+      if (!AGENT_IDS.includes(nome)) return { success: true, reply: "Não reconheci esse agente, senhor." };
+      autopilot.updateSettings({ stage: nome, on: p.ligar !== false });
+      reply = `Agente ${nome} ${p.ligar !== false ? "retomado" : "pausado"}.`;
     } else {
-      // Pergunta: sem IA, responde com o essencial dos dados.
-      reply ||= `Hoje: ${dados.hoje.enviados} envio(s) e ${dados.hoje.responderam} resposta(s). ${dados.esperando_voce.length} esperando você. Fila: ${dados.fila.rascunho || 0} para aprovar, ${dados.fila.aprovado || 0} aprovadas. ${dados.base.disponiveis} leads disponíveis.`;
+      // Pergunta: sem IA, responde com o essencial (e com a leitura do lead em foco).
+      reply ||= focusPhone || focusLead
+        ? quickRead(focusPhone, focusLead)
+        : `Hoje: ${dados.hoje.enviados} envio(s) e ${dados.hoje.responderam} resposta(s). ${dados.esperando_voce.length} esperando o senhor. Fila: ${dados.fila.rascunho || 0} para aprovar, ${dados.fila.aprovado || 0} aprovadas. ${dados.base.disponiveis} leads disponíveis.`;
     }
-    return { success: true, acao: plan.acao, reply, navigate, ai: plan.ai };
+    return { success: true, acao: plan.acao, reply, navigate, openChat, filter, ai: plan.ai };
   } catch (error) {
     return { success: false, error: error.message };
   }
