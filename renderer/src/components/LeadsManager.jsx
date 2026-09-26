@@ -524,6 +524,19 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
     const responseTimes = [];
 
     filteredLeads.forEach((l, idx) => {
+      // Fonte principal: status de contato vindo do WhatsApp (tempo real).
+      const contact = contactFor(contacts, l);
+      if (contact && contact.status !== 'nao_contatar') {
+        const sentAt = contact.firstSentAt || contact.sentAt || 0;
+        if (evInPeriod({ ts: sentAt })) {
+          sent += 1;
+          if (contact.status === 'respondeu' && contact.repliedAt) {
+            replies += 1;
+            if (sentAt && contact.repliedAt > sentAt) responseTimes.push(contact.repliedAt - sentAt);
+          }
+        }
+        return;
+      }
       const id = getLeadId(l, idx);
       const h = (hist[id] || []).filter(evInPeriod);
       h.forEach((e) => {
@@ -551,7 +564,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
       categoriesCount: new Set(filteredLeads.map(getLeadCat)).size,
       groupsCount: groups.length
     };
-  }, [filteredLeads, hist, groups, periodRange]);
+  }, [filteredLeads, hist, groups, periodRange, contacts]);
 
   // Base Analysis Chart Data
   const chartGroups = useMemo(() => {

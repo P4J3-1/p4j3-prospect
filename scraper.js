@@ -234,8 +234,11 @@ async function scrapeGoogleMaps(searchQuery, maxResults = 999, onProgress = cons
           }
           // O Instagram já vem do painel do lugar. O fallback fica restrito ao
           // mesmo painel para não herdar a rede social de outro resultado.
-          if (!place.instagram) {
-            const ig = page.locator('div[role="main"] a[href*="instagram.com"]').first();
+          // Só o painel com o nome deste lugar: o primeiro role="main" costuma
+          // ser a lista de resultados, com o Instagram de um anúncio.
+          if (!place.instagram && place.name) {
+            const panelName = String(place.name).replace(/["\\]/g, '\\$&');
+            const ig = page.locator(`div[role="main"][aria-label="${panelName}"] a[href*="instagram.com"]`).first();
             if (await ig.count() > 0) place.instagram = normalizeInstagram(await ig.getAttribute('href'));
           }
 

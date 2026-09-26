@@ -1,3 +1,4 @@
+import { fillAddressParts, stripSharedContacts } from './leadQuality.mjs';
 export function readLocalArray(key) {
   try {
     const data = JSON.parse(localStorage.getItem(key) || "[]");
@@ -130,7 +131,9 @@ export function normalizeLeadRecord(lead) {
 }
 
 export function normalizeLeadCollection(leads = []) {
-  return Array.isArray(leads) ? leads.map(normalizeLeadRecord).filter(Boolean) : [];
+  if (!Array.isArray(leads)) return [];
+  // Qualidade: bairro/cidade/UF pelo endereço e fora o @/e-mail que não é do lead.
+  return stripSharedContacts(leads.map(normalizeLeadRecord).filter(Boolean).map(fillAddressParts));
 }
 
 export function isImportedSearch(search) {
