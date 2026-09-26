@@ -30,6 +30,12 @@ function templateFor(item) {
   return OPENERS[Math.floor(Math.random() * OPENERS.length)];
 }
 
+/** "Pizzaria Bueno - Ceilândia Sul" → "Pizzaria Bueno": ninguém fala o bairro junto do nome. */
+function shortBusinessName(name) {
+  const first = String(name || "").split(/\s+[-–—|·:]\s+|\s*\|\s*/)[0].trim();
+  return first.length >= 3 ? first : String(name || "").trim();
+}
+
 function cleanMessage(text) {
   return String(text || "")
     .replace(/https?:\/\/\S+|www\.\S+/gi, "")
@@ -56,7 +62,8 @@ const COMPOSER_SYSTEM_PROMPT = [
 async function composeMessages(items = [], { runAi = null, commercial = {}, aiBudget = Infinity } = {}) {
   const out = new Map();
   for (const item of items) {
-    out.set(item.key, { mensagem: cleanMessage(interpolate(templateFor(item), item.lead || {})), ai: false });
+    const lead = item.kind === "primeiro" ? { ...(item.lead || {}), name: shortBusinessName(item.lead?.name) } : item.lead || {};
+    out.set(item.key, { mensagem: cleanMessage(interpolate(templateFor(item), lead)), ai: false });
   }
   if (typeof runAi !== "function") return out;
 

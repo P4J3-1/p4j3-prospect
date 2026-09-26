@@ -2,6 +2,23 @@ import React, { useMemo, useState } from 'react';
 import { X, Check, SkipForward, Undo2, Send, Clock } from 'lucide-react';
 import { useQueue } from '../useQueue';
 import { timeAgo } from '../contactStatus.mjs';
+import { useTriage } from '../useTriage';
+import { triageFor } from '../triage.mjs';
+
+/**
+ * Selo de qualidade da mensagem: o que derruba resposta ou causa bloqueio.
+ * @returns {{ ok: boolean, notes: string[] }}
+ */
+function qualityOf(message, repeats) {
+  const notes = [];
+  const text = String(message || '');
+  if (/https?:\/\/|www\./i.test(text)) notes.push('tem link (risco de denúncia)');
+  if (text.length > 320) notes.push('longa demais para 1º contato');
+  if (text.length < 12) notes.push('curta demais');
+  if (repeats >= 4) notes.push(`texto idêntico a ${repeats - 1} outras na fila`);
+  if (/\{\{|\}\}|\{[^}]*\|[^}]*\}/.test(text)) notes.push('variável não preenchida');
+  return { ok: !notes.length, notes };
+}
 
 const KIND_LABEL = { primeiro: 'Primeiro contato', follow_up: 'Follow-up', nova_oferta: 'Nova oferta' };
 const WAIT_LABEL = {
@@ -20,7 +37,7 @@ const TABS = [
   ['pulado', 'Pulados'],
 ];
 
-function QueueItem({ item }) {
+function QueueItem({ item, score, problem, quality }) {
   const [draft, setDraft] = useState(item.message);
   const [busy, setBusy] = useState(false);
   const dirty = draft !== item.message;
@@ -40,7 +57,14 @@ function QueueItem({ item }) {
         <div style={{ minWidth: 0 }}>
           <b>{item.name || item.phone}</b>
           <span className="queue-meta">{KIND_LABEL[item.kind] || item.kind} · {item.reason}</span>
+          {problem && <span className="queue-meta">Problema: {problem}</span>}
         </div>
+        {score != null && <span className={`queue-score ${score >= 70 ? 'hi' : score >= 45 ? 'mid' : 'lo'}`} title="Potencial do lead">{score}</span>}
+        {quality && (
+          <span className={`queue-quality ${quality.ok ? 'ok' : 'warn'}`} title={quality.ok ? 'Sem link, tamanho certo, sem repetição' : quality.notes.join(' · ')}>
+            {quality.ok ? '✓ qualidade' : `⚠ ${quality.notes[0]}`}
+          </span>
+        )}
         {item.ai && <span className="lead-badge potential">IA</span>}
       </header>
       {editable ? (
@@ -75,16 +99,32 @@ function QueueItem({ item }) {
 /** Revisão da fila de envio: nada sai sem a sua aprovação. */
 export default function QueuePanel({ onClose }) {
   const queue = useQueue();
+  const triage = useTriage();
   const [tab, setTab] = useState('rascunho');
   const counts = useMemo(() => {
     const c = {};
     for (const item of queue.items) c[item.status] = (c[item.status] || 0) + 1;
     return c;
   }, [queue.items]);
+  // Potencial e problema principal pela triagem; repetição de texto na fila.
+  const enriched = useMemo(() => {
+    const repeats = {};
+    for (const i of queue.items) if (i.status === 'rascunho' || i.status === 'aprovado') repeats[i.message] = (repeats[i.message] || 0) + 1;
+    return queue.items.map((item) => {
+      const t = item.lead ? triageFor(triage, item.lead) : null;
+      return { item, score: t?.score ?? null, problem: t?.findings?.[0] || '', quality: qualityOf(item.message, repeats[item.message] || 0) };
+    });
+  }, [queue.items, triage]);
   const list = useMemo(() => {
-    const items = queue.items.filter((i) => (tab === 'aprovado' ? i.status === 'aprovado' || i.status === 'enviando' : i.status === tab));
-    return tab === 'enviado' ? [...items].sort((a, b) => (b.sentAt || 0) - (a.sentAt || 0)) : items;
-  }, [queue.items, tab]);
+    const items = enriched.filter(({ item: i }) => (tab === 'aprovado' ? i.status === 'aprovado' || i.status === 'enviando' : i.status === tab));
+    if (tab === 'enviado') return [...items].sort((a, b) => (b.item.sentAt || 0) - (a.item.sentAt || 0));
+    // Para aprovar: melhores leads primeiro.
+    return [...items].sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+  }, [enriched, tab]);
+  const bestIds = useMemo(
+    () => list.filter((x) => x.item.status === 'rascunho' && x.quality.ok).slice(0, 20).map((x) => x.item.id),
+    [list],
+  );
   const sentToday = useMemo(() => {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
@@ -154,8 +194,11 @@ export default function QueuePanel({ onClose }) {
 
         {tab === 'rascunho' && (counts.rascunho || 0) > 0 && (
           <div style={{ padding: '0 20px' }}>
-            <button type="button" className="btn btn-sm btn-primary" onClick={() => window.queueAPI.approve()}>
-              <Check size={13} /> Aprovar todos ({counts.rascunho})
+            <button type="button" className="btn btn-sm btn-primary" disabled={!bestIds.length} onClick={() => window.queueAPI.approve(bestIds)} title="Os de maior potencial, só com selo de qualidade">
+              <Check size={13} /> Aprovar os {bestIds.length} melhores
+            </button>{' '}
+            <button type="button" className="btn btn-sm" onClick={() => window.queueAPI.approve()}>
+              Aprovar todos ({counts.rascunho})
             </button>
           </div>
         )}
@@ -165,7 +208,9 @@ export default function QueuePanel({ onClose }) {
             <p className="camp-hint" style={{ padding: 20 }}>
               {tab === 'rascunho' ? 'Nada para aprovar. No Hunter Maps, use "Montar fila" nos leads disponíveis.' : 'Nada aqui ainda.'}
             </p>
-          ) : list.map((item) => <QueueItem key={`${item.id}-${item.status}`} item={item} />)}
+          ) : list.map(({ item, score, problem, quality }) => (
+            <QueueItem key={`${item.id}-${item.status}`} item={item} score={score} problem={problem} quality={item.status === 'rascunho' || item.status === 'aprovado' ? quality : null} />
+          ))}
         </div>
       </div>
     </div>
