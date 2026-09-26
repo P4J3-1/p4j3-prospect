@@ -4200,6 +4200,8 @@ ipcMain.handle("queue-get", async () => ({
   wait: queueWait,
   ab: sendQueue.abStats((phone) => contactStatus?.get(phone)),
   numbers: senderNumbers(),
+  // Risco pelo ritmo configurado e por tudo que saiu hoje (vale mesmo sem número online).
+  risk: sendQueue.riskOf(sentTodayAll(null)),
 }));
 
 /** Números no rodízio da fila: quem está online e quanto já enviou hoje. */
@@ -4211,7 +4213,18 @@ function senderNumbers() {
     connected: p?.getStatus?.() === "connected",
     sentToday: sendQueue?.sentTodayBy(id) || 0,
     cap,
+    // Conta também o que saiu pelo chat e campanhas, não só pela fila.
+    risk: sendQueue?.riskOf(Math.max(sendQueue?.sentTodayBy(id) || 0, sentTodayAll(id))) || null,
   }));
+}
+
+/** Tudo o que saiu hoje por este número (fila, chat, campanha). */
+function sentTodayAll(connectionId) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const all = !connectionId || whatsappProviders.size <= 1;
+  return Object.values(contactStatus?.getAll() || {})
+    .filter((c) => (c.sentAt || 0) >= start.getTime() && (all || c.connectionId === connectionId)).length;
 }
 
 ipcMain.handle("lead-memory-all", async () => {

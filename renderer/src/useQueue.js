@@ -6,12 +6,12 @@ export function useQueue() {
   useEffect(() => {
     let alive = true;
     window.queueAPI?.get?.()
-      .then((res) => { if (alive && res?.success) setQueue({ items: res.items || [], settings: res.settings || {}, wait: res.wait || '', ab: res.ab || null, numbers: res.numbers || [] }); })
+      .then((res) => { if (alive && res?.success) setQueue({ items: res.items || [], settings: res.settings || {}, wait: res.wait || '', ab: res.ab || null, numbers: res.numbers || [], risk: res.risk || null }); })
       .catch(() => {});
     const offChanged = window.queueAPI?.onChanged?.((snap) => {
       if (snap) setQueue((current) => ({ ...current, items: snap.items || [], settings: snap.settings || current.settings }));
       // Envio feito: atualiza quanto cada número já mandou hoje.
-      window.queueAPI?.get?.().then((res) => { if (alive && res?.success) setQueue((current) => ({ ...current, numbers: res.numbers || [] })); }).catch(() => {});
+      window.queueAPI?.get?.().then((res) => { if (alive && res?.success) setQueue((current) => ({ ...current, numbers: res.numbers || [], risk: res.risk || null })); }).catch(() => {});
     });
     const offStatus = window.queueAPI?.onStatus?.((status) => {
       if (status) setQueue((current) => ({ ...current, wait: status.wait || '' }));

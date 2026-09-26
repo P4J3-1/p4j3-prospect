@@ -135,3 +135,19 @@ describe('rodízio de números', () => {
     assert.equal(q.pickSender(['A', 'B'], 'A'), null, 'número da conversa no teto: espera, não troca');
   });
 });
+
+describe('risco de bloqueio', () => {
+  const { SendQueue } = require('../campaigns/send-queue');
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  it('ritmo agressivo é risco alto; configuração segura é baixo', () => {
+    const q = new SendQueue(fs.mkdtempSync(path.join(os.tmpdir(), 'p4j3-risk-')));
+    q.updateSettings({ intervalSec: 30, perNumberDaily: 300, windowStart: '05:00', windowEnd: '23:30' });
+    const hot = q.riskOf(74);
+    assert.equal(hot.level, 'alto');
+    assert.ok(hot.reasons.some((r) => /30s/.test(r)));
+    q.updateSettings({ intervalSec: 120, perNumberDaily: 50, windowStart: '08:00', windowEnd: '20:00' });
+    assert.equal(q.riskOf(20).level, 'baixo');
+  });
+});

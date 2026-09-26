@@ -9167,3 +9167,7 @@ html[data-theme="dark"] .quality-chip.on { background: color-mix(in srgb, var(--
 /* Telas grandes: o sistema cresce junto (até 1760px) em vez de ficar preso no centro. */
 @media (min-width: 1500px) { .app-screen-container { max-width: min(1760px, 96vw) !important; } }
 @media (min-width: 2200px) { .app-screen-container { max-width: min(2200px, 94vw) !important; } }
+.queue-risk { margin: 0 20px 10px; padding: 10px 12px; border-radius: 12px; display: grid; gap: 6px; font-size: 12.5px; }
+.queue-risk.alto { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
+.queue-risk.medio { background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; }
+.queue-risk button { justify-self: start; }

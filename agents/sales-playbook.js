@@ -14,7 +14,7 @@ const OPENERS = [
   "{Oi|Olá}! {Tudo certo por aí|Tudo bem com vocês}? Esse é o WhatsApp de {{empresa}}?",
   "{Oi|Olá}, {tudo joia|tudo bem}? Consegue me confirmar se falo com {{empresa}}?",
   "{Opa|Oi}, tudo bem? É {{empresa}}?",
-  "{Olá|Oi}, tudo bem? Posso falar com {o responsável|quem cuida do atendimento}?",
+  "{Olá|Oi}, tudo bem? Posso falar com {o responsável|quem cuida do atendimento} {da|pela} {{empresa}}?",
   "{Oi|Olá}, tudo {bem|certo}? {Encontrei|Achei} vocês {no Google|no Maps}. Aqui é {{empresa}}?",
   "{Oi|Olá}! {Tudo bem|Como vai}? Esse número ainda é de {{empresa}}?",
 ];

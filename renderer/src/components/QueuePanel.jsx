@@ -155,6 +155,19 @@ export default function QueuePanel({ onClose }) {
           </div>
         )}
 
+        {(() => {
+          const worst = [...(queue.numbers || []).map((n) => n.risk), queue.risk].filter(Boolean).sort((a, b) => ({ alto: 2, medio: 1, baixo: 0 }[b.level] - { alto: 2, medio: 1, baixo: 0 }[a.level]))[0];
+          if (!worst || worst.level === 'baixo') return null;
+          return (
+            <div className={`queue-risk ${worst.level}`} role="alert">
+              <b>{worst.level === 'alto' ? '⚠ Risco ALTO de bloqueio do número' : 'Atenção ao ritmo de envio'}</b>
+              <span>{worst.reasons.join(' · ')}</span>
+              <button type="button" className="btn btn-sm" onClick={() => saveSettings({ intervalSec: 120, perNumberDaily: 50, windowEnabled: true, windowStart: '08:00', windowEnd: '20:00' })}>
+                Aplicar configuração segura (120s · 50/dia · 8h–20h)
+              </button>
+            </div>
+          );
+        })()}
         {queue.numbers?.length > 0 && (
           <div className="queue-numbers" aria-label="Números no rodízio">
             <b>Rodízio de números</b>

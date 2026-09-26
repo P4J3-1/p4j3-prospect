@@ -148,6 +148,27 @@ class SendQueue {
     return count;
   }
 
+  /**
+   * Risco de bloqueio do número pelo ritmo configurado e pelo que já saiu
+   * hoje. Não muda nada sozinho: só avisa (a decisão é do dono).
+   * @returns {{ level: 'baixo'|'medio'|'alto', reasons: string[] }}
+   */
+  riskOf(sentToday = 0) {
+    const s = this.settings;
+    const reasons = [];
+    let points = 0;
+    if (s.intervalSec < 60) { points += 2; reasons.push(`intervalo de ${s.intervalSec}s entre envios (seguro: 90s ou mais)`); }
+    else if (s.intervalSec < 90) { points += 1; reasons.push(`intervalo de ${s.intervalSec}s (seguro: 90s ou mais)`); }
+    if (s.perNumberDaily > 80) { points += 2; reasons.push(`teto de ${s.perNumberDaily} por número/dia (seguro: até 50–60)`); }
+    else if (s.perNumberDaily > 60) { points += 1; reasons.push(`teto de ${s.perNumberDaily} por número/dia`); }
+    if (sentToday > 80) { points += 2; reasons.push(`${sentToday} envios hoje neste número`); }
+    else if (sentToday > 50) { points += 1; reasons.push(`${sentToday} envios hoje neste número`); }
+    const [h1] = String(s.windowStart || "08:00").split(":").map(Number);
+    const [h2] = String(s.windowEnd || "20:00").split(":").map(Number);
+    if (s.windowEnabled === false || h1 < 7 || h2 >= 22) { points += 1; reasons.push("envio fora do horário comercial"); }
+    return { level: points >= 3 ? "alto" : points >= 1 ? "medio" : "baixo", reasons };
+  }
+
   /** Envios de hoje por número (rodízio). */
   sentTodayBy(connectionId, now = Date.now()) {
     const start = new Date(now);

@@ -97,9 +97,12 @@ export function dailyBriefing({ name = '', leads = [], contacts = {}, queue = {}
   linhas.push(`${ready} lead(s) prontos para abordar na base.`);
   if (best) linhas.push(`Nicho que mais responde: ${best.key} (${best.rate}% em ${best.sent} contatos).`);
   if (autopilot && !autopilot.settings?.enabled) linhas.push('O piloto automático está desligado.');
+  const risky = (queue.numbers || []).find((n) => n.risk?.level === 'alto') || (queue.risk?.level === 'alto' ? { phone: '', risk: queue.risk } : null);
+  if (risky) linhas.unshift(`⚠ Risco alto de bloqueio no número ${risky.phone ? `+${risky.phone}` : ''}: ${risky.risk.reasons[0]}.`);
 
   let acao = null;
-  if (waiting || replies) acao = { texto: 'Responder quem está esperando', go: 'whatsapp' };
+  if (risky) acao = { texto: 'Proteger o número (ajustar a fila)', go: 'scraper' };
+  else if (waiting || replies) acao = { texto: 'Responder quem está esperando', go: 'whatsapp' };
   else if (drafts) acao = { texto: `Aprovar ${drafts} mensagem(ns) da fila`, go: 'scraper' };
   else if (autopilot && !autopilot.settings?.enabled) acao = { texto: 'Ligar o piloto automático', go: 'agents' };
   else if (ready) acao = { texto: 'Montar a fila com os prontos', go: 'scraper' };
