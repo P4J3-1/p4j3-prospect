@@ -23,6 +23,8 @@ class ContactStatusStore {
     this.messageIndex = loaded.messageIndex || {};
     // Resultado da checagem "tem WhatsApp?" por telefone (sem DDI).
     this.waCheck = loaded.waCheck || {};
+    // Testes de cliente oculto: ficam fora de "contatados" (o lead segue disponível).
+    this.mystery = loaded.mystery || {};
     this._migrateKeys();
   }
 
@@ -80,7 +82,7 @@ class ContactStatusStore {
       this._prune();
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
       const tmp = `${this.filePath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ contacts: this.contacts, messageIndex: this.messageIndex, waCheck: this.waCheck }), { mode: 0o600 });
+      fs.writeFileSync(tmp, JSON.stringify({ contacts: this.contacts, messageIndex: this.messageIndex, waCheck: this.waCheck, mystery: this.mystery }), { mode: 0o600 });
       fs.renameSync(tmp, this.filePath);
     } catch (error) {
       console.warn("[CONTACT-STATUS] save:", error.message);
@@ -108,6 +110,35 @@ class ContactStatusStore {
 
   get(phone) {
     return this.contacts[phoneCore(phone)] || null;
+  }
+
+  /**
+   * Registra um teste de cliente oculto. Se o número estava em "contatados"
+   * só por causa dele, sai de lá (o lead continua disponível para prospecção).
+   */
+  recordMystery({ phone, sentAt = Date.now(), repliedAt = null, autoReplies = 0, name = "" } = {}) {
+    const key = phoneCore(phone);
+    if (!key || key.length < 10) return null;
+    const prev = this.mystery[key] || {};
+    const next = {
+      ...prev,
+      name: prev.name || name || "",
+      sentAt: prev.sentAt ? Math.min(prev.sentAt, sentAt) : sentAt,
+      repliedAt: prev.repliedAt || repliedAt || null,
+      autoReplies: Math.max(Number(prev.autoReplies) || 0, Number(autoReplies) || 0),
+    };
+    next.delayMin = next.repliedAt ? Math.round((next.repliedAt - next.sentAt) / 60000) : null;
+    this.mystery[key] = next;
+    const contact = this.contacts[key];
+    if (contact && !contact.manual && ["historico", "chat", "manual", undefined].includes(contact.source)) {
+      delete this.contacts[key];
+    }
+    this._emit(key);
+    return next;
+  }
+
+  getMystery(phone) {
+    return phone === undefined ? this.mystery : this.mystery[phoneCore(phone)] || null;
   }
 
   getAll() {

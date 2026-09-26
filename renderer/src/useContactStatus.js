@@ -37,3 +37,26 @@ export function useWaCheck() {
   }, []);
   return waCheck;
 }
+
+/** Testes de cliente oculto por telefone (quem respondeu, em quanto tempo). */
+export function useMystery() {
+  const [mystery, setMystery] = useState({});
+  useEffect(() => {
+    let alive = true;
+    const load = () => window.contactAPI?.getAll?.()
+      .then((res) => { if (alive && res?.success) setMystery(res.mystery || {}); })
+      .catch(() => {});
+    load();
+    let timer = null;
+    const off = window.contactAPI?.onChanged?.(() => {
+      clearTimeout(timer);
+      timer = setTimeout(load, 1500);
+    });
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+      if (typeof off === 'function') off();
+    };
+  }, []);
+  return mystery;
+}

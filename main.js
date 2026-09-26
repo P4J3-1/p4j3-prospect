@@ -64,7 +64,7 @@ const { computeInsights } = require("./campaigns/learning");
 const { TriageStore, computeTriage, triageKey, triageLeads } = require("./lead-scoring/lead-triage");
 const { SendQueue } = require("./campaigns/send-queue");
 const { phoneCore: phoneKey } = require("./utils/phone-key");
-const { isAutoReply, isProspectingConversation } = require("./utils/outreach-classifier");
+const { isAutoReply, isProspectingConversation, isMysteryShopper } = require("./utils/outreach-classifier");
 const { composeMessages } = require("./campaigns/outreach-composer");
 const { entryOffer, imageDiagnosis, nextOffer, objectionsFor, OFFERS } = require("./campaigns/offer-ladder");
 const { DailyQuota } = require("./campaigns/daily-quota");
@@ -2837,7 +2837,12 @@ ipcMain.handle("whatsapp-send-message", async (_, { to, content, connectionId } 
       ? (await provider.resolvePhoneJid?.(jid).catch(() => null)) || provider._getPhoneJid?.(jid) || ""
       : jid;
     // Só conta como prospecção se for lead da base; conversa comum não vira "contatado".
-    if (phoneJid && !phoneJid.endsWith("@g.us") && (contactStatus?.get(phoneJid) || knownLeadPhones().has(phoneKey(phoneJid)))) {
+    const sentText = typeof content === "string" ? content : content?.text || content?.caption || "";
+    const prevContact = phoneJid ? contactStatus?.get(phoneJid) : null;
+    if (phoneJid && !phoneJid.endsWith("@g.us") && !prevContact && isMysteryShopper(sentText)) {
+      // Cliente oculto: mede o atendimento do lead, sem tirá-lo dos disponíveis.
+      contactStatus?.recordMystery({ phone: phoneJid });
+    } else if (phoneJid && !phoneJid.endsWith("@g.us") && (prevContact || knownLeadPhones().has(phoneKey(phoneJid)))) {
       contactStatus?.recordSent(phoneJid, { messageId: result.messageId, source: "chat" });
     }
   }
@@ -2928,7 +2933,7 @@ ipcMain.handle("extraction-variations", async (_, { niche } = {}) => {
 });
 
 ipcMain.handle("contact-status-get-all", async () => {
-  return { success: true, contacts: contactStatus?.getAll() || {}, waCheck: contactStatus?.getWaCheck() || {} };
+  return { success: true, contacts: contactStatus?.getAll() || {}, waCheck: contactStatus?.getWaCheck() || {}, mystery: contactStatus?.getMystery() || {} };
 });
 
 async function recordIncomingReply(event) {
@@ -2944,6 +2949,13 @@ async function recordIncomingReply(event) {
     const at = ts ? Math.min(Date.now(), ts * 1000) : Date.now();
     const text = messageText(event.message);
     const prev = contactStatus?.get(phone);
+    const mystery = !prev ? contactStatus?.getMystery(phone) : null;
+    if (mystery) {
+      const autoMystery = isAutoReply(text, at - (mystery.sentAt || at));
+      if (autoMystery) contactStatus.recordMystery({ phone, autoReplies: (mystery.autoReplies || 0) + 1 });
+      else if (!mystery.repliedAt) contactStatus.recordMystery({ phone, repliedAt: at });
+      return;
+    }
     const auto = isAutoReply(text, prev?.sentAt ? at - prev.sentAt : Infinity);
     contactStatus?.recordReply(phone, { optOut: isOptOutMessage(text), auto, at });
   } catch (error) {
@@ -2978,6 +2990,11 @@ async function syncContactHistory() {
         const prospecting = history.filter((entry) => {
           const key = phoneKey(entry.phone);
           const prev = all[key];
+          const byApp = !!prev && (prev.manual || prev.source === "fila" || prev.source === "campanha");
+          if (!byApp && entry.startedByMe && isMysteryShopper(entry.firstText)) {
+            contactStatus?.recordMystery({ phone: entry.phone, sentAt: entry.firstSentAt || entry.sentAt, repliedAt: entry.repliedAt, autoReplies: entry.autoReplies, name: entry.name });
+            return false;
+          }
           const ok = isProspectingConversation(entry, {
             isKnownLead: leadPhones.has(key),
             sentByApp: !!prev && (prev.manual || prev.source === "fila" || prev.source === "campanha"),
@@ -4926,6 +4943,13 @@ async function suggestReplyFor(messages, lead, etapa = "") {
           ...clean,
           triagem: triage ? { segmentos: triage.segmentLabels, problemas: triage.findings } : null,
           diagnostico_pronto: triage?.presente?.mensagem || "",
+          // Teste de cliente oculto: como o lead atende um cliente de verdade.
+          cliente_oculto: (() => {
+            const m = contactStatus?.getMystery(clean.phone);
+            if (!m) return null;
+            if (m.delayMin != null) return `Respondeu um cliente em ${m.delayMin < 60 ? `${m.delayMin} min` : `${Math.round(m.delayMin / 6) / 10} h`}${m.autoReplies ? " (antes, só mensagem automática)" : ""}.`;
+            return m.autoReplies ? "Cliente perguntou preço e recebeu só mensagem automática, sem resposta humana." : "Cliente perguntou preço e ficou sem resposta.";
+          })(),
           oferta_atual: kit?.offerLabel,
           roteiro_objecoes: kit?.objections?.slice(0, 6),
           memoria: (() => {

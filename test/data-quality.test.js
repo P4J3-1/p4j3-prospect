@@ -98,3 +98,21 @@ describe('conversa de prospecção', () => {
     assert.equal(human.status, 'respondeu');
   });
 });
+
+describe('cliente oculto', () => {
+  const { isMysteryShopper } = require('../utils/outreach-classifier');
+  it('reconhece pergunta de consumidor e não confunde com abordagem', () => {
+    assert.equal(isMysteryShopper('Oi! Queria saber o valor da progressiva. Vocês atendem sábado?'), true);
+    assert.equal(isMysteryShopper('Oi, tudo bem? Falo com Barbearia do Zé?'), false);
+    assert.equal(isMysteryShopper('Bom dia meu amor'), false);
+  });
+  it('sai de contatados, guarda o tempo de resposta e o lead segue disponível', () => {
+    const store = new ContactStatusStore(tmp('p4j3-dq-'));
+    store.recordSent('61999990009', { source: 'chat', at: 1000 });
+    assert.ok(store.get('61999990009'));
+    store.recordMystery({ phone: '61999990009', sentAt: 1000 });
+    assert.equal(store.get('61999990009'), null);
+    const m = store.recordMystery({ phone: '61999990009', repliedAt: 1000 + 45 * 60000 });
+    assert.equal(m.delayMin, 45);
+  });
+});

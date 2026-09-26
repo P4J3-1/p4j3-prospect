@@ -64,4 +64,23 @@ function isProspectingConversation(entry, { isKnownLead = false, sentByApp = fal
   return !!entry?.startedByMe && looksLikeProspecting(entry?.firstText);
 }
 
-module.exports = { isAutoReply, looksLikeProspecting, isProspectingConversation };
+// Pergunta de consumidor ("qual o valor?", "atendem sábado?"): é o teste de
+// cliente oculto, não abordagem comercial.
+const MYSTERY_PATTERNS = [
+  /\bqual (o )?(valor|pre[çc]o)\b/i,
+  /\bquanto (custa|fica|sai|é)\b/i,
+  /\bvoc[eê]s (fazem|atendem|tem|têm|trabalham com|aceitam)\b/i,
+  /\batende[m]? (s[áa]bado|domingo|hoje|amanh[ãa])\b/i,
+  /\btem (hor[áa]rio|vaga|disponibilidade)\b/i,
+  /\bqueria (saber|mudar|fazer|marcar|agendar|um or[çc]amento)\b/i,
+  /\bgostaria de (saber|marcar|agendar|um or[çc]amento)\b/i,
+];
+
+/** Mensagem sua que é um teste de cliente oculto (pergunta de consumidor). */
+function isMysteryShopper(text) {
+  const t = String(text || "").trim();
+  if (!t || t.length > 260 || looksLikeProspecting(t)) return false;
+  return MYSTERY_PATTERNS.filter((re) => re.test(t)).length >= 1;
+}
+
+module.exports = { isAutoReply, looksLikeProspecting, isProspectingConversation, isMysteryShopper };

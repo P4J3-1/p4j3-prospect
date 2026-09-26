@@ -40,7 +40,7 @@ import WhatsAppRefresh from './WhatsAppRefresh';
 import { useAutopilot } from '../useAutopilot';
 import { useQueue, activeQueueByPhone } from '../useQueue';
 import { useLeadMemory, TEMPERATURE } from '../useLeadMemory';
-import { useContactStatus, useWaCheck } from '../useContactStatus';
+import { useContactStatus, useWaCheck, useMystery } from '../useContactStatus';
 import { useTriage } from '../useTriage';
 import { CONTACT_STATUS, contactBucket, contactFor, phoneCore, timeAgo } from '../contactStatus.mjs';
 import { SEGMENTS, triageFor } from '../triage.mjs';
@@ -529,6 +529,7 @@ export default function MapScraperView({
 
   // Lista de leads visíveis filtrada
   const [autopilotState] = useAutopilot();
+  const mystery = useMystery();
   const decisores = useMemo(() => autopilotState?.decisores || {}, [autopilotState?.decisores]);
   const visibleLeads = useMemo(() => {
     const nq = norm(feedSearch.trim());
@@ -1998,6 +1999,15 @@ export default function MapScraperView({
                         </span>
                       )}
                       {leadWa && !leadWa.exists && <span className="lead-badge" style={{ '--badge': '#94a3b8' }}>Sem WhatsApp</span>}
+                      {(() => {
+                        const m = phone ? mystery[phoneCore(phone)] : null;
+                        if (!m) return null;
+                        const label = m.delayMin != null
+                          ? `Cliente oculto: respondeu em ${m.delayMin < 60 ? `${m.delayMin} min` : `${Math.round(m.delayMin / 6) / 10} h`}`
+                          : m.autoReplies ? 'Cliente oculto: só resposta automática' : 'Cliente oculto: sem resposta';
+                        const bad = m.delayMin == null || m.delayMin > 30;
+                        return <span className="lead-badge" style={{ '--badge': bad ? '#dc2626' : '#16a34a' }} title="Teste de cliente oculto: como o lead atende quem pergunta preço">🕵 {label}</span>;
+                      })()}
                       {TEMPERATURE[temperatureOfLead(lead)] && (
                         <span className="lead-badge" style={{ '--badge': TEMPERATURE[temperatureOfLead(lead)].color }}>{TEMPERATURE[temperatureOfLead(lead)].label}</span>
                       )}
