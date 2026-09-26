@@ -336,6 +336,15 @@ export default function MapScraperView({
   const temperatureOfLead = (lead) => leadMemoryMap[phoneCore(getLeadPhone(lead))]?.temperatura || '';
   const queueByPhone = useMemo(() => activeQueueByPhone(queue.items), [queue.items]);
   const [queueOpen, setQueueOpen] = useState(false);
+  useEffect(() => {
+    if (window.__p4j3OpenQueue) {
+      window.__p4j3OpenQueue = false;
+      setQueueOpen(true);
+    }
+    const onOpenQueue = () => setQueueOpen(true);
+    window.addEventListener('sigma:open-queue', onOpenQueue);
+    return () => window.removeEventListener('sigma:open-queue', onOpenQueue);
+  }, []);
   const [preparing, setPreparing] = useState(false);
   // Aba do lead: fila de envio tem prioridade; depois o status do WhatsApp.
   const bucketOf = (lead) => (queueByPhone[phoneCore(getLeadPhone(lead))] ? 'fila' : contactBucket(contactFor(contacts, lead)));
@@ -347,6 +356,8 @@ export default function MapScraperView({
   const [listUf, setListUf] = useState('');
   const [listCidade, setListCidade] = useState('');
   const [listBairro, setListBairro] = useState('');
+  // Filtro de região/nicho (manual ou pedido ao J.A.R.V.I.S.): incluir e excluir.
+  const [regionFilter, setRegionFilter] = useState({ incluir: [], excluir: [], nicho: '' });
 
   // Seleção e foco
   const [selectedLeadId, setSelectedLeadId] = useState(null);
@@ -359,7 +370,15 @@ export default function MapScraperView({
     const apply = (f) => {
       if (!f) return;
       if (f.aba) setScraperTab(f.aba);
-      setQualityChips(f.filtro ? [f.filtro] : []);
+      if (f.filtro !== undefined) setQualityChips(f.filtro ? [f.filtro] : []);
+      if (f.limpar) setRegionFilter({ incluir: [], excluir: [], nicho: '' });
+      if (f.incluir || f.excluir || f.nicho !== undefined) {
+        setRegionFilter((cur) => ({
+          incluir: f.incluir ? [...new Set(f.incluir)] : cur.incluir,
+          excluir: f.excluir ? [...new Set([...cur.excluir, ...f.excluir])] : cur.excluir,
+          nicho: f.nicho !== undefined ? f.nicho : cur.nicho,
+        }));
+      }
     };
     if (window.__p4j3PendingFilter) {
       apply(window.__p4j3PendingFilter);
@@ -586,6 +605,12 @@ export default function MapScraperView({
       if (listUf && uf !== listUf) return false;
       if (listCidade && city !== listCidade) return false;
       if (listBairro && hood !== listBairro) return false;
+      if (regionFilter.incluir.length || regionFilter.excluir.length || regionFilter.nicho) {
+        const place = norm(`${hood} ${city} ${lead.address || ''}`);
+        if (regionFilter.incluir.length && !regionFilter.incluir.some((r) => place.includes(norm(r)))) return false;
+        if (regionFilter.excluir.some((r) => place.includes(norm(r)))) return false;
+        if (regionFilter.nicho && !norm(cat).includes(norm(regionFilter.nicho))) return false;
+      }
 
       // Text search
       if (nq) {
@@ -628,6 +653,7 @@ export default function MapScraperView({
     listUf,
     listCidade,
     listBairro,
+    regionFilter,
     scraperTab,
     qualityChips,
     contacts,
@@ -1808,6 +1834,20 @@ export default function MapScraperView({
             </button>
           ))}
         </div>
+
+        {(regionFilter.incluir.length > 0 || regionFilter.excluir.length > 0 || regionFilter.nicho) && (
+          <div className="region-chips" aria-label="Filtro de região">
+            {regionFilter.incluir.map((r) => (
+              <button key={`i-${r}`} type="button" className="region-chip in" onClick={() => setRegionFilter((c) => ({ ...c, incluir: c.incluir.filter((x) => x !== r) }))}>Só {r} ✕</button>
+            ))}
+            {regionFilter.excluir.map((r) => (
+              <button key={`e-${r}`} type="button" className="region-chip out" onClick={() => setRegionFilter((c) => ({ ...c, excluir: c.excluir.filter((x) => x !== r) }))}>Sem {r} ✕</button>
+            ))}
+            {regionFilter.nicho && (
+              <button type="button" className="region-chip niche" onClick={() => setRegionFilter((c) => ({ ...c, nicho: '' }))}>Nicho: {regionFilter.nicho} ✕</button>
+            )}
+          </div>
+        )}
 
         <div className="scraper-sync-bar">
           <button type="button" className="btn btn-sm btn-primary" disabled={preparing || !queueCandidates.length} onClick={handlePrepareQueue} title="A IA escreve a mensagem de cada lead disponível; nada sai sem sua aprovação">

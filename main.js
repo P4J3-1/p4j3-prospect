@@ -3914,7 +3914,7 @@ async function runTriageAgent(rawLeads, { auto = false, force = false } = {}) {
 
   triageRunning = true;
   const budget = hasAiConfigured(settings) ? agentStore.remaining("triagem") : 0;
-  agentStore.log("triagem", `${auto ? "Automático" : "Manual"}: triando ${leads.length} lead(s)${budget ? "" : " só com regras (IA indisponível ou limite do dia)"}.`);
+  agentStore.log("triagem", `${auto ? "Automático" : "Manual"}: triando ${leads.length} lead(s)${budget ? "" : " só com regras (IA indisponível)"}.`);
   try {
     const { results, aiUsed, aiError } = await triageLeads(leads, {
       settings,
@@ -3957,7 +3957,7 @@ async function runAnalystAgent({ auto = false } = {}) {
     if (!s.auto || newSends < 25) return { success: true, skipped: true };
   }
   const runAi = agentAi("analista");
-  if (!runAi) return { success: false, error: "Configure a IA e confira o limite do Agente Analista." };
+  if (!runAi) return { success: false, error: "IA indisponível: confira a chave DeepSeek em Inteligência Artificial ou se o Agente Analista está ligado." };
   analystRunning = true;
   try {
     const settings = currentAiSettings();
@@ -4121,6 +4121,19 @@ async function queueTick() {
   queueWait = "enviando";
   sendQueue.markSending(item.id);
   try {
+    // Confere o WhatsApp antes do 1º contato: fixo sem WhatsApp é pulado, não "falha".
+    if (item.kind === "primeiro" && typeof provider.checkWhatsAppNumbers === "function") {
+      let wa = contactStatus?.getWaCheck()?.[phoneKey(item.phone)];
+      if (!wa) {
+        const checked = await provider.checkWhatsAppNumbers([item.phone]).catch(() => null);
+        if (checked) contactStatus?.recordWaCheck(checked);
+        wa = contactStatus?.getWaCheck()?.[phoneKey(item.phone)];
+      }
+      if (wa?.exists === false) {
+        sendQueue.markResult(item.id, { skipReason: "Número sem WhatsApp (conferido antes de enviar)" });
+        return;
+      }
+    }
     const result = await provider.sendMessage(item.phone, { text: item.message });
     if (result?.success && result.messageId) {
       contactStatus?.recordSent(item.phone, { messageId: result.messageId, source: "fila", name: item.name, connectionId: senderId });
@@ -4286,7 +4299,7 @@ function commercialForAgents() {
 async function proposalFor(phone, messages) {
   {
     const runAi = agentAi("proposta");
-    if (!runAi) throw new Error("Configure a IA e confira o limite do Agente de Proposta.");
+    if (!runAi) throw new Error("IA indisponível: confira a chave DeepSeek em Inteligência Artificial ou se o Agente de Proposta está ligado.");
     const kit = leadSalesKit(phone);
     if (!kit) throw new Error("Lead sem telefone válido.");
     const lead = cleanLeadInput(leadByPhone(phone) || {});
@@ -4450,7 +4463,7 @@ function setupAutopilot() {
           .filter(([key, c]) => (autopilot.handledReplies[key] || 0) < c.lastReplyAt)
           .slice(0, 5);
         if (!waiting.length) return { idle: true, status: "Nenhuma conversa esperando você." };
-        if (!agentAi("respostas")) return { idle: true, status: "IA indisponível ou limite do dia do Agente de Respostas." };
+        if (!agentAi("respostas")) return { idle: true, status: "IA indisponível: confira a chave DeepSeek." };
         let done = 0;
         for (const [key, c] of waiting) {
           ctx.progress(done, waiting.length, `Lendo a conversa com ${c.name || key}`);
@@ -4925,12 +4938,23 @@ ipcMain.handle("jarvis-command", async (_, { text, context, history } = {}) => {
       reply = `${lead.name || phone} marcado para nunca ser contatado. Dá para desfazer no Hunter Maps.`;
       autopilot.log("jarvis", reply, "info");
     } else if (plan.acao === "filtrar") {
+      const list = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => limitString(String(x), 60, "").trim()).filter(Boolean).slice(0, 10);
       filter = {
-        aba: ["disponiveis", "fila", "contatados", "responderam", "nao_contatar", "todos"].includes(p.aba) ? p.aba : "disponiveis",
-        filtro: ["pronto", "alto_potencial", "sem_site", "site_fraco", "atendimento_manual", "whatsapp", "web", "decisor", "tel"].includes(p.filtro) ? p.filtro : "",
+        ...(["disponiveis", "fila", "contatados", "responderam", "nao_contatar", "todos"].includes(p.aba) ? { aba: p.aba } : {}),
+        ...(p.filtro !== undefined ? { filtro: ["pronto", "alto_potencial", "sem_site", "site_fraco", "atendimento_manual", "whatsapp", "web", "decisor", "tel"].includes(p.filtro) ? p.filtro : "" } : {}),
+        ...(list(p.incluir).length ? { incluir: list(p.incluir) } : {}),
+        ...(list(p.excluir).length ? { excluir: list(p.excluir) } : {}),
+        ...(typeof p.nicho === "string" && p.nicho ? { nicho: limitString(p.nicho, 60, "") } : {}),
+        ...(p.limpar ? { limpar: true } : {}),
       };
       navigate = "scraper";
-      reply ||= "Filtrando no Hunter Maps, senhor.";
+      const done = [
+        filter.limpar ? "filtros limpos" : "",
+        filter.excluir ? `tirei ${filter.excluir.join(", ")} da lista` : "",
+        filter.incluir ? `mostrando só ${filter.incluir.join(", ")}` : "",
+        filter.nicho ? `nicho ${filter.nicho}` : "",
+      ].filter(Boolean).join(" · ");
+      reply = done ? `Pronto, senhor: ${done}. A etiqueta fica no Hunter Maps para desfazer.` : reply || "Filtrando no Hunter Maps, senhor.";
     } else if (plan.acao === "ajustar") {
       const alvo = String(p.alvo || "");
       const limits = ADJUST_LIMITS[alvo];
@@ -5058,7 +5082,7 @@ ipcMain.handle("ai-optimize-message", async (_, { template, followUp } = {}) => 
   try {
     const runAi = agentAi("copywriter");
     if (!runAi) {
-      return { success: false, error: "Configure a IA em Inteligência Artificial e confira o limite do Agente Copywriter." };
+      return { success: false, error: "IA indisponível: confira a chave DeepSeek em Inteligência Artificial ou se o Agente Copywriter está ligado." };
     }
     const result = await optimizeCampaignMessage({
       template: limitString(template, 2000, ""),
@@ -5086,7 +5110,7 @@ ipcMain.handle("ai-suggest-reply", async (_, { messages, lead, etapa } = {}) => 
 async function suggestReplyFor(messages, lead, etapa = "") {
   {
     const runAi = agentAi("respostas");
-    if (!runAi) throw new Error("Configure a IA e confira o limite do Agente de Respostas.");
+    if (!runAi) throw new Error("IA indisponível: confira a chave DeepSeek em Inteligência Artificial ou se o Agente de Respostas está ligado.");
     const list = (Array.isArray(messages) ? messages : []).slice(-16).map((m) => ({
       fromMe: !!m?.fromMe,
       text: limitString(String(m?.text || ""), 600, ""),

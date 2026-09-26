@@ -101,10 +101,15 @@ export function dailyBriefing({ name = '', leads = [], contacts = {}, queue = {}
   if (risky) linhas.unshift(`⚠ Risco alto de bloqueio no número ${risky.phone ? `+${risky.phone}` : ''}: ${risky.risk.reasons[0]}.`);
 
   let acao = null;
-  if (risky) acao = { texto: 'Proteger o número (ajustar a fila)', go: 'scraper' };
-  else if (waiting || replies) acao = { texto: 'Responder quem está esperando', go: 'whatsapp' };
-  else if (drafts) acao = { texto: `Aprovar ${drafts} mensagem(ns) da fila`, go: 'scraper' };
-  else if (autopilot && !autopilot.settings?.enabled) acao = { texto: 'Ligar o piloto automático', go: 'agents' };
-  else if (ready) acao = { texto: 'Montar a fila com os prontos', go: 'scraper' };
+  // Quem esperou mais vem primeiro.
+  const firstWaiting = Object.entries(contacts || {})
+    .filter(([, c]) => c?.status === 'respondeu' && (c.lastReplyAt || 0) > (c.sentAt || 0))
+    .sort((a, b) => (a[1].lastReplyAt || 0) - (b[1].lastReplyAt || 0))[0];
+  if (risky) acao = { tipo: 'fila', texto: 'Proteger o número (ajustar a fila)', go: 'scraper' };
+  else if (firstWaiting) acao = { tipo: 'responder', texto: `Responder ${firstWaiting[1].name || 'quem está esperando'}${waiting > 1 ? ` (+${waiting - 1})` : ''}`, go: 'whatsapp', phone: firstWaiting[0], name: firstWaiting[1].name || '' };
+  else if (replies) acao = { tipo: 'respostas', texto: `Ver as ${replies} resposta(s) prontas`, go: 'agents' };
+  else if (drafts) acao = { tipo: 'fila', texto: `Aprovar ${drafts} mensagem(ns) da fila`, go: 'scraper' };
+  else if (autopilot && !autopilot.settings?.enabled) acao = { tipo: 'piloto', texto: 'Ligar o piloto automático', go: 'agents' };
+  else if (ready) acao = { tipo: 'montar', texto: 'Montar a fila com os prontos', go: 'scraper' };
   return { saudacao: `${greeting(now)}${name ? `, ${name}` : ''}.`, linhas, acao };
 }

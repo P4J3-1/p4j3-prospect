@@ -133,19 +133,25 @@ export default function AgentsPage({ onNavigate }) {
                 Rodar automaticamente
               </label>
             )}
-            <div className="agent-limit">
-              <span>Limite: </span>
-              <input
-                type="number"
-                min={0}
-                max={5000}
-                value={agent.settings.dailyLimit}
-                onChange={(e) => update(agent.id, { dailyLimit: e.target.value })}
-              />
-              <span>{agent.unit}</span>
-            </div>
-            <UsageBar used={agent.usedToday} limit={agent.settings.dailyLimit} />
-            <span className="camp-hint">Hoje: {agent.usedToday} usado(s) · {agent.remaining} restante(s){agent.tokensToday ? ` · ${agent.tokensToday.toLocaleString('pt-BR')} tokens` : ''}</span>
+            <label className="agent-auto">
+              <input type="checkbox" checked={agent.settings.unlimited !== false} disabled={!agent.settings.enabled} onChange={(e) => update(agent.id, { unlimited: e.target.checked })} />
+              Sem limite diário (o limite é o saldo da DeepSeek)
+            </label>
+            {agent.settings.unlimited === false && (
+              <div className="agent-limit">
+                <span>Limite: </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={5000}
+                  value={agent.settings.dailyLimit}
+                  onChange={(e) => update(agent.id, { dailyLimit: e.target.value })}
+                />
+                <span>{agent.unit}</span>
+              </div>
+            )}
+            {agent.settings.unlimited === false && <UsageBar used={agent.usedToday} limit={agent.settings.dailyLimit} />}
+            <span className="camp-hint">Hoje: {agent.usedToday} chamada(s){agent.settings.unlimited === false ? ` · ${agent.remaining} restante(s)` : ''}{agent.tokensToday ? ` · ${agent.tokensToday.toLocaleString('pt-BR')} tokens` : ''}</span>
             {agent.id === 'triagem' && (
               <button type="button" className="btn btn-sm" disabled={!!busy || !agent.settings.enabled} onClick={() => run('triagem')}>
                 <Play size={13} /> {busy === 'triagem' ? `Triando${progress?.agent === 'triagem' ? ` ${progress.done}/${progress.total}` : '…'}` : 'Triar leads sem triagem'}

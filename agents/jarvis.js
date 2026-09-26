@@ -25,7 +25,7 @@ const JARVIS_PROMPT = [
   "- piloto {ligar: true|false}. abrir {tela: overview|scraper|base|kanban|whatsapp|ai|agents}.",
   "- abrir_conversa {lead, texto?}: abrir a conversa do lead (nome, ou 'este' para o que esta na tela) com um texto opcional no campo.",
   "- proposta {lead}: escrever a proposta do lead. nao_contatar {lead}: marcar para nunca contatar.",
-  "- filtrar {aba: disponiveis|fila|contatados|responderam, filtro: pronto|alto_potencial|sem_site|site_fraco|atendimento_manual|whatsapp|web|decisor}: mostrar leads no Hunter Maps.",
+  "- filtrar {aba: disponiveis|fila|contatados|responderam|todos, filtro: pronto|alto_potencial|sem_site|site_fraco|atendimento_manual|whatsapp|web|decisor|'', incluir: [bairros/cidades para mostrar SO eles], excluir: [bairros/cidades para tirar], nicho: 'texto do nicho', limpar: true|false}: filtrar leads no Hunter Maps por aba, criterio, regiao (bairro ou cidade) e nicho. Ex.: 'tira Ceilandia' = {excluir:['Ceilândia']}; 'so Taguatinga' = {incluir:['Taguatinga']}.",
   "- ajustar {alvo: meta_diaria|teto_por_numero|intervalo|rascunhos|reserva, valor: numero}. agente {nome: cacador|radar|verificador|enriquecedor|triagem|pesquisador|copywriter|respostas|analista, ligar: true|false}.",
   "- pergunta: o vendedor quer saber ou analisar algo (inclusive 'o que acha deste lead?', 'como respondo esta conversa?'). Responda usando SO 'dados', 'contexto' e 'dossie'. Nunca invente numeros. Seja analitica: diga o que ve e recomende a proxima acao.",
   "Use 'historico' para entender referencias ('e ele?', 'faz isso').",
@@ -64,6 +64,12 @@ function parseByRules(text) {
   m = t.match(/\b(liga\w*|ativa\w*|desliga\w*|pausa\w*|para\w*)\b.*\bpiloto\b/);
   if (m) return { acao: "piloto", parametros: { ligar: /^(liga|ativa)/.test(m[1]) } };
   if (/\b(mostra|filtra|quero ver)\b.*\b(quentes?|prontos?)\b/.test(t)) return { acao: "filtrar", parametros: { aba: "disponiveis", filtro: /quente/.test(t) ? "alto_potencial" : "pronto" } };
+  if (/\b(limpa\w*|tira\w*)\s+(os\s+)?filtros?\b/.test(t)) return { acao: "filtrar", parametros: { limpar: true, filtro: "" } };
+  // Região: "tira Ceilândia", "retire os da região Ceilândia", "só Taguatinga".
+  m = raw.match(/\b(?:retir\w*|tir\w*|remov\w*|exclu\w*|sem)\s+(?:(?:os|as|leads?|da|de|do|dos|das|regi[aã]o|bairro|cidade)\s+)*([\wÀ-ú][\wÀ-ú' -]{2,40})$/i);
+  if (m) return { acao: "filtrar", parametros: { excluir: [m[1].trim()] } };
+  m = raw.match(/\b(?:s[oó]|somente|apenas)\s+(?:(?:os|as|leads?|da|de|do|dos|das|regi[aã]o|bairro|cidade|em|no|na)\s+)*([\wÀ-ú][\wÀ-ú' -]{2,40})$/i);
+  if (m) return { acao: "filtrar", parametros: { incluir: [m[1].trim()] } };
   for (const [id, label] of Object.entries(SCREENS)) {
     if (new RegExp(`\\b(abr\\w*|mostr\\w*|vai para|ir para)\\b.*${norm(label)}`).test(t)) return { acao: "abrir", parametros: { tela: id } };
   }

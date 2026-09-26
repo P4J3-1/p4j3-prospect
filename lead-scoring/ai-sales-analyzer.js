@@ -91,7 +91,8 @@ async function requestChatCompletion(providerConfig, payload, options = {}) {
     });
     if (!res.ok) {
       const detail = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
-      const err = new Error(`IA falhou: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
+      // Saldo da conta acabou (DeepSeek: 402): aviso claro em vez de erro técnico.
+      const err = new Error(res.status === 402 || /insufficient.balance|saldo/i.test(detail) ? "Saldo da DeepSeek acabou: recarregue em platform.deepseek.com para os agentes continuarem." : `IA falhou: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
       err.status = res.status;
       throw err;
     }
@@ -128,7 +129,8 @@ async function requestResponses(providerConfig, payload, system = DEFAULT_SYSTEM
     });
     if (!res.ok) {
       const detail = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
-      const err = new Error(`IA falhou: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
+      // Saldo da conta acabou (DeepSeek: 402): aviso claro em vez de erro técnico.
+      const err = new Error(res.status === 402 || /insufficient.balance|saldo/i.test(detail) ? "Saldo da DeepSeek acabou: recarregue em platform.deepseek.com para os agentes continuarem." : `IA falhou: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
       err.status = res.status;
       throw err;
     }

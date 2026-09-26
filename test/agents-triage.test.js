@@ -112,6 +112,9 @@ describe('triagem', () => {
 describe('agentes', () => {
   it('limite diário, liga/desliga e playbook', () => {
     const store = new AgentStore(tmp('p4j3-ag-'));
+    // Padrão: sem teto (o limite é o saldo da DeepSeek); o teto continua opcional.
+    assert.equal(store.remaining('copywriter'), Infinity);
+    store.update('copywriter', { unlimited: false });
     assert.equal(store.remaining('copywriter'), 30);
     store.consume('copywriter', 29);
     assert.equal(store.remaining('copywriter'), 1);

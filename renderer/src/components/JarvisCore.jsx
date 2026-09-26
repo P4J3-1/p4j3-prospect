@@ -38,6 +38,39 @@ export default function JarvisCore({ autopilot, onNavigate }) {
   const results = useMemo(() => resultsBy(leads, contacts, by).slice(0, 6), [leads, contacts, by]);
   const working = (autopilot?.stages || []).filter((s) => s.live?.status === 'working').length;
 
+  /** Executa a próxima ação de verdade (abre a conversa certa, a fila, liga o piloto…). */
+  const runAction = (acao) => {
+    if (!acao) return;
+    if (acao.tipo === 'responder' && acao.phone) {
+      const pending = { phone: acao.phone, name: acao.name, text: '' };
+      window.__p4j3PendingChat = pending;
+      window.dispatchEvent(new CustomEvent('sigma:open-chat', { detail: pending }));
+      onNavigate?.('whatsapp');
+      return;
+    }
+    if (acao.tipo === 'fila' || acao.tipo === 'montar') {
+      window.__p4j3OpenQueue = acao.tipo === 'fila';
+      if (acao.tipo === 'montar') {
+        window.__p4j3PendingFilter = { aba: 'disponiveis', filtro: 'pronto' };
+        window.dispatchEvent(new CustomEvent('sigma:hunter-filter', { detail: window.__p4j3PendingFilter }));
+      } else {
+        window.dispatchEvent(new CustomEvent('sigma:open-queue'));
+      }
+      onNavigate?.('scraper');
+      return;
+    }
+    if (acao.tipo === 'piloto') {
+      window.autopilotAPI?.settings?.({ enabled: true });
+      return;
+    }
+    if (acao.tipo === 'respostas') {
+      onNavigate?.('agents');
+      setTimeout(() => document.querySelector('.ap-replies, .ap-grid')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+      return;
+    }
+    onNavigate?.(acao.go);
+  };
+
   const openChat = (item) => {
     window.__p4j3PendingChat = { phone: item.key, name: item.lead.name, text: '' };
     window.dispatchEvent(new CustomEvent('sigma:open-chat', { detail: { phone: item.key, name: item.lead.name } }));
@@ -62,7 +95,7 @@ export default function JarvisCore({ autopilot, onNavigate }) {
           {briefing.linhas.map((l) => <li key={l}>{l}</li>)}
         </ul>
         {briefing.acao && (
-          <button type="button" className="jv-action" onClick={() => onNavigate?.(briefing.acao.go)}>
+          <button type="button" className="jv-action" onClick={() => runAction(briefing.acao)}>
             <Zap size={14} /> Próxima ação: {briefing.acao.texto}
           </button>
         )}

@@ -91,7 +91,9 @@ class AgentStore {
   }
 
   settings(id) {
-    return { ...AGENTS[id]?.defaults, ...(this.state.settings[id] || {}) };
+    // Sem teto diário por padrão: o limite é o saldo da conta DeepSeek do dono.
+    const saved = this.state.settings[id] || {};
+    return { ...AGENTS[id]?.defaults, ...saved, unlimited: saved.unlimited !== false };
   }
 
   update(id, patch = {}) {
@@ -99,6 +101,7 @@ class AgentStore {
     const next = { ...this.settings(id) };
     if (typeof patch.enabled === "boolean") next.enabled = patch.enabled;
     if (typeof patch.auto === "boolean") next.auto = patch.auto;
+    if (typeof patch.unlimited === "boolean") next.unlimited = patch.unlimited;
     if (patch.dailyLimit !== undefined) next.dailyLimit = Math.max(0, Math.min(5000, Math.round(Number(patch.dailyLimit) || 0)));
     this.state.settings[id] = next;
     this.save();
@@ -119,6 +122,7 @@ class AgentStore {
   remaining(id, now = Date.now()) {
     const s = this.settings(id);
     if (!s.enabled) return 0;
+    if (s.unlimited) return Infinity;
     return Math.max(0, s.dailyLimit - this.usedToday(id, now));
   }
 
