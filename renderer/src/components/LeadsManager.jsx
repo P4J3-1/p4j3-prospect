@@ -43,9 +43,10 @@ import {
   syncGroupsToService,
 } from '../leadGroups.mjs';
 import { useNotifications } from './NotificationCenter';
-import { useContactStatus } from '../useContactStatus';
+import { useContactStatus, useWaCheck, useMystery } from '../useContactStatus';
+import { useAutopilot } from '../useAutopilot';
 import { useTriage } from '../useTriage';
-import { CONTACT_STATUS, contactFor, timeAgo } from '../contactStatus.mjs';
+import { CONTACT_STATUS, contactFor, phoneCore, timeAgo } from '../contactStatus.mjs';
 import { triageFor } from '../triage.mjs';
 
 const CONTACT_SYMBOL = { enviado: '→', entregue: '✓', lido: '✓✓', respondeu: '↩', descadastrado: '⊘', nao_contatar: '⊘' };
@@ -65,6 +66,7 @@ const DEFAULT_COLS = [
   { id: 'hood', label: 'Bairro' },
   { id: 'orig', label: 'Origem' },
   { id: 'status', label: 'Status' },
+  { id: 'intel', label: 'Inteligência' },
   { id: 'grupos', label: 'Grupos' }
 ];
 
@@ -175,6 +177,27 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
 
   // Status do WhatsApp em tempo real (envio, entrega, leitura, resposta, descadastro).
   const contacts = useContactStatus();
+  const waCheck = useWaCheck();
+  const mystery = useMystery();
+  const [autopilotState] = useAutopilot();
+  const decisores = autopilotState?.decisores || {};
+  /** O que os agentes sabem do lead, em sinais curtos. */
+  const intelOf = (lead) => {
+    const phone = phoneCore(lead?.phone || lead?.tel || '');
+    const t = triageFor(triage, lead);
+    const wa = phone ? waCheck[phone] : null;
+    const m = phone ? mystery[phone] : null;
+    const audit = lead?.webAudit;
+    const out = [];
+    if (t) out.push({ k: 'score', text: `🎯 ${t.score}`, tone: t.score >= 70 ? 'hot' : t.score >= 45 ? 'mid' : 'low', title: t.findings.join(' · ') });
+    if (wa) out.push({ k: 'wa', text: wa.exists ? '✓ WhatsApp' : '✗ sem WhatsApp', tone: wa.exists ? 'good' : 'bad' });
+    if (lead?.phoneSource === 'site') out.push({ k: 'site-wa', text: '📲 WhatsApp do site', tone: 'good', title: `Número do Maps: ${lead.phoneOriginal || '—'}` });
+    if (audit?.issues?.length) out.push({ k: 'audit', text: `🌐 ${audit.issues[0]}`, tone: 'bad', title: audit.issues.join(' · ') });
+    if (m) out.push({ k: 'mystery', text: m.delayMin != null ? `🕵 respondeu em ${m.delayMin < 60 ? `${m.delayMin}min` : `${Math.round(m.delayMin / 6) / 10}h`}` : '🕵 sem resposta', tone: m.delayMin == null || m.delayMin > 30 ? 'bad' : 'good' });
+    if (lead?.decisor || decisores[phone]) out.push({ k: 'dono', text: `👤 ${lead.decisor || decisores[phone]}`, tone: 'good' });
+    if (lead?.source === 'radar-web') out.push({ k: 'radar', text: '📡 Radar web', tone: 'mid' });
+    return out;
+  };
   const triage = useTriage();
   const [hist, setHist] = useState(() => {
     try {
@@ -278,7 +301,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
   };
 
   // State for visible columns
-  const [visCols, setVisCols] = useState(['nome', 'tel', 'ig', 'av', 'status', 'city', 'hood']);
+  const [visCols, setVisCols] = useState(['nome', 'tel', 'ig', 'av', 'status', 'intel', 'city', 'hood']);
   const [showColPop, setShowColPop] = useState(false);
 
   // Filters
@@ -854,6 +877,7 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
         else if (c.id === 'city') row[c.label] = getLeadCity(l) || '—';
         else if (c.id === 'hood') row[c.label] = getLeadHood(l) || '—';
         else if (c.id === 'orig') row[c.label] = getLeadOrig(l);
+        else if (c.id === 'intel') row[c.label] = intelOf(l).map((sig) => sig.text).join(' · ') || '—';
         else if (c.id === 'status') {
           const contact = contactFor(contacts, l);
           const st = leadStatus(id);
@@ -1563,6 +1587,18 @@ export default function LeadsManager({ onUpdateLeadsCount, addLog }) {
                                   {triageFor(triage, l).score}
                                 </span>
                               )}
+                            </span>
+                          </td>
+                        );
+                      }
+                      if (colId === 'intel') {
+                        const signals = intelOf(l);
+                        return (
+                          <td key={colId}>
+                            <span className="intel-cell">
+                              {signals.length ? signals.map((sig) => (
+                                <span key={sig.k} className={`intel-chip ${sig.tone}`} title={sig.title || sig.text}>{sig.text}</span>
+                              )) : <span style={{ fontSize: '12.5px', color: 'var(--muted)' }}>—</span>}
                             </span>
                           </td>
                         );

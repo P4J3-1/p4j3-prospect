@@ -9198,3 +9198,7 @@ html[data-theme="dark"] .quality-chip.on { background: color-mix(in srgb, var(--
 .kb-hud-step.won { box-shadow: 0 0 18px -6px #22c55e; }
 .kb-hud-arrow { align-self: center; font-size: 11px; font-weight: 800; color: #67e8f9; padding: 0 2px; white-space: nowrap; }
 .kb-hud { flex: 0 0 auto; min-height: 84px; }
+.intel-cell { display: flex; flex-wrap: wrap; gap: 4px; max-width: 360px; }
+.intel-chip { font-size: 11px; padding: 2px 7px; border-radius: 99px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; background: #f1f5f9; color: #334155; }
+.intel-chip.hot { background: #fef3c7; color: #92400e; font-weight: 700; } .intel-chip.mid { background: #e0f2fe; color: #075985; } .intel-chip.low { background: #f1f5f9; color: #64748b; }
+.intel-chip.good { background: #dcfce7; color: #166534; } .intel-chip.bad { background: #fee2e2; color: #991b1b; }
