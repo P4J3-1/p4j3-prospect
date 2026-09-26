@@ -9213,3 +9213,11 @@ html[data-theme="dark"] .quality-chip.on { background: color-mix(in srgb, var(--
 .region-chip.in { background: #dbeafe; color: #1e40af; border-color: #93c5fd; }
 .region-chip.out { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
 .region-chip.niche { background: #ede9fe; color: #5b21b6; border-color: #c4b5fd; }
+.clp-diag { display: grid; gap: 6px; margin: 0 0 10px; }
+.clp-diag-btn { font: inherit; font-weight: 700; font-size: 12.5px; padding: 9px 10px; border-radius: 12px; border: 0; cursor: pointer; color: #1e1b4b; background: linear-gradient(135deg, #fde68a, #fbbf24); box-shadow: 0 8px 18px -10px #f59e0b; }
+.clp-diag-btn:disabled { opacity: .6; }
+.clp-diag-ready { display: grid; gap: 5px; padding: 10px; border-radius: 12px; background: #fffbeb; border: 1px solid #fcd34d; }
+.clp-diag-ready b { font-size: 12px; word-break: break-all; }
+.clp-diag-ready span { font-size: 11.5px; color: #92400e; }
+.clp-diag-ready div { display: flex; gap: 6px; flex-wrap: wrap; }
+.clp-diag-status { font-size: 12px; color: #0e7490; } .clp-diag-status.err { color: #b91c1c; }

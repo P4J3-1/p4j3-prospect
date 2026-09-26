@@ -72,6 +72,7 @@ const { AgentStore } = require("./agents/agent-store");
 const { Autopilot } = require("./agents/autopilot");
 const { DEFAULT_OFFERS } = require("./agents/sales-playbook");
 const { understand, SCREENS, AGENT_IDS, norm } = require("./agents/jarvis");
+const { buildDiagnosis, renderDiagnosisHtml } = require("./agents/diagnosis");
 const { whatsappXray } = require("./utils/whatsapp-xray");
 const { runAnalyst, suggestReplies, writeProposal } = require("./agents/ai-agents");
 const { LeadMemory, temperatureOf } = require("./campaigns/lead-memory");
@@ -4826,7 +4827,7 @@ function leadDossier(phone, leadHint = null) {
     status_contato: contact?.status || "nao_contatado",
     ultima_resposta: contact?.lastReplyAt ? new Date(contact.lastReplyAt).toLocaleString("pt-BR") : "",
     respostas_automaticas: contact?.autoReplies || 0,
-    cliente_oculto: m ? (m.delayMin != null ? `respondeu um cliente em ${m.delayMin} min` : "não respondeu o cliente") : "",
+    cliente_oculto: m ? (m.delayMin != null ? `respondeu um cliente em ${m.delayMin < 60 ? `${m.delayMin} min` : `${Math.round(m.delayMin / 6) / 10} horas`.replace(".", ",")}` : "não respondeu o cliente") : "",
     dono: autopilot?.intel?.[key]?.decisor?.nome || lead.decisor || "",
     memoria: leadMemory?.get(key) || null,
     na_fila: (sendQueue?.historyFor(key) || []).slice(-3).map((i) => `${i.kind}: ${i.status}`),
@@ -4857,6 +4858,72 @@ const ADJUST_LIMITS = {
 };
 
 ipcMain.handle("jarvis-comment", async (_, { phone } = {}) => ({ success: true, text: quickRead(limitString(phone, 40, "")) }));
+
+// ─── Diagnóstico gratuito (PDF de 1 página com os dados reais do lead) ───
+function diagnosisDir() {
+  const dir = path.join(app.getPath("userData"), "diagnosticos");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** Gera o PDF do diagnóstico e libera só esse arquivo para envio pelo chat. */
+async function createDiagnosis(phone, leadHint = null) {
+  const d = leadDossier(phone, leadHint);
+  if (!d?.nome) throw new Error("Lead não encontrado na base.");
+  const lead = leadByPhone(phone) || leadHint || {};
+  const kit = phoneKey(phone).length >= 10 ? leadSalesKit(phone) : null;
+  const dados = {
+    nome: d.nome,
+    nicho: d.nicho,
+    regiao: d.regiao,
+    nota: lead.rating || null,
+    avaliacoes: lead.reviews || lead.reviewCount || lead.totalReviews || null,
+    site: d.site,
+    site_problemas: d.diagnostico_site,
+    problemas: d.problemas,
+    cliente_oculto: d.cliente_oculto,
+    concorrente_destaque: kit?.image?.comparacao?.destaque || null,
+    achados_de_imagem: kit?.image?.findings || [],
+  };
+  const content = await buildDiagnosis(dados, agentAi("proposta"));
+  const seller = currentAiSettings().commercial || {};
+  const html = renderDiagnosisHtml(content, { lead: { nota: dados.nota, avaliacoes: dados.avaliacoes, nicho: d.nicho, regiao: d.regiao }, seller });
+  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
+  try {
+    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    const pdf = await win.webContents.printToPDF({ pageSize: "A4", printBackground: true, margins: { marginType: "none" } });
+    const slug = String(d.nome).normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 50) || "lead";
+    const file = path.join(diagnosisDir(), `Diagnostico-${slug}-${new Date().toISOString().slice(0, 10)}.pdf`);
+    fs.writeFileSync(file, pdf);
+    rememberAllowedMediaPath(file);
+    agentStore.log("proposta", `Diagnóstico em PDF para ${d.nome}${content.ai ? "" : " (por regras)"}.`);
+    return {
+      path: file,
+      fileName: path.basename(file),
+      ai: content.ai,
+      caption: `${d.nome.split(/\s+[-|·]\s+/)[0]}, aqui está o diagnóstico que prometi: 1 página, com o que já está bom e os 3 pontos que mais estão custando clientes. Qual deles você quer resolver primeiro?`,
+    };
+  } finally {
+    win.destroy();
+  }
+}
+
+ipcMain.handle("diagnosis-create", async (_, { phone, name } = {}) => {
+  try {
+    const hint = name ? resolveLead(limitString(name, 120, ""), null) : null;
+    return { success: true, ...(await createDiagnosis(limitString(phone, 40, ""), hint)) };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle("diagnosis-open", async (_, { filePath } = {}) => {
+  const resolved = path.resolve(String(filePath || ""));
+  // Só abre arquivos da pasta de diagnósticos.
+  if (!resolved.startsWith(diagnosisDir() + path.sep) || !fs.existsSync(resolved)) return { success: false, error: "Arquivo não encontrado." };
+  const err = await shell.openPath(resolved);
+  return err ? { success: false, error: err } : { success: true };
+});
 
 ipcMain.handle("jarvis-briefing", async () => {
   const d = jarvisData();
@@ -4929,6 +4996,18 @@ ipcMain.handle("jarvis-command", async (_, { text, context, history } = {}) => {
       openChat = { phone: phoneKey(phone), name: lead.name || "", text: textToType };
       navigate = "whatsapp";
       reply ||= `Abrindo a conversa com ${lead.name || phone}.`;
+    } else if (plan.acao === "diagnostico") {
+      const lead = resolveLead(p.lead, contexto);
+      if (!lead) return { success: true, reply: "De qual lead, senhor? Não encontrei na base." };
+      const phone = lead.phone || lead.tel || "";
+      const doc = await createDiagnosis(phone, lead);
+      if (phoneKey(phone).length < 10) {
+        shell.openPath(doc.path);
+        return { success: true, reply: `Diagnóstico de ${lead.name} pronto (abri o PDF). Ele não tem telefone na base, então não dá para enviar pelo WhatsApp.` };
+      }
+      openChat = { phone: phoneKey(phone), name: lead.name || "", text: "", attachment: { path: doc.path, fileName: doc.fileName, caption: doc.caption, ai: doc.ai } };
+      navigate = "whatsapp";
+      reply = `Diagnóstico de ${lead.name} pronto e anexado na conversa. Revise e clique em enviar, senhor.`;
     } else if (plan.acao === "nao_contatar") {
       const lead = resolveLead(p.lead, contexto);
       const phone = lead?.phone || lead?.tel;

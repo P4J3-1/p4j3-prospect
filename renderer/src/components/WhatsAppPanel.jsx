@@ -4137,6 +4137,7 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
       if (existing) await handleSelectChat(existing);
       else await handleStartNewChat({ phone: key.length <= 11 ? `55${key}` : key, name: pending.name || '' });
       if (pending.text) setInputText(pending.text);
+      if (pending.attachment?.path) setDiagnosis({ ...pending.attachment, phone: key });
     };
     if (!pendingChatHandled.current && window.__p4j3PendingChat && chats.length) {
       pendingChatHandled.current = true;
@@ -4262,6 +4263,34 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
   const conversationStarted = activeContact?.status === 'respondeu';
   const leadMemoryMap = useLeadMemory();
   const mysteryMap = useMystery();
+  // Diagnóstico gratuito: gerado aqui (ou pelo J.A.R.V.I.S.) e enviado por você.
+  const [diagnosis, setDiagnosis] = useState(null); // { loading, error, path, fileName, caption, phone }
+  useEffect(() => {
+    setDiagnosis((cur) => (cur && cur.phone !== activeLeadPhone ? null : cur));
+  }, [activeLeadPhone]);
+  const createDiagnosis = async () => {
+    if (!window.diagnosisAPI) return;
+    setDiagnosis({ loading: true, phone: activeLeadPhone });
+    const res = await window.diagnosisAPI.create(activeLeadPhone, activeLead?.name || activeChatName).catch((e) => ({ success: false, error: e?.message }));
+    setDiagnosis(res?.success ? { ...res, phone: activeLeadPhone } : { error: res?.error || 'Não foi possível gerar.', phone: activeLeadPhone });
+  };
+  const sendDiagnosis = async () => {
+    if (!diagnosis?.path) return;
+    const toJid = getSendJid();
+    setDiagnosis((d) => ({ ...d, sending: true }));
+    const res = await window.chatAPI.sendMedia(toJid, diagnosis.path, diagnosis.caption, activeConnectionId);
+    if (res?.success) {
+      setMessages((prev) => [...prev, {
+        key: { fromMe: true, id: res.messageId || `local_diag_${Date.now()}` },
+        message: { conversation: `📄 ${diagnosis.fileName}\n${diagnosis.caption}` },
+        messageTimestamp: Math.round(Date.now() / 1000),
+      }]);
+      setDiagnosis((d) => ({ ...d, sending: false, sent: true }));
+      loadChats();
+    } else {
+      setDiagnosis((d) => ({ ...d, sending: false, error: res?.error || 'Falhou o envio.' }));
+    }
+  };
   // Conversa aberta → contexto do J.A.R.V.I.S.
   useEffect(() => {
     if (!activeChatJid) {
@@ -6415,6 +6444,29 @@ function WhatsAppPanel({ waStatus, setWaStatus, addLog }) {
                     )}
                   </div>
                 )}
+
+                <div className="clp-diag">
+                  {!diagnosis || diagnosis.error ? (
+                    <button type="button" className="clp-diag-btn" onClick={createDiagnosis} disabled={diagnosis?.loading}>
+                      📄 Gerar diagnóstico gratuito (PDF)
+                    </button>
+                  ) : diagnosis.loading ? (
+                    <span className="clp-diag-status">Montando o diagnóstico com os dados reais…</span>
+                  ) : (
+                    <div className="clp-diag-ready">
+                      <b>📄 {diagnosis.fileName}</b>
+                      <span>{diagnosis.ai ? 'Escrito pela IA com os dados do lead.' : 'Montado com os dados do lead.'} Revise antes de enviar.</span>
+                      <div>
+                        <button type="button" className="btn btn-sm" onClick={() => window.diagnosisAPI.open(diagnosis.path)}>Abrir</button>
+                        <button type="button" className="btn btn-sm btn-primary" disabled={diagnosis.sending || diagnosis.sent} onClick={sendDiagnosis}>
+                          {diagnosis.sent ? 'Enviado ✓' : diagnosis.sending ? 'Enviando…' : 'Enviar na conversa'}
+                        </button>
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={createDiagnosis} disabled={diagnosis.sending}>Refazer</button>
+                      </div>
+                    </div>
+                  )}
+                  {diagnosis?.error && <span className="clp-diag-status err">{diagnosis.error}</span>}
+                </div>
 
                 <div className="clp-stages" role="group" aria-label="Conduzir a venda">
                   <span className="clp-label">Conduzir a venda — o agente escreve para a etapa</span>

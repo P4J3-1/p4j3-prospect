@@ -63,3 +63,19 @@ describe('J.A.R.V.I.S. com contexto', () => {
     assert.equal(parseByRules('mostra os quentes').parametros.filtro, 'alto_potencial');
   });
 });
+
+describe('diagnóstico gratuito', () => {
+  const { ruleContent, renderDiagnosisHtml } = require('../agents/diagnosis');
+  it('usa dados reais, não repete problema e não elogia 1 avaliação', () => {
+    const c = ruleContent({ nome: 'Aconchego - Hamburgueria', nota: 5, avaliacoes: 1, site: 'x', site_problemas: ['Site com erro (HTTP 403)'], problemas: ['Site com erro (HTTP 403)'] });
+    assert.equal(c.problemas.filter((p) => /fora do ar/i.test(p.titulo)).length, 1);
+    assert.ok(c.problemas.some((p) => /1 avaliação/.test(p.titulo)));
+    assert.ok(!c.fortes.some((f) => /1 avalia/.test(f)));
+  });
+  it('HTML escapa dados do lead e não tem link', () => {
+    const c = ruleContent({ nome: '<img src=x onerror=alert(1)>', nota: 4.9, avaliacoes: 50 });
+    const html = renderDiagnosisHtml(c, { lead: {}, seller: { agencyName: 'P4J3' } });
+    assert.ok(!html.includes('<img src=x'));
+    assert.ok(!/https?:\/\//.test(html));
+  });
+});

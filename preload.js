@@ -156,6 +156,11 @@ contextBridge.exposeInMainWorld("autopilotAPI", {
   onPatchLeads: subscribe("autopilot-patch-leads"),
 });
 
+contextBridge.exposeInMainWorld("diagnosisAPI", {
+  create: (phone, name) => ipcRenderer.invoke("diagnosis-create", { phone, name }),
+  open: (filePath) => ipcRenderer.invoke("diagnosis-open", { filePath }),
+});
+
 contextBridge.exposeInMainWorld("jarvisAPI", {
   command: (text, context, history) => ipcRenderer.invoke("jarvis-command", { text, context, history }),
   comment: (phone) => ipcRenderer.invoke("jarvis-comment", { phone }),

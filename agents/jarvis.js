@@ -9,7 +9,7 @@
 
 const ACTIONS = [
   "cacar", "radar", "aprovar", "responder", "piloto", "abrir", "pergunta",
-  "abrir_conversa", "proposta", "nao_contatar", "filtrar", "ajustar", "agente",
+  "abrir_conversa", "proposta", "nao_contatar", "filtrar", "ajustar", "agente", "diagnostico",
 ];
 const SCREENS = { overview: "visão geral", scraper: "hunter maps", base: "base de leads", kanban: "kanban", whatsapp: "whatsapp", ai: "inteligência artificial", agents: "agentes" };
 const AGENT_IDS = ["cacador", "radar", "verificador", "enriquecedor", "triagem", "pesquisador", "copywriter", "respostas", "analista"];
@@ -25,6 +25,7 @@ const JARVIS_PROMPT = [
   "- piloto {ligar: true|false}. abrir {tela: overview|scraper|base|kanban|whatsapp|ai|agents}.",
   "- abrir_conversa {lead, texto?}: abrir a conversa do lead (nome, ou 'este' para o que esta na tela) com um texto opcional no campo.",
   "- proposta {lead}: escrever a proposta do lead. nao_contatar {lead}: marcar para nunca contatar.",
+  "- diagnostico {lead}: gerar o diagnostico gratuito em PDF (1 pagina, dados reais) e deixar pronto para enviar na conversa.",
   "- filtrar {aba: disponiveis|fila|contatados|responderam|todos, filtro: pronto|alto_potencial|sem_site|site_fraco|atendimento_manual|whatsapp|web|decisor|'', incluir: [bairros/cidades para mostrar SO eles], excluir: [bairros/cidades para tirar], nicho: 'texto do nicho', limpar: true|false}: filtrar leads no Hunter Maps por aba, criterio, regiao (bairro ou cidade) e nicho. Ex.: 'tira Ceilandia' = {excluir:['Ceilândia']}; 'so Taguatinga' = {incluir:['Taguatinga']}.",
   "- ajustar {alvo: meta_diaria|teto_por_numero|intervalo|rascunhos|reserva, valor: numero}. agente {nome: cacador|radar|verificador|enriquecedor|triagem|pesquisador|copywriter|respostas|analista, ligar: true|false}.",
   "- pergunta: o vendedor quer saber ou analisar algo (inclusive 'o que acha deste lead?', 'como respondo esta conversa?'). Responda usando SO 'dados', 'contexto' e 'dossie'. Nunca invente numeros. Seja analitica: diga o que ve e recomende a proxima acao.",
@@ -47,6 +48,8 @@ function parseByRules(text) {
   if (m) return { acao: "radar", parametros: { nicho: m[1].replace(/^(de|para|por)\s+/i, "").trim(), cidade: m[2].trim() } };
   m = raw.match(/\b(?:abr\w*|abre)\s+(?:a\s+)?conversa\s+(?:da|do|de|com)\s+(.+)$/i);
   if (m) return { acao: "abrir_conversa", parametros: { lead: m[1].trim() } };
+  m = raw.match(/\b(?:ger\w*|faz\w*|prepar\w*|mand\w*|envi\w*|cri\w*)\s+(?:o\s+|um\s+)?diagn[oó]stico\s*(?:(?:deste|desse|para|da|do|de)\b)?\s*(.*)$/i);
+  if (m) return { acao: "diagnostico", parametros: { lead: m[1].trim().replace(/^(lead|este|esse|este lead|esse lead)$/i, "este") || "este" } };
   m = raw.match(/\b(?:ger\w*|escrev\w*|faz\w*|prepar\w*)\s+(?:a\s+|uma\s+)?proposta\s*(?:da|do|de|para)?\s*(.*)$/i);
   if (m) return { acao: "proposta", parametros: { lead: m[1].trim() || "este" } };
   m = raw.match(/\bn[aã]o\s+contat\w*\s*(?:a|o)?\s*(.*)$/i);
