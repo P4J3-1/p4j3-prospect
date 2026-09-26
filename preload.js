@@ -152,6 +152,7 @@ contextBridge.exposeInMainWorld("autopilotAPI", {
   huntDone: (payload) => ipcRenderer.send("autopilot-hunt-done", payload || {}),
   onEvent: subscribe("autopilot-event"),
   onHunt: subscribe("autopilot-hunt"),
+  onAddLeads: subscribe("autopilot-add-leads"),
 });
 
 contextBridge.exposeInMainWorld("agentsAPI", {

@@ -702,8 +702,31 @@ function AppInner() {
     });
     return runExtractionJob(job, { navigate });
   };
+  const saveExtractionPartialRef = useRef(saveExtractionPartial);
+  saveExtractionPartialRef.current = saveExtractionPartial;
   const startExtractionRef = useRef(handleStartExtraction);
   startExtractionRef.current = handleStartExtraction;
+
+  // Agente Radar Web: leads achados fora do Maps entram na base como uma busca.
+  useEffect(() => {
+    const off = window.autopilotAPI?.onAddLeads?.(({ id, leads, mission } = {}) => {
+      if (!Array.isArray(leads) || !leads.length) return;
+      const added = saveExtractionPartialRef.current({
+        searchId: id,
+        newLeads: leads,
+        job: {
+          qstr: `Radar web: ${mission?.niche || ''} ${mission?.city || ''}`.trim(),
+          niches: [mission?.niche || 'web'],
+          neighborhoods: mission?.neighborhoods || [],
+          municipality: mission?.city || '',
+          uf: '',
+          label: `Radar web · ${mission?.niche || ''}`,
+        },
+      });
+      if (added) addNotification({ type: 'success', category: 'scraper', title: 'Radar Web achou leads', message: `${added} negócio(s) com site fraco entraram na base.` });
+    });
+    return () => { if (typeof off === 'function') off(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Agente Caçador (piloto automático): extrai sem tirar você da tela atual.
   useEffect(() => {

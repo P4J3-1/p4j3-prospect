@@ -384,6 +384,7 @@ module.exports = {
   heuristicChance,
   isValidCnpj,
   parseSearchResults,
+  webSearch,
   pickDecisor,
   researchLead,
   sanitizeAiDecisor,

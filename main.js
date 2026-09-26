@@ -56,7 +56,9 @@ const {
 const { LeadScoringService } = require("./lead-scoring");
 const { saveProspectingCSV } = require("./lead-scoring/export-service");
 const { runAiTask } = require("./lead-scoring/ai-sales-analyzer");
-const { researchLead } = require("./lead-scoring/lead-intel");
+const { researchLead, webSearch } = require("./lead-scoring/lead-intel");
+const { runRadar } = require("./agents/web-hunter");
+const { chromium } = require("playwright");
 const { optimizeCampaignMessage } = require("./lead-scoring/message-optimizer");
 const { computeInsights } = require("./campaigns/learning");
 const { TriageStore, computeTriage, triageKey, triageLeads } = require("./lead-scoring/lead-triage");
@@ -74,7 +76,7 @@ const { backupRoot, hasBackupToday, listBackups, runBackup } = require("./utils/
 const { KanbanStore } = require("./kanban/kanban-store");
 const { normalizeAddress } = require("./utils/address-normalizer");
 const { normalizeText } = require("./utils/text-normalizer");
-const { normalizeLeadLinks, normalizePhoneDisplay } = require("./utils/lead-links");
+const { normalizeLeadLinks, normalizePhoneDisplay, hostOf } = require("./utils/lead-links");
 const { geocodeAddress, isValidCoord } = require("./utils/geocode");
 const { migrateExistingData } = require("./utils/existing-data-migrator");
 const { createLeadsFileStore } = require("./utils/leads-file-store");
@@ -4453,6 +4455,41 @@ function setupAutopilot() {
           autopilot.emit();
         });
         return { working: true, status: `Caçando ${mission.niche} em ${mission.city} (meta ${goal} novos)…`, text: `Estoque baixo (${available}). Saiu para caçar ${mission.niche} em ${mission.city}.` };
+      },
+    },
+    {
+      id: "radar",
+      agent: "radar",
+      label: "Procurando na web negócios com site fraco",
+      everyMs: 30 * MIN,
+      run: async (ctx) => {
+        if (pendingHunts.size) return { idle: true, status: "Esperando a caçada no Maps terminar." };
+        const mission = autopilot.nextMission();
+        if (!mission) return { idle: true, status: "Cadastre uma missão (nicho + cidade)." };
+        if (!mainWindow || mainWindow.isDestroyed()) return { idle: true, status: "Janela do app fechada." };
+        const base = allLeads();
+        const knownHosts = new Set(base.map((l) => hostOf(l?.website || l?.site)).filter(Boolean));
+        const knownPhones = new Set(base.map((l) => phoneKey(l?.phone || l?.tel)).filter((k) => k.length >= 10));
+        ctx.progress(0, 1, `Buscando ${mission.niche} em ${mission.city} na web`);
+        const result = await runRadar(mission, {
+          search: (q) => webSearch(q, { limit: 10 }),
+          launchBrowser: async () => {
+            try { return await chromium.launch({ headless: true, channel: "chrome" }); } catch { return chromium.launch({ headless: true }); }
+          },
+          knownHosts,
+          knownPhones,
+          phoneKey,
+          maxSites: 8,
+          onProgress: (i, n, task) => ctx.progress(i, n, task),
+        });
+        if (result.leads.length) safeSend("autopilot-add-leads", { id: `radar_${Date.now()}`, leads: result.leads, mission });
+        const weakNoPhone = result.checked.filter((c) => c.score >= 30 && !c.phone).length;
+        return {
+          count: result.leads.length,
+          text: `Radar: ${result.checked.length} site(s) de ${mission.niche} em ${mission.city} auditados · ${result.leads.length} fraco(s) com telefone foram para a base${weakNoPhone ? ` · ${weakNoPhone} fraco(s) sem telefone ignorados` : ""}.`,
+          idle: !result.checked.length,
+          status: result.checked.length ? undefined : "A busca não trouxe sites novos desta missão.",
+        };
       },
     },
     {
